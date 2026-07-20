@@ -42,3 +42,4 @@ __pycache__
 
 # connectivity sweep results
 experiments/results*
+sim-server/experiments/results-rust*
