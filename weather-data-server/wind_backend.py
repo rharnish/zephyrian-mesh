@@ -70,6 +70,7 @@ def pressure_hpa_to_altitude_m(p_hpa: float) -> float:
 # Dataset loading (once, cached at module scope -- not reopened per request)
 # ---------------------------------------------------------------------------
 _dataset_cache = {}
+_wind_levels_response_cache = {}
 
 
 def _pick_var(ds, candidates, kind):
@@ -116,25 +117,12 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def preload_dataset():
-    # Fail fast at startup if the file/variable names don't match, rather
-    # than on the first request.
-    try:
-        get_dataset()
-    except Exception as e:
-        # Don't crash the whole app import; let the endpoint report it too,
-        # but this makes the problem visible in the uvicorn log immediately.
-        print(f"[startup] WARNING: failed to load dataset: {e}")
-
-
-@app.get("/api/wind-levels")
-def get_wind_levels():
-    try:
-        cache = get_dataset()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to open dataset: {e}")
-
+def _build_wind_levels_response():
+    """Builds the /api/wind-levels payload. Called once (startup, or lazily
+    on first request if startup preload failed) and cached forever after --
+    the source file is a single static time snapshot, so the result never
+    changes between requests."""
+    cache = get_dataset()
     ds = cache["ds"]
     u_var, v_var = cache["u_var"], cache["v_var"]
     level_dim, time_dim = cache["level_dim"], cache["time_dim"]
@@ -189,6 +177,32 @@ def get_wind_levels():
         "header": header,
         "levels": levels_payload,
     }
+
+
+def get_wind_levels_cached():
+    if "response" not in _wind_levels_response_cache:
+        _wind_levels_response_cache["response"] = _build_wind_levels_response()
+    return _wind_levels_response_cache["response"]
+
+
+@app.on_event("startup")
+def preload_dataset():
+    # Fail fast at startup if the file/variable names don't match, and build
+    # the response payload once up front rather than on the first request.
+    try:
+        get_wind_levels_cached()
+    except Exception as e:
+        # Don't crash the whole app import; let the endpoint report it too,
+        # but this makes the problem visible in the uvicorn log immediately.
+        print(f"[startup] WARNING: failed to load dataset: {e}")
+
+
+@app.get("/api/wind-levels")
+def get_wind_levels():
+    try:
+        return get_wind_levels_cached()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open dataset: {e}")
 
 
 @app.get("/api/wind-levels/stats")
