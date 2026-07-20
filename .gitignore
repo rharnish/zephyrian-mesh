@@ -39,3 +39,6 @@ __pycache__
 *.njsproj
 *.sln
 *.sw?
+
+# connectivity sweep results
+experiments/results*
