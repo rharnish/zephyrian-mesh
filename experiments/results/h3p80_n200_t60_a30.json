@@ -1,0 +1,11 @@
+{
+  "horizonCoeff": 3.8,
+  "nBalloons": 200,
+  "fallbackTimeoutMin": 60,
+  "ackDurationSec": 30,
+  "totalPayloads": 57600,
+  "radioDelivered": 2416,
+  "satelliteDelivered": 52904,
+  "pctRadio": 4.194444444444445,
+  "pctSatellite": 91.84722222222223
+}

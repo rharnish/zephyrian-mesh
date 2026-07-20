@@ -1,0 +1,428 @@
+<title>Radio vs Satellite Connectivity Sweep</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1: #2a78d6; /* 3.4 */
+    --series-2: #008300; /* 3.6 */
+    --series-3: #e87ba4; /* 3.8 */
+    --series-4: #eda100; /* 4.0 */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #008300;
+      --series-3: #d55181;
+      --series-4: #c98500;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #008300;
+    --series-3: #d55181;
+    --series-4: #c98500;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root {
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 28px 20px 60px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; margin: 0 0 20px; max-width: 720px; }
+
+  .legend {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    margin: 4px 0 18px; font-size: 13px; color: var(--text-secondary);
+  }
+  .legend-item { display: flex; align-items: center; gap: 7px; }
+  .legend-key { width: 16px; height: 2px; border-radius: 1px; }
+
+  .toolbar { display: flex; gap: 8px; margin: 0 0 16px; }
+  .toolbar button {
+    font: 12px/1 system-ui, sans-serif; padding: 7px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+    cursor: pointer;
+  }
+  .toolbar button[aria-pressed="true"] { background: var(--series-1); color: #fff; border-color: transparent; }
+
+  .grid2x2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  @media (max-width: 720px) { .grid2x2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px 10px;
+  }
+  .card h2 { font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--text-primary); }
+
+  svg text { fill: var(--text-muted); font-size: 11px; font-family: system-ui, sans-serif; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .dot { stroke: var(--surface-1); stroke-width: 2; }
+  .end-label { font-size: 11px; font-weight: 600; }
+
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; pointer-events: none; }
+  .hit-rect { fill: transparent; }
+
+  .tooltip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.08s;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    min-width: 150px; z-index: 10;
+  }
+  .tooltip .tt-title { color: var(--text-secondary); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+  .tooltip .tt-key { width: 10px; height: 2px; display: inline-block; }
+  .tooltip .tt-name { color: var(--text-secondary); flex: 1; margin-left: 4px; }
+  .tooltip .tt-val { font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  table.data-table {
+    border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums;
+  }
+  table.data-table th, table.data-table td {
+    text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--grid);
+  }
+  table.data-table th:first-child, table.data-table td:first-child { text-align: left; }
+  table.data-table th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
+  .table-scroll { max-height: 520px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+
+  .note { color: var(--text-muted); font-size: 12px; margin-top: 18px; }
+</style>
+
+<div class="viz-root">
+  <div class="wrap">
+    <h1>Radio vs. satellite connectivity sweep</h1>
+    <p class="subtitle">
+      % of balloon data payloads delivered via radio (vs. satellite fallback) across horizon
+      coefficient and balloon count, faceted by satellite-fallback timeout. Ack duration fixed
+      at 30s continuous ground contact. 96 combinations, 24 simulated hours each.
+    </p>
+
+    <div class="legend" id="legend"></div>
+
+    <div class="toolbar">
+      <button id="btn-chart" aria-pressed="true">Chart</button>
+      <button id="btn-table" aria-pressed="false">Table</button>
+    </div>
+
+    <div id="chart-view" class="grid2x2"></div>
+    <div id="table-view" class="table-scroll" style="display:none;"></div>
+
+    <p class="note">Hover any chart to compare all four horizon-coefficient series at a given balloon count.</p>
+  </div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+(function () {
+  const csv = `horizonCoeff,nBalloons,fallbackTimeoutMin,ackDurationSec,totalPayloads,radioDelivered,satelliteDelivered,pctRadio,pctSatellite
+3.4,50,10,30,14400,0,14300,0.000,99.306
+3.4,50,20,30,14400,288,13916,2.000,96.639
+3.4,50,30,30,14400,1152,12972,8.000,90.083
+3.4,50,60,30,14400,123,13689,0.854,95.063
+3.4,100,10,30,28800,288,28314,1.000,98.313
+3.4,100,20,30,28800,909,27499,3.156,95.483
+3.4,100,30,30,28800,1728,26508,6.000,92.042
+3.4,100,60,30,28800,1526,26122,5.299,90.701
+3.4,200,10,30,57600,4341,52891,7.536,91.825
+3.4,200,20,30,57600,2080,54756,3.611,95.063
+3.4,200,30,30,57600,946,55472,1.642,96.306
+3.4,200,60,30,57600,2295,52996,3.984,92.007
+3.4,400,10,30,115200,8895,105555,7.721,91.628
+3.4,400,20,30,115200,15675,98173,13.607,85.220
+3.4,400,30,30,115200,21402,91777,18.578,79.668
+3.4,400,60,30,115200,7265,103431,6.306,89.784
+3.4,800,10,30,230400,200861,29232,87.179,12.688
+3.4,800,20,30,230400,180588,48876,78.380,21.214
+3.4,800,30,30,230400,173517,56419,75.311,24.487
+3.4,800,60,30,230400,209813,19698,91.065,8.549
+3.4,1600,10,30,460800,460741,59,99.987,0.013
+3.4,1600,20,30,460800,460680,120,99.974,0.026
+3.4,1600,30,30,460800,460790,10,99.998,0.002
+3.4,1600,60,30,460800,460798,2,100.000,0.000
+3.6,50,10,30,14400,576,13728,4.000,95.333
+3.6,50,20,30,14400,81,14119,0.563,98.049
+3.6,50,30,30,14400,864,13254,6.000,92.042
+3.6,50,60,30,14400,288,13524,2.000,93.917
+3.6,100,10,30,28800,290,28312,1.007,98.306
+3.6,100,20,30,28800,1440,26980,5.000,93.681
+3.6,100,30,30,28800,576,27636,2.000,95.958
+3.6,100,60,30,28800,864,26772,3.000,92.958
+3.6,200,10,30,57600,4340,52882,7.535,91.809
+3.6,200,20,30,57600,2078,54750,3.608,95.052
+3.6,200,30,30,57600,1041,55389,1.807,96.161
+3.6,200,60,30,57600,2880,52440,5.000,91.042
+3.6,400,10,30,115200,24655,89957,21.402,78.088
+3.6,400,20,30,115200,19375,94489,16.819,82.022
+3.6,400,30,30,115200,23392,90072,20.306,78.188
+3.6,400,60,30,115200,11104,99734,9.639,86.575
+3.6,800,10,30,230400,220675,9657,95.779,4.191
+3.6,800,20,30,230400,218899,11341,95.008,4.922
+3.6,800,30,30,230400,222302,7980,96.485,3.464
+3.6,800,60,30,230400,218704,10997,94.924,4.773
+3.6,1600,10,30,460800,460439,359,99.922,0.078
+3.6,1600,20,30,460800,460780,20,99.996,0.004
+3.6,1600,30,30,460800,460800,0,100.000,0.000
+3.6,1600,60,30,460800,460800,0,100.000,0.000
+3.8,50,10,30,14400,288,14014,2.000,97.319
+3.8,50,20,30,14400,288,13916,2.000,96.639
+3.8,50,30,30,14400,576,13536,4.000,94.000
+3.8,50,60,30,14400,453,13371,3.146,92.854
+3.8,100,10,30,28800,1165,27441,4.045,95.281
+3.8,100,20,30,28800,711,27698,2.469,96.174
+3.8,100,30,30,28800,864,27354,3.000,94.979
+3.8,100,60,30,28800,0,27600,0.000,95.833
+3.8,200,10,30,57600,2592,54626,4.500,94.837
+3.8,200,20,30,57600,2487,54361,4.318,94.377
+3.8,200,30,30,57600,5319,51199,9.234,88.887
+3.8,200,60,30,57600,2416,52904,4.194,91.847
+3.8,400,10,30,115200,23433,91133,20.341,79.109
+3.8,400,20,30,115200,35223,78814,30.576,68.415
+3.8,400,30,30,115200,28333,84868,24.595,73.670
+3.8,400,60,30,115200,54802,57695,47.571,50.082
+3.8,800,10,30,230400,223309,7047,96.922,3.059
+3.8,800,20,30,230400,228217,2167,99.053,0.941
+3.8,800,30,30,230400,228033,2325,98.973,1.009
+3.8,800,60,30,230400,229128,1224,99.448,0.531
+3.8,1600,10,30,460800,460791,9,99.998,0.002
+3.8,1600,20,30,460800,460800,0,100.000,0.000
+3.8,1600,30,30,460800,460800,0,100.000,0.000
+3.8,1600,60,30,460800,460800,0,100.000,0.000
+4,50,10,30,14400,1430,12882,9.931,89.458
+4,50,20,30,14400,0,14200,0.000,98.611
+4,50,30,30,14400,576,13536,4.000,94.000
+4,50,60,30,14400,808,13028,5.611,90.472
+4,100,10,30,28800,633,27973,2.198,97.128
+4,100,20,30,28800,976,27444,3.389,95.292
+4,100,30,30,28800,1327,26897,4.608,93.392
+4,100,60,30,28800,1877,25807,6.517,89.608
+4,200,10,30,57600,2026,55186,3.517,95.809
+4,200,20,30,57600,2094,54730,3.635,95.017
+4,200,30,30,57600,4887,51612,8.484,89.604
+4,200,60,30,57600,3896,51437,6.764,89.300
+4,400,10,30,115200,35448,79162,30.771,68.717
+4,400,20,30,115200,54394,59926,47.217,52.019
+4,400,30,30,115200,25859,87477,22.447,75.935
+4,400,60,30,115200,29725,81905,25.803,71.098
+4,800,10,30,230400,229350,1034,99.544,0.449
+4,800,20,30,230400,229426,965,99.577,0.419
+4,800,30,30,230400,227697,2656,98.827,1.153
+4,800,60,30,230400,229229,1146,99.492,0.497
+4,1600,10,30,460800,460800,0,100.000,0.000
+4,1600,20,30,460800,460800,0,100.000,0.000
+4,1600,30,30,460800,460800,0,100.000,0.000
+4,1600,60,30,460800,460800,0,100.000,0.000`;
+
+  const lines = csv.trim().split('\n');
+  const headers = lines[0].split(',');
+  const rows = lines.slice(1).map((line) => {
+    const cells = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = +cells[i]; });
+    return obj;
+  });
+
+  const COEFFS = [3.4, 3.6, 3.8, 4.0];
+  const N_BALLOONS = [50, 100, 200, 400, 800, 1600];
+  const TIMEOUTS = [10, 20, 30, 60];
+  const SERIES_COLOR_VAR = ['--series-1', '--series-2', '--series-3', '--series-4'];
+
+  function cssVar(name) {
+    return getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(name).trim();
+  }
+
+  // --- legend ---
+  const legend = document.getElementById('legend');
+  COEFFS.forEach((c, i) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    const key = document.createElement('span');
+    key.className = 'legend-key';
+    key.style.background = `var(${SERIES_COLOR_VAR[i]})`;
+    item.appendChild(key);
+    const label = document.createElement('span');
+    label.textContent = `horizon coeff ${c.toFixed(1)}`;
+    item.appendChild(label);
+    legend.appendChild(item);
+  });
+
+  // --- chart geometry ---
+  const W = 480, H = 260;
+  const M = { top: 14, right: 16, bottom: 28, left: 42 };
+  const plotW = W - M.left - M.right;
+  const plotH = H - M.top - M.bottom;
+
+  function xPos(i) { return M.left + (i / (N_BALLOONS.length - 1)) * plotW; }
+  function yPos(pct) { return M.top + (1 - pct / 100) * plotH; }
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs) {
+    const e = document.createElementNS(svgNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  const tooltip = document.getElementById('tooltip');
+  const chartView = document.getElementById('chart-view');
+
+  TIMEOUTS.forEach((timeout) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const h2 = document.createElement('h2');
+    h2.textContent = `Fallback timeout: ${timeout} min`;
+    card.appendChild(h2);
+
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Radio delivery percent vs balloon count, fallback timeout ${timeout} minutes` });
+    svg.style.width = '100%';
+    svg.style.height = 'auto';
+    svg.style.display = 'block';
+
+    // gridlines + y ticks
+    [0, 25, 50, 75, 100].forEach((pct) => {
+      const y = yPos(pct);
+      svg.appendChild(el('line', { class: pct === 0 ? 'baseline' : 'gridline', x1: M.left, x2: W - M.right, y1: y, y2: y }));
+      const t = el('text', { x: M.left - 8, y: y + 3, 'text-anchor': 'end' });
+      t.textContent = pct + '%';
+      svg.appendChild(t);
+    });
+
+    // x ticks
+    N_BALLOONS.forEach((n, i) => {
+      const x = xPos(i);
+      const t = el('text', { x, y: H - M.bottom + 16, 'text-anchor': 'middle' });
+      t.textContent = n;
+      svg.appendChild(t);
+    });
+
+    // series data for this facet, per coeff
+    const seriesData = COEFFS.map((coeff) =>
+      N_BALLOONS.map((n) => rows.find((r) => r.horizonCoeff === coeff && r.nBalloons === n && r.fallbackTimeoutMin === timeout))
+    );
+
+    seriesData.forEach((pts, si) => {
+      const color = `var(${SERIES_COLOR_VAR[si]})`;
+      const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xPos(i)} ${yPos(p.pctRadio)}`).join(' ');
+      svg.appendChild(el('path', { d, class: 'series-line', stroke: color }));
+      pts.forEach((p, i) => {
+        svg.appendChild(el('circle', { class: 'dot', cx: xPos(i), cy: yPos(p.pctRadio), r: 4, fill: color }));
+      });
+      // No direct end-labels here: at high balloon counts all four series
+      // converge near 100%, and stacking/overlapping end-labels there reads
+      // as noise rather than identity (see marks-and-anatomy.md's guidance
+      // on colliding end-labels) — the legend + hover tooltip carry identity
+      // instead, which is exactly the documented fallback for this case.
+    });
+
+    // crosshair + hit layer
+    const crosshair = el('line', { class: 'crosshair', y1: M.top, y2: H - M.bottom, x1: M.left, x2: M.left });
+    svg.appendChild(crosshair);
+    const hit = el('rect', { class: 'hit-rect', x: M.left, y: M.top, width: plotW, height: plotH });
+    svg.appendChild(hit);
+
+    function showTooltip(evt, i) {
+      const x = xPos(i);
+      crosshair.setAttribute('x1', x);
+      crosshair.setAttribute('x2', x);
+      crosshair.style.opacity = 1;
+      const rect = svg.getBoundingClientRect();
+      const scale = rect.width / W;
+      let html = `<div class="tt-title">${N_BALLOONS[i]} balloons &middot; ${timeout} min timeout</div>`;
+      COEFFS.forEach((c, si) => {
+        const p = seriesData[si][i];
+        const color = cssVar(SERIES_COLOR_VAR[si]);
+        html += `<div class="tt-row"><span class="tt-key" style="background:${color}"></span><span class="tt-name">coeff ${c.toFixed(1)}</span><span class="tt-val">${p.pctRadio.toFixed(1)}%</span></div>`;
+      });
+      tooltip.innerHTML = html;
+      tooltip.style.opacity = 1;
+      tooltip.style.left = (rect.left + window.scrollX + x * scale + 14) + 'px';
+      tooltip.style.top = (rect.top + window.scrollY + yPos(50) * scale - 20) + 'px';
+    }
+    function hideTooltip() {
+      crosshair.style.opacity = 0;
+      tooltip.style.opacity = 0;
+    }
+    hit.addEventListener('pointermove', (evt) => {
+      const rect = svg.getBoundingClientRect();
+      const relX = (evt.clientX - rect.left) * (W / rect.width);
+      let nearest = 0, best = Infinity;
+      N_BALLOONS.forEach((n, i) => {
+        const dx = Math.abs(xPos(i) - relX);
+        if (dx < best) { best = dx; nearest = i; }
+      });
+      showTooltip(evt, nearest);
+    });
+    hit.addEventListener('pointerleave', hideTooltip);
+
+    card.appendChild(svg);
+    chartView.appendChild(card);
+  });
+
+  // --- table view ---
+  const tableView = document.getElementById('table-view');
+  const table = document.createElement('table');
+  table.className = 'data-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Horizon coeff</th><th>Balloons</th><th>Timeout (min)</th><th>Total payloads</th><th>Radio</th><th>Satellite</th><th>% radio</th><th>% satellite</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    [r.horizonCoeff.toFixed(1), r.nBalloons, r.fallbackTimeoutMin, r.totalPayloads.toLocaleString(), r.radioDelivered.toLocaleString(), r.satelliteDelivered.toLocaleString(), r.pctRadio.toFixed(1) + '%', r.pctSatellite.toFixed(1) + '%'].forEach((v) => {
+      const td = document.createElement('td');
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  tableView.appendChild(table);
+
+  // --- toggle ---
+  const btnChart = document.getElementById('btn-chart');
+  const btnTable = document.getElementById('btn-table');
+  btnChart.addEventListener('click', () => {
+    chartView.style.display = '';
+    tableView.style.display = 'none';
+    btnChart.setAttribute('aria-pressed', 'true');
+    btnTable.setAttribute('aria-pressed', 'false');
+  });
+  btnTable.addEventListener('click', () => {
+    chartView.style.display = 'none';
+    tableView.style.display = '';
+    btnChart.setAttribute('aria-pressed', 'false');
+    btnTable.setAttribute('aria-pressed', 'true');
+  });
+})();
+</script>
