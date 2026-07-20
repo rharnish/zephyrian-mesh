@@ -148,70 +148,108 @@ fn union(parent: &mut [u32], a: u32, b: u32) {
 /// for why. Balloon index == `Balloon.id` is relied on (true for how
 /// connectivity_sweep constructs its balloon Vec: sequential ids 0..n in
 /// push order).
-pub fn grounded_balloon_ids(
-    balloons: &[Balloon],
-    towers: &[Tower],
-    grid: &mut SpatialGrid,
-    horizon_refraction_coeff: f64,
-) -> HashSet<u32> {
-    let n_balloons = balloons.len();
-    let n = n_balloons + towers.len();
+///
+/// This computation runs once per simulated second, unthrottled, over a
+/// 24-sim-hour sweep — so per-call allocation overhead (rebuilding buffers
+/// sized for n nodes from scratch every call) dominates wall-clock time at
+/// scale. `ConnectivityScratch` owns those buffers across calls instead of
+/// reallocating them each time; the computation itself (grid contents,
+/// union-find, grounded-set membership) is unchanged from a stateless
+/// version, so results are identical, only the allocator traffic differs.
+pub struct ConnectivityScratch {
+    lons: Vec<f64>,
+    lats: Vec<f64>,
+    pre: Vec<Precomputed>,
+    parent: Vec<u32>,
+    seen: HashSet<u64>,
+    grounded_roots: HashSet<u32>,
+    grounded_ids: HashSet<u32>,
+}
 
-    let mut lons = Vec::with_capacity(n);
-    let mut lats = Vec::with_capacity(n);
-    let mut pre = Vec::with_capacity(n);
-    for b in balloons {
-        lons.push(b.lon);
-        lats.push(b.lat);
-        pre.push(precompute(b.lon, b.lat, b.alt, horizon_refraction_coeff));
-    }
-    for t in towers {
-        lons.push(t.lon);
-        lats.push(t.lat);
-        pre.push(precompute(t.lon, t.lat, t.height_m, horizon_refraction_coeff));
-    }
-
-    grid.clear();
-    for i in 0..n {
-        grid.insert(i, lons[i], lats[i]);
-    }
-
-    let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, horizon_refraction_coeff);
-    let mut parent: Vec<u32> = (0..n as u32).collect();
-
-    // Pack the pair (i, j) into one u64 for the seen-pairs set — avoids
-    // formatting/hashing strings for every candidate check, which is what
-    // made the straightforward (String-keyed) port no faster than the JS
-    // version despite being compiled/native.
-    let mut seen: HashSet<u64> = HashSet::with_capacity(n * 8);
-    for i in 0..n {
-        let candidates = grid.neighbors(lons[i], lats[i], max_range_km);
-        for &j in &candidates {
-            if j == i {
-                continue;
-            }
-            let (a, b) = if i < j { (i, j) } else { (j, i) };
-            let key = ((a as u64) << 32) | (b as u64);
-            if !seen.insert(key) {
-                continue;
-            }
-            if in_radio_range_precomputed(&pre[i], &pre[j]) {
-                union(&mut parent, i as u32, j as u32);
-            }
+impl ConnectivityScratch {
+    pub fn new(n_balloons: usize, n_towers: usize) -> Self {
+        let n = n_balloons + n_towers;
+        ConnectivityScratch {
+            lons: vec![0.0; n],
+            lats: vec![0.0; n],
+            pre: Vec::with_capacity(n),
+            parent: (0..n as u32).collect(),
+            seen: HashSet::with_capacity(n * 8),
+            grounded_roots: HashSet::new(),
+            grounded_ids: HashSet::new(),
         }
     }
 
-    let mut grounded_roots: HashSet<u32> = HashSet::new();
-    for ti in n_balloons..n {
-        grounded_roots.insert(find(&mut parent, ti as u32));
-    }
-    let mut grounded_ids = HashSet::new();
-    for (bi, b) in balloons.iter().enumerate() {
-        if grounded_roots.contains(&find(&mut parent, bi as u32)) {
-            grounded_ids.insert(b.id);
+    /// `tower_pre` is precomputed once by the caller and passed in unchanged
+    /// every call — towers never move, so recomputing their trig every
+    /// simulated second (as the old stateless version did) was pure waste.
+    pub fn grounded_balloon_ids(
+        &mut self,
+        balloons: &[Balloon],
+        towers: &[Tower],
+        tower_pre: &[Precomputed],
+        grid: &mut SpatialGrid,
+        horizon_refraction_coeff: f64,
+    ) -> &HashSet<u32> {
+        let n_balloons = balloons.len();
+        let n = n_balloons + towers.len();
+
+        self.pre.clear();
+        for (i, b) in balloons.iter().enumerate() {
+            self.lons[i] = b.lon;
+            self.lats[i] = b.lat;
+            self.pre.push(precompute(b.lon, b.lat, b.alt, horizon_refraction_coeff));
         }
+        for (i, t) in towers.iter().enumerate() {
+            self.lons[n_balloons + i] = t.lon;
+            self.lats[n_balloons + i] = t.lat;
+        }
+        self.pre.extend_from_slice(tower_pre);
+
+        grid.soft_clear();
+        for i in 0..n {
+            grid.insert(i, self.lons[i], self.lats[i]);
+        }
+
+        let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, horizon_refraction_coeff);
+        for (i, p) in self.parent.iter_mut().enumerate() {
+            *p = i as u32;
+        }
+
+        // Pack the pair (i, j) into one u64 for the seen-pairs set — avoids
+        // formatting/hashing strings for every candidate check, which is what
+        // made the straightforward (String-keyed) port no faster than the JS
+        // version despite being compiled/native.
+        self.seen.clear();
+        for i in 0..n {
+            let candidates = grid.neighbors(self.lons[i], self.lats[i], max_range_km);
+            for &j in &candidates {
+                if j == i {
+                    continue;
+                }
+                let (a, b) = if i < j { (i, j) } else { (j, i) };
+                let key = ((a as u64) << 32) | (b as u64);
+                if !self.seen.insert(key) {
+                    continue;
+                }
+                if in_radio_range_precomputed(&self.pre[i], &self.pre[j]) {
+                    union(&mut self.parent, i as u32, j as u32);
+                }
+            }
+        }
+
+        self.grounded_roots.clear();
+        for ti in n_balloons..n {
+            self.grounded_roots.insert(find(&mut self.parent, ti as u32));
+        }
+        self.grounded_ids.clear();
+        for (bi, b) in balloons.iter().enumerate() {
+            if self.grounded_roots.contains(&find(&mut self.parent, bi as u32)) {
+                self.grounded_ids.insert(b.id);
+            }
+        }
+        &self.grounded_ids
     }
-    grounded_ids
 }
 
 #[cfg(test)]

@@ -29,8 +29,8 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sim_server::balloon::Balloon;
 use sim_server::config::{BALLOON_MAX_ALT, BALLOON_MIN_ALT, GRID_CELL_SIZE_DEG, INITIAL_TOWERS, WIND_API_URL};
-use sim_server::geo::random_global_position;
-use sim_server::link_detection::grounded_balloon_ids;
+use sim_server::geo::{precompute, random_global_position, Precomputed};
+use sim_server::link_detection::ConnectivityScratch;
 use sim_server::spatial_grid::SpatialGrid;
 use sim_server::tower::Tower;
 use sim_server::wind_field::WindField;
@@ -127,6 +127,12 @@ fn run_one(
     let towers = make_towers();
     let mut grid = SpatialGrid::new(GRID_CELL_SIZE_DEG);
 
+    // Towers are fixed for the whole run — precompute their trig once
+    // instead of every simulated second inside the connectivity check.
+    let tower_pre: Vec<Precomputed> =
+        towers.iter().map(|t| precompute(t.lon, t.lat, t.height_m, horizon_coeff)).collect();
+    let mut scratch = ConnectivityScratch::new(balloons.len(), towers.len());
+
     let mut state: Vec<BalloonState> = balloons
         .iter()
         .map(|_| BalloonState { pending: Vec::new(), connected_since: None })
@@ -146,7 +152,8 @@ fn run_one(
         // Recomputed every simulated second, unconditionally — same
         // reasoning as the JS version: throttling this by ack duration
         // biases longer-ack combos toward missing brief disconnects.
-        let grounded_ids = grounded_balloon_ids(&balloons, &towers, &mut grid, horizon_coeff);
+        let grounded_ids =
+            scratch.grounded_balloon_ids(&balloons, &towers, &tower_pre, &mut grid, horizon_coeff);
 
         if t >= next_payload_gen {
             for s in &mut state {

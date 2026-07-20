@@ -35,6 +35,17 @@ impl SpatialGrid {
         self.cells.clear();
     }
 
+    /// Like `clear()`, but keeps the HashMap's entries and each bucket's Vec
+    /// capacity around instead of dropping them — cells tend to hold roughly
+    /// the same nodes tick to tick, so this avoids repeated dealloc/realloc
+    /// of the same buckets. Produces identical bucket contents to
+    /// clear()+reinsert, just without the allocator churn.
+    pub fn soft_clear(&mut self) {
+        for bucket in self.cells.values_mut() {
+            bucket.clear();
+        }
+    }
+
     pub fn insert(&mut self, index: usize, lon: f64, lat: f64) {
         let k = self.key(lon, lat);
         self.cells.entry(k).or_default().push(index);
