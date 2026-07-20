@@ -1,0 +1,19 @@
+{
+  "name": "cesium-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1",
+    "vite": "^8.1.1"
+  },
+  "dependencies": {
+    "cesium": "^1.143.0",
+    "vite-plugin-cesium": "^1.2.23"
+  }
+}
