@@ -41,5 +41,6 @@ __pycache__
 *.sw?
 
 # connectivity sweep results
-experiments/results*
-sim-server/experiments/results-rust*
+experiments/results*/*json
+experiments/results*/*log
+

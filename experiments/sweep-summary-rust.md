@@ -1,6 +1,6 @@
 # Radio vs. satellite connectivity sweep — Rust results (real wind)
 
-**Chart:** https://claude.ai/code/artifact/eaaf95b3-da60-452e-a041-686ed3c1be38
+**Chart:** https://claude.ai/code/artifact/eaaf95b3-da60-452e-a041-686ed3c1be38 (also saved locally: [`results-rust/sweep-chart.html`](results-rust/sweep-chart.html))
 **Data:** [`connectivity-sweep-results-rust.csv`](connectivity-sweep-results-rust.csv) (96 rows)
 **Generator:** [`connectivity_sweep`](../sim-server/src/bin/connectivity_sweep.rs) (`experiments/run-shards-rust.sh` to reproduce)
 
