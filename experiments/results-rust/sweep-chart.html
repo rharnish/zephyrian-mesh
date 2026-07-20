@@ -1,0 +1,311 @@
+<title>Radio delivery vs. balloon count (Rust sweep, real wind)</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1: #2a78d6; /* 3.4 */
+    --series-2: #008300; /* 3.6 */
+    --series-3: #e87ba4; /* 3.8 */
+    --series-4: #eda100; /* 4.0 */
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    padding: 32px 16px;
+    box-sizing: border-box;
+    min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #008300;
+      --series-3: #d55181;
+      --series-4: #c98500;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #008300;
+    --series-3: #d55181;
+    --series-4: #c98500;
+  }
+
+  * { box-sizing: border-box; }
+
+  .card {
+    max-width: 880px;
+    margin: 0 auto;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 28px 20px;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 2px; }
+  .sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 20px; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 6px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 11px; }
+  .series-line { fill: none; stroke-width: 2; }
+  .series-dot { stroke: var(--surface-1); stroke-width: 2; }
+  .end-label { font-size: 11px; font-weight: 600; }
+
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0; pointer-events: none; }
+  .hover-dot { opacity: 0; pointer-events: none; }
+  .hover-target { fill: transparent; }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    opacity: 0;
+    transition: opacity 0.08s ease;
+    min-width: 150px;
+  }
+  .tooltip-title { font-weight: 600; margin-bottom: 4px; color: var(--text-primary); }
+  .tooltip-row { display: flex; justify-content: space-between; gap: 14px; padding: 1px 0; color: var(--text-secondary); }
+  .tooltip-row .val { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  .footnote { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.5; }
+
+  .toggle-row { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  button.toggle {
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  button.toggle:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  table caption { text-align: left; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { color: var(--text-muted); font-weight: 600; }
+
+  .hidden { display: none; }
+</style>
+
+<div class="viz-root">
+  <div class="card">
+    <h1>Radio delivery % by balloon count, split by horizon coefficient</h1>
+    <p class="sub">sim-server Rust sweep · real wind field · 96 combinations, 24 sim hours each · averaged across the 4 satellite-fallback timeouts</p>
+
+    <div class="toggle-row">
+      <button class="toggle" id="toggleBtn" type="button">View as table</button>
+    </div>
+
+    <div id="chartView">
+      <div class="legend" id="legend"></div>
+      <div class="chart-wrap">
+        <svg id="chart" viewBox="0 0 800 360" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="tooltip" id="tooltip"></div>
+      </div>
+    </div>
+
+    <div id="tableView" class="hidden">
+      <table>
+        <caption>Avg % delivered via radio, by balloon count and horizon coefficient</caption>
+        <thead>
+          <tr><th>Balloon count</th><th>coeff 3.4</th><th>coeff 3.6</th><th>coeff 3.8</th><th>coeff 4.0</th></tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+
+    <p class="footnote">
+      Unlike the original JS sweep (zero wind), this run used the live wind field from wind_backend.py —
+      balloons drift laterally in addition to altitude, closer to the live app's behavior.
+    </p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const data = {
+    "3.4": [1.00525, 2.638, 5.28775, 10.935, 88.8235, 99.986],
+    "3.6": [4.15275, 2.7925, 3.47425, 15.43725, 95.49175, 100.0],
+    "3.8": [3.627, 3.5425, 6.3105, 30.88125, 98.8755, 99.9995],
+    "4.0": [5.70325, 3.9395, 12.03775, 45.52775, 99.34475, 100.0]
+  };
+  const seriesOrder = ["3.4", "3.6", "3.8", "4.0"];
+  const seriesLabel = { "3.4": "Horizon coeff 3.4", "3.6": "3.6", "3.8": "3.8", "4.0": "4.0" };
+  const colorVar = { "3.4": "--series-1", "3.6": "--series-2", "3.8": "--series-3", "4.0": "--series-4" };
+  const xLabels = ["50", "100", "200", "400", "800", "1600"];
+
+  const root = document.querySelector(".viz-root");
+  const cs = getComputedStyle(root);
+  const color = (v) => cs.getPropertyValue(colorVar[v]).trim();
+
+  // ---- legend ----
+  const legend = document.getElementById("legend");
+  seriesOrder.forEach((k) => {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML = `<span class="swatch" style="background:${color(k)}"></span>${seriesLabel[k]}`;
+    legend.appendChild(item);
+  });
+
+  // ---- chart geometry ----
+  const W = 800, H = 360;
+  const padL = 40, padR = 46, padT = 16, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xN = xLabels.length;
+  const xPos = (i) => padL + (plotW * i) / (xN - 1);
+  const yMax = 100;
+  const yPos = (v) => padT + plotH * (1 - v / yMax);
+
+  const svg = document.getElementById("chart");
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+
+  // gridlines (y, every 25%)
+  for (let v = 0; v <= 100; v += 25) {
+    const y = yPos(v);
+    svg.appendChild(el("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: v === 0 ? "baseline" : "gridline" }));
+    const label = el("text", { x: padL - 8, y: y + 4, class: "axis-label", "text-anchor": "end" });
+    label.textContent = v + "%";
+    svg.appendChild(label);
+  }
+  // x axis labels
+  xLabels.forEach((lab, i) => {
+    const label = el("text", { x: xPos(i), y: H - padB + 20, class: "axis-label", "text-anchor": "middle" });
+    label.textContent = lab;
+    svg.appendChild(label);
+  });
+  const xTitle = el("text", { x: padL + plotW / 2, y: H - 2, class: "axis-label", "text-anchor": "middle" });
+  xTitle.textContent = "Balloon count";
+  svg.appendChild(xTitle);
+
+  // lines + dots
+  const dotRefs = {}; // key -> [circle,...]
+  seriesOrder.forEach((k) => {
+    const vals = data[k];
+    const pts = vals.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
+    svg.appendChild(el("polyline", { points: pts, class: "series-line", stroke: color(k) }));
+    dotRefs[k] = vals.map((v, i) => {
+      const c = el("circle", { cx: xPos(i), cy: yPos(v), r: 4.5, class: "series-dot", fill: color(k) });
+      svg.appendChild(c);
+      return c;
+    });
+    // end label
+    const lastV = vals[vals.length - 1];
+    const t = el("text", {
+      x: xPos(xN - 1) + 8, y: yPos(lastV) + 4, class: "end-label",
+      fill: color(k)
+    });
+    t.textContent = lastV.toFixed(0) + "%";
+    svg.appendChild(t);
+  });
+
+  // crosshair + hover targets
+  const crosshair = el("line", { x1: 0, x2: 0, y1: padT, y2: H - padB, class: "crosshair" });
+  svg.appendChild(crosshair);
+  const hoverDots = seriesOrder.map((k) => {
+    const c = el("circle", { r: 6, class: "hover-dot", fill: color(k), stroke: cs.getPropertyValue("--surface-1").trim(), "stroke-width": 2 });
+    svg.appendChild(c);
+    return c;
+  });
+
+  const tooltip = document.getElementById("tooltip");
+  const chartWrap = document.querySelector(".chart-wrap");
+
+  xLabels.forEach((lab, i) => {
+    const zoneW = plotW / xN;
+    const target = el("rect", {
+      x: padL + zoneW * i - (i === 0 ? 0 : 0), y: padT, width: zoneW, height: plotH, class: "hover-target"
+    });
+    target.addEventListener("mouseenter", () => showTooltip(i));
+    target.addEventListener("mousemove", (ev) => positionTooltip(ev, i));
+    target.addEventListener("mouseleave", hideTooltip);
+    svg.appendChild(target);
+  });
+
+  function showTooltip(i) {
+    crosshair.setAttribute("x1", xPos(i));
+    crosshair.setAttribute("x2", xPos(i));
+    crosshair.style.opacity = 1;
+    hoverDots.forEach((d, idx) => {
+      const k = seriesOrder[idx];
+      d.setAttribute("cx", xPos(i));
+      d.setAttribute("cy", yPos(data[k][i]));
+      d.style.opacity = 1;
+    });
+    let rows = seriesOrder.map((k) =>
+      `<div class="tooltip-row"><span>${seriesLabel[k]}</span><span class="val">${data[k][i].toFixed(1)}%</span></div>`
+    ).join("");
+    tooltip.innerHTML = `<div class="tooltip-title">${xLabels[i]} balloons</div>${rows}`;
+    tooltip.style.opacity = 1;
+  }
+  function positionTooltip(ev, i) {
+    const rect = chartWrap.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    const flip = x > rect.width * 0.62;
+    tooltip.style.left = (flip ? x - tooltip.offsetWidth - 14 : x + 14) + "px";
+    tooltip.style.top = Math.max(0, y - 40) + "px";
+  }
+  function hideTooltip() {
+    crosshair.style.opacity = 0;
+    hoverDots.forEach((d) => (d.style.opacity = 0));
+    tooltip.style.opacity = 0;
+  }
+
+  // ---- table view ----
+  const tbody = document.getElementById("tableBody");
+  xLabels.forEach((lab, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${lab}</td>` + seriesOrder.map((k) => `<td>${data[k][i].toFixed(1)}%</td>`).join("");
+    tbody.appendChild(tr);
+  });
+
+  const toggleBtn = document.getElementById("toggleBtn");
+  const chartView = document.getElementById("chartView");
+  const tableView = document.getElementById("tableView");
+  let showingTable = false;
+  toggleBtn.addEventListener("click", () => {
+    showingTable = !showingTable;
+    chartView.classList.toggle("hidden", showingTable);
+    tableView.classList.toggle("hidden", !showingTable);
+    toggleBtn.textContent = showingTable ? "View as chart" : "View as table";
+  });
+})();
+</script>
