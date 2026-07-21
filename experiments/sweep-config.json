@@ -2,7 +2,7 @@
   "_description": "Sweep grid for connectivity_sweep.rs's `full` mode. Edit and re-run — no rebuild needed. This is the transition-zone sub-sweep grid used for sweep-summary-rust.md's 500-1000 balloon points.",
   "horizonCoeffs": [3.4, 4.0],
   "nBalloons": [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1500],
-  "fallbackTimeoutMin": [10],
+  "fallbackTimeoutMin": [10, 60],
   "ackDurationSec": 30,
   "durationHours": 24,
   "resultsDir": "experiments/results-rust",

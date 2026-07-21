@@ -1,0 +1,261 @@
+<title>Radio delivery % by balloon count</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-c3p4: #2a78d6;
+    --series-c4p0: #eda100;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    padding: 32px 16px;
+    box-sizing: border-box;
+    min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+    --series-c3p4: #3987e5;
+    --series-c4p0: #c98500;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-c3p4: #3987e5;
+    --series-c4p0: #c98500;
+  }
+
+  * { box-sizing: border-box; }
+
+  .card {
+    max-width: 880px;
+    margin: 0 auto;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 28px 20px;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 2px; }
+  .sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 20px; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 6px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
+  .swatch { width: 18px; height: 0; border-top-width: 2.5px; border-top-style: solid; flex: none; }
+  .swatch.dashed { border-top-style: dashed; }
+  .swatch.dotted { border-top-style: dotted; }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 11px; }
+  .series-line { fill: none; stroke-width: 2.25; }
+  .series-dot { stroke: var(--surface-1); stroke-width: 1.5; }
+  .end-label { font-size: 11px; font-weight: 600; }
+
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0; pointer-events: none; }
+  .hover-dot { opacity: 0; pointer-events: none; }
+  .hover-target { fill: transparent; }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    opacity: 0;
+    transition: opacity 0.08s ease;
+    min-width: 165px;
+  }
+  .tooltip-title { font-weight: 600; margin-bottom: 4px; color: var(--text-primary); }
+  .tooltip-row { display: flex; justify-content: space-between; gap: 14px; padding: 1px 0; color: var(--text-secondary); }
+  .tooltip-row .val { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  .footnote { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.5; }
+</style>
+
+<div class="viz-root" id="root-chart">
+  <div class="card">
+    <h1>Radio delivery % by balloon count</h1>
+    <p class="sub">Every combination from experiments/sweep-config.json: horizon coeff 3.4 &amp; 4.0 × 12 balloon counts (50–1500) × satellite-fallback timeout 10 &amp; 60 min.</p>
+    <div class="legend" id="legend"></div>
+    <div class="chart-wrap">
+      <svg id="chart" viewBox="0 0 800 380" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+    <p class="footnote">Color = horizon coefficient (blue 3.4, amber 4.0); line style = satellite-fallback timeout (solid 10 min, dashed 60 min). Timeout barely shifts either curve compared to the coefficient gap — see <a href="../sweep-summary-rust.md">sweep-summary-rust.md</a> for the full writeup.</p>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  const xLabels = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "1000", "1500"];
+  const xNums = xLabels.map(Number);
+  const data = {"3.4|10": [0.632, 2.469, 3.392, 8.003, 5.97, 19.446, 29.38, 75.38, 87.707, 95.602, 95.447, 99.945], "3.4|60": [1.931, 1.528, 4.073, 5.394, 13.36, 18.514, 55.031, 75.885, 90.868, 95.1, 99.195, 100.0], "4.0|10": [9.278, 2.146, 11.948, 19.788, 43.519, 63.727, 89.894, 97.013, 99.473, 99.96, 99.954, 100.0], "4.0|60": [6.0, 8.174, 11.661, 24.863, 49.521, 78.614, 93.487, 98.814, 99.564, 99.735, 99.961, 100.0]};
+  const seriesOrder = ["3.4|10", "3.4|60", "4.0|10", "4.0|60"];
+  const seriesLabel = {"3.4|10": "coeff 3.4, fallbackTimeoutMin 10", "3.4|60": "coeff 3.4, fallbackTimeoutMin 60", "4.0|10": "coeff 4.0, fallbackTimeoutMin 10", "4.0|60": "coeff 4.0, fallbackTimeoutMin 60"};
+  const colorVar = {"3.4|10": "--series-c3p4", "3.4|60": "--series-c3p4", "4.0|10": "--series-c4p0", "4.0|60": "--series-c4p0"};
+  const dashPattern = {"3.4|10": null, "3.4|60": "5 4", "4.0|10": null, "4.0|60": "5 4"};
+
+  const root = document.getElementById("root-chart");
+  const cs = getComputedStyle(root);
+  const color = (k) => cs.getPropertyValue(colorVar[k]).trim();
+
+  const legend = document.getElementById("legend");
+  seriesOrder.forEach((k) => {
+    const dp = dashPattern[k];
+    const cls = dp === "1.5 3" ? "dotted" : dp ? "dashed" : "";
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML = `<span class="swatch ${cls}" style="border-top-color:${color(k)}"></span>${seriesLabel[k]}`;
+    legend.appendChild(item);
+  });
+
+  const W = 800, H = 380;
+  const padL = 40, padR = 46, padT = 16, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xN = xLabels.length;
+  const xMin = xNums[0], xMax = xNums[xNums.length - 1];
+  const xPos = (i) => padL + plotW * (xNums[i] - xMin) / (xMax - xMin);
+  const yMax = 100;
+  const yPos = (v) => padT + plotH * (1 - v / yMax);
+
+  const svg = document.getElementById("chart");
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+
+  for (let v = 0; v <= 100; v += 25) {
+    const y = yPos(v);
+    svg.appendChild(el("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: v === 0 ? "baseline" : "gridline" }));
+    const label = el("text", { x: padL - 8, y: y + 4, class: "axis-label", "text-anchor": "end" });
+    label.textContent = v + "%";
+    svg.appendChild(label);
+  }
+  xLabels.forEach((lab, i) => {
+    const label = el("text", { x: xPos(i), y: H - padB + 20, class: "axis-label", "text-anchor": "middle" });
+    label.textContent = lab;
+    svg.appendChild(label);
+  });
+  const xTitle = el("text", { x: padL + plotW / 2, y: H - 2, class: "axis-label", "text-anchor": "middle" });
+  xTitle.textContent = "Balloon count";
+  svg.appendChild(xTitle);
+
+  seriesOrder.forEach((k) => {
+    const vals = data[k];
+    // break the line across gaps instead of interpolating over missing points
+    let segIdx = [];
+    const flushSeg = () => {
+      if (segIdx.length === 0) return;
+      const pts = segIdx.map((i) => `${xPos(i)},${yPos(vals[i])}`).join(" ");
+      const attrs = { points: pts, class: "series-line", stroke: color(k) };
+      if (dashPattern[k]) attrs["stroke-dasharray"] = dashPattern[k];
+      svg.appendChild(el("polyline", attrs));
+      segIdx.forEach((i) => svg.appendChild(el("circle", { cx: xPos(i), cy: yPos(vals[i]), r: 3.5, class: "series-dot", fill: color(k) })));
+      segIdx = [];
+    };
+    vals.forEach((v, i) => {
+      if (v === null) { flushSeg(); return; }
+      segIdx.push(i);
+    });
+    flushSeg();
+    let lastI = vals.length - 1;
+    while (lastI >= 0 && vals[lastI] === null) lastI--;
+    if (lastI >= 0) {
+      const t = el("text", { x: xPos(lastI) + 8, y: yPos(vals[lastI]) + 4, class: "end-label", fill: color(k) });
+      t.textContent = vals[lastI].toFixed(0) + "%";
+      svg.appendChild(t);
+    }
+  });
+
+  const crosshair = el("line", { x1: 0, x2: 0, y1: padT, y2: H - padB, class: "crosshair" });
+  svg.appendChild(crosshair);
+  const hoverDots = seriesOrder.map((k) => {
+    const c = el("circle", { r: 5.5, class: "hover-dot", fill: color(k), stroke: cs.getPropertyValue("--surface-1").trim(), "stroke-width": 2 });
+    svg.appendChild(c);
+    return c;
+  });
+
+  const tooltip = document.getElementById("tooltip");
+  const chartWrap = svg.closest(".chart-wrap");
+
+  const positions = xLabels.map((_, i) => xPos(i));
+  const bounds = [padL];
+  for (let i = 0; i < positions.length - 1; i++) bounds.push((positions[i] + positions[i + 1]) / 2);
+  bounds.push(padL + plotW);
+
+  xLabels.forEach((lab, i) => {
+    const zx = bounds[i], zw = bounds[i + 1] - bounds[i];
+    const target = el("rect", { x: zx, y: padT, width: zw, height: plotH, class: "hover-target" });
+    target.addEventListener("mouseenter", () => showTooltip(i));
+    target.addEventListener("mousemove", (ev) => positionTooltip(ev, i));
+    target.addEventListener("mouseleave", hideTooltip);
+    svg.appendChild(target);
+  });
+
+  function showTooltip(i) {
+    crosshair.setAttribute("x1", xPos(i));
+    crosshair.setAttribute("x2", xPos(i));
+    crosshair.style.opacity = 1;
+    hoverDots.forEach((d, idx) => {
+      const k = seriesOrder[idx];
+      const v = data[k][i];
+      if (v === null) { d.style.opacity = 0; return; }
+      d.setAttribute("cx", xPos(i));
+      d.setAttribute("cy", yPos(v));
+      d.style.opacity = 1;
+    });
+    const rows = seriesOrder
+      .map((k) => {
+        const v = data[k][i];
+        return `<div class="tooltip-row"><span>${seriesLabel[k]}</span><span class="val">${v === null ? "—" : v.toFixed(1) + "%"}</span></div>`;
+      })
+      .join("");
+    tooltip.innerHTML = `<div class="tooltip-title">${xLabels[i]} balloons</div>${rows}`;
+    tooltip.style.opacity = 1;
+  }
+  function positionTooltip(ev, i) {
+    const rect = chartWrap.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    const flip = x > rect.width * 0.62;
+    tooltip.style.left = (flip ? x - tooltip.offsetWidth - 14 : x + 14) + "px";
+    tooltip.style.top = Math.max(0, y - 40) + "px";
+  }
+  function hideTooltip() {
+    crosshair.style.opacity = 0;
+    hoverDots.forEach((d) => (d.style.opacity = 0));
+    tooltip.style.opacity = 0;
+  }
+})();
+</script>
