@@ -300,13 +300,17 @@ fn write_combo_json(results_dir: &str, combo: &Combo, row: &ResultRow) -> std::i
 
 fn combine_json_to_csv(results_dir: &str, out_path: &str) -> std::io::Result<usize> {
     let mut rows: Vec<ResultRow> = Vec::new();
+    let mut combo_paths: Vec<std::path::PathBuf> = Vec::new();
     for entry in std::fs::read_dir(results_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
             let content = std::fs::read_to_string(&path)?;
             match serde_json::from_str(&content) {
-                Ok(row) => rows.push(row),
+                Ok(row) => {
+                    rows.push(row);
+                    combo_paths.push(path);
+                }
                 // Non-combo JSON can land in RESULTS_DIR too (e.g. chart-data.json
                 // written by summarize_sweep.py) — skip rather than panic on it.
                 Err(_) => eprintln!("skipping non-combo-result JSON file: {}", path.display()),
@@ -338,7 +342,28 @@ fn combine_json_to_csv(results_dir: &str, out_path: &str) -> std::io::Result<usi
         ));
     }
     std::fs::write(out_path, &out)?;
+    archive_combo_jsons(results_dir, &combo_paths)?;
     Ok(rows.len())
+}
+
+// Once a combo's JSON has been folded into the combined CSV, it's only
+// useful for debugging a specific cell or re-combining — not for browsing
+// resultsDir, which otherwise fills up with hundreds of tiny per-combo
+// files. Move them out of the way into a `json/` subfolder rather than
+// deleting them, since `combine` can be re-run against archived files and
+// nothing else here depends on them being gone.
+fn archive_combo_jsons(results_dir: &str, combo_paths: &[std::path::PathBuf]) -> std::io::Result<()> {
+    if combo_paths.is_empty() {
+        return Ok(());
+    }
+    let archive_dir = format!("{results_dir}/json");
+    std::fs::create_dir_all(&archive_dir)?;
+    for path in combo_paths {
+        if let Some(file_name) = path.file_name() {
+            std::fs::rename(path, std::path::Path::new(&archive_dir).join(file_name))?;
+        }
+    }
+    Ok(())
 }
 
 // Fetches real wind data from wind_backend.py, same endpoint and same
@@ -447,7 +472,12 @@ fn main() {
             let total = all.len();
             all.par_iter().for_each(|combo| {
                 let path = format!("{results_dir}/{}", combo_file_name(combo));
-                if std::path::Path::new(&path).exists() {
+                // Completed combos get archived into results_dir/json/ by
+                // combine_json_to_csv, so check there too — otherwise a
+                // resumed/extended run would silently recompute everything
+                // from a prior completed run in the same resultsDir.
+                let archived_path = format!("{results_dir}/json/{}", combo_file_name(combo));
+                if std::path::Path::new(&path).exists() || std::path::Path::new(&archived_path).exists() {
                     println!("[skip] already done: {path}");
                     return;
                 }

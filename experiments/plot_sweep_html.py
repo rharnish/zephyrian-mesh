@@ -341,7 +341,7 @@ __FOOTNOTE__
 """
 
 
-def render(out_path, title, subtitle, footnote, x_labels, series, split_col):
+def render(out_path, title, subtitle, footnote, x_labels, series, split_col, split_label=None):
     seen_coeffs = []
     for (c, _sv) in series.keys():
         if c not in seen_coeffs:
@@ -370,7 +370,7 @@ def render(out_path, title, subtitle, footnote, x_labels, series, split_col):
     for (coeff, sv) in series.keys():
         key = f"{coeff}|{sv}" if split_col else f"{coeff}"
         series_order.append(key)
-        label = f"coeff {coeff}" if not split_col else f"coeff {coeff}, {split_col} {sv}"
+        label = f"horizon coeff {coeff}" if not split_col else f"horizon coeff {coeff}, {split_label or split_col} {sv}"
         series_label[key] = label
         color_var[key] = var_index[coeff]
         if split_col:
@@ -406,6 +406,7 @@ def main():
     ap.add_argument("--n-values", help="comma-separated balloon counts to plot (default: all present in CSV, or from --config)")
     ap.add_argument("--split-by", help="CSV column to split each coefficient into multiple line-style-differentiated series (e.g. fallbackTimeoutMin)")
     ap.add_argument("--split-values", help="comma-separated values of --split-by to include (default: from --config if --split-by matches its grid key, else all present)")
+    ap.add_argument("--split-label", help="display name for --split-by in legends/tooltips (default: the raw column name, e.g. fallbackTimeoutMin)")
     ap.add_argument("--title", default="Radio delivery % by balloon count")
     ap.add_argument("--subtitle", default="")
     ap.add_argument("--footnote", default="")
@@ -442,7 +443,7 @@ def main():
 
     series = build_series(rows, coeffs, n_values, split_col, split_values)
     x_labels = [str(n) for n in n_values]
-    render(args.out, args.title, args.subtitle, args.footnote, x_labels, series, split_col)
+    render(args.out, args.title, args.subtitle, args.footnote, x_labels, series, split_col, args.split_label)
 
 
 if __name__ == "__main__":

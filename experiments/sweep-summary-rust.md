@@ -1,112 +1,99 @@
 # Radio vs. satellite connectivity sweep — Rust results (real wind)
 
-**Chart (full grid, all 4 coefficients):** [`results-rust/sweep-chart.html`](results-rust/sweep-chart.html) (interactive) / [`results-rust/sweep-chart.png`](results-rust/sweep-chart.png)
-**Chart (transition-zone, coeff 3.4 & 4.0 only, linear x-axis):** [`results-rust/sweep-chart-transition-linear-x.png`](results-rust/sweep-chart-transition-linear-x.png)
-**Data:** [`connectivity-sweep-results-rust.csv`](connectivity-sweep-results-rust.csv) (116 rows)
-**Generator:** [`connectivity_sweep`](../sim-server/src/bin/connectivity_sweep.rs) (`connectivity_sweep full experiments/sweep-config-full-grid.json` for the full grid, `connectivity_sweep full experiments/sweep-config.json` for the transition-zone sub-sweep, to reproduce) · charts rendered with [`plot_sweep.py`](plot_sweep.py)
+**Chart (interactive, split by horizon coeff and sat fallback minutes):** [`results-rust/sweep-chart.html`](results-rust/sweep-chart.html)
+**Chart (static, split by horizon coeff [color] and sat fallback minutes [opacity]):** [`results-rust/sweep-chart.png`](results-rust/sweep-chart.png)
+**Data:** [`connectivity-sweep-results-rust.csv`](connectivity-sweep-results-rust.csv) (104 rows)
+**Generator:** [`connectivity_sweep`](../sim-server/src/bin/connectivity_sweep.rs) (`connectivity_sweep full experiments/sweep-config.json` to reproduce) · charts rendered with [`plot_sweep_html.py`](plot_sweep_html.py) / [`plot_sweep.py`](plot_sweep.py)
 
 ## What was measured
 
-- **Full grid (96 combos):** horizon coeff 3.4/3.6/3.8/4.0 × balloon count
-  50/100/200/400/800/1600 × satellite-fallback timeout 10/20/30/60 min.
-- **Transition-zone sub-sweep (+20 new combos):** horizon coeff **3.4 and 4.0
-  only** × balloon count **500/600/700/900/1000** (1000-balloon step, filling
-  the gap between the full grid's 400 and 800) × satellite-fallback timeout
-  **10 and 60 min only**. Coeff 3.6/3.8 were not re-run at this density.
-- 116 unique combos total (4 of the sub-sweep's combos land exactly on
-  existing full-grid points at n=800 and reproduce them, since results are
-  seeded deterministically per combo).
+A single clean rectangular grid, replacing the previous mixed full-grid +
+sub-sweep writeup: horizon coeff **3.4/3.6/3.8/4.0** × balloon count
+**50/100/200/300/400/500/600/700/800/900/1000/1200/1600** × sat fallback
+minutes **10/60** — 104 combos, every horizon coeff covered at every
+balloon count.
 
-Fixed: 30-second continuous-connection ack duration, 5-simulated-minute payload
-cadence, 24 simulated hours per combo. This run used the live wind field from
-wind_backend.py (confirmed in every shard log) — balloons drift laterally as
-well as in altitude, closer to the live app's actual behavior than a
-zero-wind motion model.
+Fixed: 30-second continuous-connection ack duration, 5-simulated-minute
+payload cadence, 24 simulated hours per combo. This run used the live wind
+field from `wind_backend.py` (confirmed via `sim-server.log`: "loaded wind
+field from http://127.0.0.1:8000/api/wind-levels", 2026-07-20 23:24 local) —
+balloons drift laterally as well as in altitude, closer to the live app's
+actual behavior than a zero-wind motion model. Run started 23:24, CSV
+finalized 01:03 (2026-07-21).
 
-## Headline finding: a phase transition, resolved in detail
+## Headline finding: a phase transition, resolved at every horizon coeff
 
-![Radio delivery % by balloon count, split by horizon coefficient](results-rust/sweep-chart.png)
+![Radio delivery % by balloon count, split by horizon coeff](results-rust/sweep-chart.png)
 
 | Balloon count | Avg. % delivered via radio |
 |---|---|
-| 50 | 3.6% |
-| 100 | 3.2% |
-| 200 | 6.8% |
-| 400 | 25.7% |
-| 500 | 45.1% |
-| 600 | 66.9% |
-| 700 | 86.8% |
-| 800 | 95.6% |
-| 900 | 97.6% |
-| 1000 | 98.6% |
+| 50 | 4.9% |
+| 100 | 3.8% |
+| 200 | 6.4% |
+| 300 | 11.8% |
+| 400 | 25.6% |
+| 500 | 46.6% |
+| 600 | 68.2% |
+| 700 | 89.3% |
+| 800 | 95.4% |
+| 900 | 98.4% |
+| 1000 | 99.2% |
+| 1200 | 99.9% |
 | 1600 | 100.0% |
 
-(500–1000 are averaged over coeff 3.4/4.0 × 10/60-min timeout only — see the
-sub-sweep note above; the other rows are averaged over the full 4-coefficient
-× 4-timeout grid.) The added points confirm the mesh doesn't jump straight
-from ~26% to ~96% between 400 and 800 balloons — it climbs in a fairly steep
-but continuous curve through the 500–700 range, crossing 50% around n≈550 and
-80% around n≈680.
+(Averaged over all 4 horizon coeffs × both sat fallback minutes values at
+every point — this grid has no gaps, unlike the earlier sub-sweep.) The mesh
+climbs in a continuous curve through 400–900, not a cliff: roughly flat and
+low (3–12%) through 300 balloons, then a steep rise from 400 to 900,
+saturating (>99%) by 1000.
 
-## Horizon coefficient and timeout
+## Horizon coeff shifts the transition, not the shape
 
-These are computed on the **original 6-point grid only** (50–1600, all 4
-coefficients, all 4 timeouts), so the comparison across coefficients stays
-apples-to-apples — the denser 500–1000 sub-sweep only covers coeff 3.4/4.0 and
-would otherwise skew their averages upward relative to 3.6/3.8:
+| Balloon count | Horizon coeff 3.4 | Horizon coeff 3.6 | Horizon coeff 3.8 | Horizon coeff 4.0 |
+|---|---|---|---|---|
+| 300 | 6.7% | 8.0% | 10.0% | 22.3% |
+| 400 | 9.7% | 16.0% | 30.3% | 46.5% |
+| 500 | 19.0% | 34.3% | 62.1% | 71.2% |
+| 600 | 42.2% | 69.2% | 69.8% | 91.7% |
+| 700 | 75.6% | 87.2% | 96.6% | 97.9% |
+| 800 | 89.3% | 93.9% | 98.9% | 99.5% |
+| 900 | 95.4% | 98.8% | 99.6% | 99.8% |
 
-- **Horizon coefficient**: 34.8% (coeff 3.4) → 44.4% (coeff 4.0) average — a
-  real, consistent effect.
-- **Satellite-fallback timeout** barely matters on average: 38.6% (10 min) vs.
-  40.1% (60 min).
-- The transition zone is where parameter choice matters most: at 400
-  balloons, radio delivery ranges from **5.9%** (coeff 3.6, 20-min timeout) to
-  **57.9%** (coeff 4.0, 30-min timeout) — a wide spread, consistent with
-  wind-driven drift adding variance exactly where the network is balanced on
-  the edge of connectivity.
+Interpolated 50%-crossing points (balloon count at which avg. radio delivery
+first reaches 50%):
 
-## Zooming in: coeff 3.4 vs. 4.0 across the transition zone
+| Horizon coeff | 50% crossing | 80% crossing |
+|---|---|---|
+| 3.4 | n≈623 | n≈732 |
+| 3.6 | n≈545 | n≈660 |
+| 3.8 | n≈462 | n≈638 |
+| 4.0 | n≈414 | n≈543 |
 
-![Radio delivery %, coeffs 3.4 and 4.0, linear x-axis](results-rust/sweep-chart-transition-linear-x.png)
+Raising the horizon coeff from 3.4 to 4.0 shifts the 50% point left by
+about 210 balloons — a real, monotonic effect across all four values, not
+just the two endpoints tested previously. The effect is largest in the
+500–600 range (up to ~50 points of spread between horizon coeff 3.4 and 4.0)
+and collapses at both ends of the sweep, since there's little room for a
+horizon coeff effect once a curve is pinned near 0% or 100%.
 
-The sub-sweep isolates how much horizon coefficient alone shifts the
-percolation curve, at 100-balloon resolution. Plotting balloon count on a
-true linear (rather than evenly-spaced-category) x-axis shows the climb is
-concentrated in a fairly narrow band of the range swept, not spread evenly
-across it:
-
-| Balloon count | Coeff 3.4 | Coeff 4.0 | Gap |
-|---|---|---|---|
-| 400 | 25.7% | 45.5% | 19.8 pts |
-| 500 | 19.0% | 71.2% | 52.2 pts |
-| 600 | 42.2% | 91.7% | 49.5 pts |
-| 700 | 75.6% | 97.9% | 22.3 pts |
-| 800 | 88.8% | 99.3% | 10.5 pts |
-| 900 | 95.4% | 99.8% | 4.4 pts |
-| 1000 | 97.3% | 100.0% | 2.7 pts |
-| 1600 | 100.0% | 100.0% | 0.0 pts |
-
-The gap between coefficients isn't constant across the transition — it peaks
-around 500–600 balloons (coeff 4.0 already past 90% while 3.4 is still under
-half) and collapses at both ends, since there's little room for a coefficient
-effect once either curve is pinned near 0% or 100%. Coeff 4.0 crosses the 50%
-mark around n≈480; coeff 3.4 doesn't cross it until n≈580 — a roughly
-100-balloon rightward shift in the percolation threshold from lowering the
-horizon coefficient alone.
+Averaged across the full grid: **49.4%** (horizon coeff 3.4) → **55.3%**
+(3.6) → **60.3%** (3.8) → **65.7%** (4.0). Sat fallback minutes barely
+matters on average — **56.6%** (10) vs. **58.7%** (60) — but like horizon
+coeff, its effect is concentrated in the transition zone: at 600 balloons,
+radio delivery ranges from **29.4%** (horizon coeff 3.4, sat fallback
+minutes 10) to **93.5%** (horizon coeff 4.0, sat fallback minutes 60).
 
 ## Practical takeaway
 
-**Balloon density is the lever that matters.** The transition isn't a cliff
-between 400 and 800 — it's a climb that crosses 50% around n≈550–600 and is
-mostly saturated (>95%) by n≈900, largely independent of horizon coefficient
-or timeout tuning once past that point. Below ~500 balloons, no amount of
-parameter tuning fully compensates; horizon coefficient has its largest
-practical effect (tens of points) in exactly the 500–700 range where the
-network is already on the edge, and almost none once density alone has pushed
-delivery near 0% or 100%. Real wind doesn't change the shape of the result —
-lateral drift adds variance in the transition zone, which is what you'd
-expect from adding a source of movement to a network that's already right at
-its percolation threshold.
+**Balloon density remains the dominant lever.** With every horizon coeff now
+covered at 100-balloon resolution across the full transition, the curve is a
+smooth climb crossing 50% somewhere in the n≈410–620 range depending on
+horizon coeff, not a fixed cliff at a single balloon count. Below ~400
+balloons, no combination of horizon coeff or sat fallback minutes gets radio
+delivery above ~50%; above ~900, all four horizon coeffs are effectively
+saturated (>95%) and tuning stops mattering. The 500–700 window is where
+parameter choice has the most leverage — tens of points of delivery
+difference from horizon coeff alone.
 
 ## Limitations
 
@@ -114,11 +101,10 @@ its percolation threshold.
   phase-transition pattern (a few percent below the threshold vs. 90%+ above
   it) is well clear of seed-to-seed noise, but individual transition-zone
   cells shouldn't be over-interpreted.
-- **The 500–1000 sub-sweep only covers coeff 3.4/4.0 and timeout 10/60 min**,
-  not the full 4×4 grid — it was added specifically to resolve the shape of
-  the percolation curve, not to extend the coefficient/timeout comparison.
-  Coeff 3.6/3.8 and timeout 20/30 min are only characterized at the original
-  50/100/200/400/800/1600 resolution.
+- **Only 2 sat fallback minutes values (10/60) swept**, not the 4-value grid
+  (10/20/30/60) from the earlier writeup — this run traded sat fallback
+  minutes resolution for full horizon coeff coverage across all 13 balloon
+  counts.
 - **Ack duration fixed at 30s**, not swept — recomputing links every
   simulated second, unthrottled, is already the dominant compute cost (see
   the [`ConnectivityScratch` optimization](../sim-server/src/link_detection.rs)

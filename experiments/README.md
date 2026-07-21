@@ -92,10 +92,18 @@ the field to `Combo` and `ResultRow`, and thread it through
 **JS (`connectivity-sweep.mjs`)** still takes its grid from constants near
 the top of the file — edit those, then re-run.
 
-**Important — use a fresh results directory per experiment.** `full` mode
-skips any combo whose JSON file already exists in `resultsDir` (that's the
-resume-after-kill feature — see the comment above `write_combo_json`), so
-if you change the parameter grid but leave old JSON files sitting in
+**Per-combo JSON files get archived into `resultsDir/json/` once combined.**
+Both `full` mode's auto-combine step at the end of a run and standalone
+`combine` move every per-combo JSON file into a `json/` subfolder after
+folding it into the CSV (see `archive_combo_jsons`), so `resultsDir`'s top
+level doesn't fill up with hundreds of tiny files — only the CSV-adjacent
+outputs (e.g. `chart-data.json`, chart HTML/PNG) stay there. The
+resume-after-kill skip check (see the comment above `write_combo_json`)
+looks in both the flat directory and `json/`, so archived combos are still
+recognized as done if you point a later run at the same `resultsDir`.
+
+**Important — use a fresh results directory per experiment.** If you change
+the parameter grid but leave old JSON files (flat or archived) sitting in
 `experiments/results-rust/`, stale combos from a previous parameter set
 won't get overwritten or flagged as wrong — they'll just silently persist
 and get folded into the combined CSV. Before a new experiment with

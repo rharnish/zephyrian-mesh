@@ -35,6 +35,10 @@ import matplotlib.pyplot as plt
 # Same palette as the interactive sweep-chart.html templates, in coefficient order.
 SERIES_COLORS = ["#2a78d6", "#008300", "#e87ba4", "#eda100"]
 
+# Opacity levels for split-by series (first value fully opaque, later values
+# progressively lighter) — cycled if a split column has >4 values.
+ALPHAS = [1.0, 0.4, 0.7, 0.25]
+
 
 def load_rows(csv_path):
     rows = []
@@ -47,34 +51,62 @@ def load_rows(csv_path):
     return rows
 
 
-def build_series(rows, coeffs, n_values):
+def build_series(rows, coeffs, n_values, split_by=None, split_values=None):
+    if split_by is None:
+        series = {}
+        for c in coeffs:
+            vals = []
+            for n in n_values:
+                matches = [r["pctRadio"] for r in rows if r["horizonCoeff"] == c and r["nBalloons"] == n]
+                vals.append(mean(matches) if matches else None)
+            series[(c, None)] = vals
+        return series
+
+    if split_values is None:
+        split_values = sorted({r[split_by] for r in rows}, key=lambda v: (len(v), v))
+
     series = {}
     for c in coeffs:
-        vals = []
-        for n in n_values:
-            matches = [r["pctRadio"] for r in rows if r["horizonCoeff"] == c and r["nBalloons"] == n]
-            vals.append(mean(matches) if matches else None)
-        series[c] = vals
+        for sv in split_values:
+            vals = []
+            for n in n_values:
+                matches = [
+                    r["pctRadio"] for r in rows
+                    if r["horizonCoeff"] == c and r["nBalloons"] == n and r[split_by] == sv
+                ]
+                vals.append(mean(matches) if matches else None)
+            series[(c, sv)] = vals
     return series
 
 
-def plot(n_values, series, out_path, title, subtitle=None, linear_x=False):
+def plot(n_values, series, out_path, title, subtitle=None, linear_x=False, split_by=None, split_label=None):
     fig, ax = plt.subplots(figsize=(8.5, 4.6), dpi=150)
     xs = list(n_values) if linear_x else list(range(len(n_values)))
-    for i, (coeff, vals) in enumerate(series.items()):
-        color = SERIES_COLORS[i % len(SERIES_COLORS)]
+    coeff_order = []
+    for coeff, _sv in series:
+        if coeff not in coeff_order:
+            coeff_order.append(coeff)
+    split_order = []
+    for _coeff, sv in series:
+        if sv is not None and sv not in split_order:
+            split_order.append(sv)
+
+    for (coeff, sv), vals in series.items():
+        color = SERIES_COLORS[coeff_order.index(coeff) % len(SERIES_COLORS)]
+        alpha = ALPHAS[split_order.index(sv) % len(ALPHAS)] if sv is not None else 1.0
+        label = f"horizon coeff {coeff:.1f}" if sv is None else f"horizon coeff {coeff:.1f}, {split_label or split_by} {sv}"
         # break the line across gaps instead of interpolating over missing points
         seg_xs, seg_vals = [], []
         for x, v in zip(xs, vals):
             if v is None:
                 if seg_xs:
-                    ax.plot(seg_xs, seg_vals, marker="o", color=color, linewidth=2, markersize=5)
+                    ax.plot(seg_xs, seg_vals, marker="o", color=color, alpha=alpha, linewidth=2, markersize=5)
                 seg_xs, seg_vals = [], []
                 continue
             seg_xs.append(x)
             seg_vals.append(v)
         if seg_xs:
-            ax.plot(seg_xs, seg_vals, marker="o", color=color, linewidth=2, markersize=5, label=f"coeff {coeff:.1f}")
+            ax.plot(seg_xs, seg_vals, marker="o", color=color, alpha=alpha, linewidth=2, markersize=5, label=label)
 
     if linear_x:
         ax.set_xlim(min(xs) - 0.03 * max(xs), max(xs) * 1.03)
@@ -107,14 +139,18 @@ def main():
     ap.add_argument("--title", default="Radio delivery % by balloon count, split by horizon coefficient")
     ap.add_argument("--subtitle", default=None)
     ap.add_argument("--linear-x", action="store_true", help="use a true numeric x-axis instead of evenly-spaced categories")
+    ap.add_argument("--split-by", help="CSV column to split each coefficient into multiple opacity-differentiated series (e.g. fallbackTimeoutMin)")
+    ap.add_argument("--split-values", help="comma-separated values of --split-by to include (default: all present)")
+    ap.add_argument("--split-label", help="display name for --split-by in the legend (default: the raw column name, e.g. fallbackTimeoutMin)")
     args = ap.parse_args()
 
     rows = load_rows(args.csv_path)
     coeffs = [float(c) for c in args.coeffs.split(",")] if args.coeffs else sorted({r["horizonCoeff"] for r in rows})
     n_values = [int(n) for n in args.n_values.split(",")] if args.n_values else sorted({r["nBalloons"] for r in rows})
+    split_values = args.split_values.split(",") if args.split_values else None
 
-    series = build_series(rows, coeffs, n_values)
-    plot(n_values, series, args.out, args.title, args.subtitle, linear_x=args.linear_x)
+    series = build_series(rows, coeffs, n_values, split_by=args.split_by, split_values=split_values)
+    plot(n_values, series, args.out, args.title, args.subtitle, linear_x=args.linear_x, split_by=args.split_by, split_label=args.split_label)
 
 
 if __name__ == "__main__":
