@@ -5,11 +5,12 @@ description: Turn a connectivity-sweep results CSV (JS or Rust connectivity_swee
 
 # sweep-summary
 
-Workflow for writing up a connectivity-sweep run (`experiments/run-shards.sh`
-for JS, or `connectivity_sweep full` for Rust — see `experiments/README.md`)
-once its CSV exists. Three steps:
-compute, write, chart. Only the first step is mechanical — the other two are
-judgment calls this skill does not automate away.
+Workflow for writing up a connectivity-sweep run (`connectivity_sweep full`
+for Rust — the live implementation; `experiments/legacy-js/run-shards.sh`
+for the archived JS version — see `experiments/README.md`) once its CSV
+exists. Three steps: compute, write, chart. Only the first step is
+mechanical — the other two are judgment calls this skill does not automate
+away.
 
 ## 1. Compute — `experiments/summarize_sweep.py`
 
@@ -31,7 +32,7 @@ eyeballing the CSV.
 ## 2. Write — `experiments/sweep-summary-<variant>.md`
 
 Follow the structure of the existing summaries
-([`sweep-summary-js.md`](../../experiments/sweep-summary-js.md),
+([`sweep-summary-js.md`](../../experiments/legacy-js/sweep-summary-js.md),
 [`sweep-summary-rust.md`](../../experiments/sweep-summary-rust.md)):
 header with Chart/Data/Generator links, "What was measured", a headline
 finding, secondary-parameter effects, a practical takeaway, and a
@@ -50,8 +51,9 @@ coefficient, x = balloon count, y = % radio). Feed it `chart-data.json`'s
 `series`/`xLabels` rather than recomputing from the CSV. Publish as an
 Artifact for the chat link, **and** save the same self-contained HTML file
 locally at `experiments/results-<variant>/sweep-chart.html` — that's the
-established convention (see `experiments/results/sweep-chart.html`), so the
-chart survives independent of any artifact URL.
+established convention (see `experiments/legacy-js/results/sweep-chart.html`
+from the original JS run), so the chart survives independent of any
+artifact URL.
 
 That path is covered by the `experiments/results*` gitignore rule (it's a
 results directory), so committing it needs `git add -f`.

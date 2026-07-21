@@ -39,9 +39,9 @@
 // comparisons across the swept parameters should still be meaningful.
 //
 // Usage:
-//   node experiments/connectivity-sweep.mjs bench                 # perf check, no sweep
-//   node experiments/connectivity-sweep.mjs quick                 # tiny sweep, sanity check output shape
-//   node experiments/connectivity-sweep.mjs full [out.csv]        # the real sweep (4 coeffs x 6 balloon counts x 4 timeouts = 96 combos)
+//   node experiments/legacy-js/connectivity-sweep.mjs bench                 # perf check, no sweep
+//   node experiments/legacy-js/connectivity-sweep.mjs quick                 # tiny sweep, sanity check output shape
+//   node experiments/legacy-js/connectivity-sweep.mjs full [out.csv]        # the real sweep (4 coeffs x 6 balloon counts x 4 timeouts = 96 combos)
 // ---------------------------------------------------------------------------
 import * as fs from 'node:fs';
 import {
@@ -50,19 +50,19 @@ import {
   inRadioRangePrecomputed,
   maxPossibleRangeKm,
   randomGlobalPosition,
-} from '../src/geo.js';
-import { SpatialGrid } from '../src/spatialGrid.js';
-import { UnionFind } from '../src/unionFind.js';
-import { Balloon } from '../src/balloon.js';
-import { TowerModel } from '../src/towerModel.js';
-import { WindField } from '../src/windField.js';
+} from '../../src/geo.js';
+import { SpatialGrid } from './src/spatialGrid.js';
+import { UnionFind } from './src/unionFind.js';
+import { Balloon } from './src/balloon.js';
+import { TowerModel } from '../../src/towerModel.js';
+import { WindField } from '../../src/windField.js';
 import {
   BALLOON_MIN_ALT,
   BALLOON_MAX_ALT,
   GRID_CELL_SIZE_DEG,
   INITIAL_TOWERS,
   params,
-} from '../src/config.js';
+} from '../../src/config.js';
 
 const PAYLOAD_INTERVAL_SEC = 5 * 60; // fixed, not swept
 const ZERO_WIND = new WindField(
@@ -241,7 +241,7 @@ function runCombo(combo, durationSec) {
 // nothing already-computed is lost, unlike rewriting one big CSV in place.
 // A separate `combine` mode reads every JSON file here and produces the
 // final CSV.
-const RESULTS_DIR = 'experiments/results';
+const RESULTS_DIR = 'experiments/legacy-js/results';
 
 export function comboFileName(combo) {
   const h = combo.horizonCoeff.toFixed(2).replace('.', 'p');
@@ -338,7 +338,7 @@ if (isMain && mode === 'bench') {
   }
   console.log(`Shard ${shardIndex} done.`);
 } else if (isMain && mode === 'combine') {
-  const outPath = process.argv[3] || 'experiments/connectivity-sweep-results.csv';
+  const outPath = process.argv[3] || 'experiments/legacy-js/connectivity-sweep-results.csv';
   const n = combineJsonToCsv(outPath);
   console.log(`Combined ${n} result file(s) from ${RESULTS_DIR}/ into ${outPath}`);
 } else if (isMain) {

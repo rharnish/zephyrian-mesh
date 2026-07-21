@@ -11,7 +11,10 @@ Context (as it was before Plan B): physics used to live client-side in
 `src/balloon.js` (wind advection + altitude thermostat) and
 `src/linkDetection.js` / `src/spatialGrid.js` / `src/unionFind.js`
 (radio-link detection between balloons and towers). It now lives in
-`sim-server` (Rust); `src/main.js` is a thin renderer.
+`sim-server` (Rust); `src/main.js` is a thin renderer. Those four JS files
+are no longer in `src/` — they've since been archived to
+`experiments/legacy-js/src/`, kept only for the JS connectivity sweep (see
+`experiments/legacy-js/README.md`); paths below are as they were pre-move.
 `weather-data-server/wind_backend.py` (renamed from `WeatherData/`) only
 serves static wind grid data — it did no simulation before this and still
 doesn't; both the old client-side code and `sim-server` are/were just

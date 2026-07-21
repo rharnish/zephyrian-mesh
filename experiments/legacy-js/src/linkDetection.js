@@ -1,4 +1,4 @@
-import { precomputeNode, inRadioRangePrecomputed, maxPossibleRangeKm } from './geo.js';
+import { precomputeNode, inRadioRangePrecomputed, maxPossibleRangeKm } from '../../../src/geo.js';
 import { Balloon } from './balloon.js';
 
 // Balloon ids are array indices reused on every respawn (0..N-1) and tower

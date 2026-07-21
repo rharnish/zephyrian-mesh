@@ -43,4 +43,6 @@ __pycache__
 # connectivity sweep results
 experiments/results*/*json
 experiments/results*/*log
+experiments/legacy-js/results*/*json
+experiments/legacy-js/results*/*log
 

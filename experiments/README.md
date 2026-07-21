@@ -1,35 +1,42 @@
 # Connectivity sweep — how to run it, and how to run it again with different parameters
 
-Two implementations of the same experiment, kept side by side:
+**The Rust version (`connectivity_sweep.rs`) is the live implementation —
+use it for new sweeps.** The original JS implementation has been archived to
+[`legacy-js/`](legacy-js/) (kept runnable for reference/comparison, not
+under active development) now that the app's simulation architecture has
+fully moved to `sim-server`. See [`legacy-js/README.md`](legacy-js/README.md)
+if you need to run it.
 
-| | JS | Rust |
+| | JS (archived) | Rust |
 |---|---|---|
-| File | `connectivity-sweep.mjs` | `../sim-server/src/bin/connectivity_sweep.rs` |
-| Run via | `node experiments/connectivity-sweep.mjs <mode>` | `cargo run --release --bin connectivity_sweep -- <mode>` (from `sim-server/`) |
-| Per-combo results | `experiments/results/` | `experiments/results-rust/` |
-| Combined CSV (default) | `experiments/connectivity-sweep-results.csv` | `experiments/connectivity-sweep-results-rust.csv` |
+| File | `legacy-js/connectivity-sweep.mjs` | `../sim-server/src/bin/connectivity_sweep.rs` |
+| Run via | `node experiments/legacy-js/connectivity-sweep.mjs <mode>` | `cargo run --release --bin connectivity_sweep -- <mode>` (from `sim-server/`) |
+| Per-combo results | `experiments/legacy-js/results/` | `experiments/results-rust/` |
+| Combined CSV (default) | `experiments/legacy-js/connectivity-sweep-results.csv` | `experiments/connectivity-sweep-results-rust.csv` |
 | Parallelism | `run-shards.sh` (N processes, each re-fetching wind) | `full` mode itself (rayon, one process, one wind fetch) |
 | Sweep grid | constants in `connectivity-sweep.mjs` | JSON config file (default `sweep-config.json`) |
 | Speed (worst-case combo, 1 sim hour) | ~119s | **~28s (~4.25x faster)** |
 | Balloon layout per combo | fresh `Math.random()` draw each run (not reproducible) | deterministic per-combo seed via `seed_for_combo()` (reproducible) |
 | Wind | zero (static, no lateral drift) | **real**, fetched once per run from `wind_backend.py`, falls back to zero if unreachable |
 
-Both implement the exact same model (see `connectivity-sweep.mjs`'s header
-comment for the full description: payload generation every 5 sim-minutes,
-radio delivery after a continuous 30s grounded streak, satellite fallback
-on timeout) and produce the same JSON/CSV shape, so results from either are
-directly comparable. **Use the Rust version for new sweeps** — same
-correctness (cross-checked against the JS version's `quick` mode output,
-same trends/order of magnitude), meaningfully faster. The JS version stays
-as the original/reference implementation and because it's the one that
-produced `connectivity-sweep-results.csv` + `sweep-summary-js.md`.
+Both implement the exact same model (see `legacy-js/connectivity-sweep.mjs`'s
+header comment for the full description: payload generation every 5
+sim-minutes, radio delivery after a continuous 30s grounded streak,
+satellite fallback on timeout) and produce the same JSON/CSV shape, so
+results from either are directly comparable. The JS version stays around as
+the original/reference implementation and because it's the one that
+produced `connectivity-sweep-results.csv` + `sweep-summary-js.md` — same
+correctness as Rust (cross-checked via its `quick` mode output, same
+trends/order of magnitude), just slower and no longer developed.
 
 Both are self-contained and headless — no Cesium viewer, no `sim-server`
-web process needed. They reuse the app's pure simulation logic directly
-(JS imports `src/*.js`; Rust depends on `sim-server`'s lib target) but run
-entirely standalone. The Rust version does need `wind_backend.py` running
-if you want real wind (see below) — it works fine without it too, just
-falls back to zero wind with a printed warning.
+web process needed. JS's simulation building blocks
+(`legacy-js/src/balloon.js`, `spatialGrid.js`, `unionFind.js`) now live
+alongside it in the archive rather than in the live app's `src/` — they were
+already dead code there once `sim-server` took over, kept only for this
+sweep. Rust depends on `sim-server`'s lib target. The Rust version does need
+`wind_backend.py` running if you want real wind (see below) — it works fine
+without it too, just falls back to zero wind with a printed warning.
 
 ## Quick start
 
@@ -42,10 +49,10 @@ cargo build --release --bin connectivity_sweep
 cd ..
 ./sim-server/target/release/connectivity_sweep full   # the real sweep, reads experiments/sweep-config.json
 
-# JS (original)
-node experiments/connectivity-sweep.mjs bench
-node experiments/connectivity-sweep.mjs quick
-./experiments/run-shards.sh
+# JS (archived, see legacy-js/README.md)
+node experiments/legacy-js/connectivity-sweep.mjs bench
+node experiments/legacy-js/connectivity-sweep.mjs quick
+./experiments/legacy-js/run-shards.sh
 ```
 
 `bench` estimates full-sweep cost before you commit to it. `quick` runs a
@@ -89,8 +96,8 @@ the field to `Combo` and `ResultRow`, and thread it through
 `combo_file_name()` already encodes `ack_duration_sec` in the filename (the
 `_a{}` suffix), so per-combo files won't collide once it actually varies.
 
-**JS (`connectivity-sweep.mjs`)** still takes its grid from constants near
-the top of the file — edit those, then re-run.
+**JS (`legacy-js/connectivity-sweep.mjs`)** still takes its grid from
+constants near the top of the file — edit those, then re-run.
 
 **Per-combo JSON files get archived into `resultsDir/json/` once combined.**
 Both `full` mode's auto-combine step at the end of a run and standalone
@@ -110,7 +117,7 @@ and get folded into the combined CSV. Before a new experiment with
 different parameters, either clear the directory:
 
 ```bash
-rm -rf experiments/results-rust    # or results/ for the JS version
+rm -rf experiments/results-rust    # or legacy-js/results/ for the JS version
 ```
 
 or point `resultsDir`/`outCsv` in the config at a new location for that
@@ -133,13 +140,13 @@ or `cargo flamegraph --bin connectivity_sweep -- full`.
 every Nth combo and each fetching wind independently.
 
 ```bash
-./experiments/run-shards.sh 4                          # 4 shards, default output path
-./experiments/run-shards.sh 8 experiments/my-run.csv    # 8 shards, custom CSV name
+./experiments/legacy-js/run-shards.sh 4                          # 4 shards, default output path
+./experiments/legacy-js/run-shards.sh 8 experiments/my-run.csv    # 8 shards, custom CSV name
 ```
 
 ## Wind: real in Rust, zero in JS
 
-**JS (`connectivity-sweep.mjs`) still uses a static zero-wind field** —
+**JS (`legacy-js/connectivity-sweep.mjs`) still uses a static zero-wind field** —
 balloons hold their spawn (lon, lat) for the entire run; only altitude
 drifts (via each balloon's own target-altitude controller). This was a
 deliberate simplification when `wind_backend.py` wasn't reliably available

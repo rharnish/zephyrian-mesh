@@ -60,16 +60,20 @@ longer exists there. The equivalent check now lives in
 
 Every module in `src/` is a deliberate line-for-line port of an existing JS
 file, so the two stay easy to diff against each other and (for now) behave
-identically:
+identically. The four JS originals that had no other purpose left in the
+live app once this port landed (`balloon.js`, `spatialGrid.js`,
+`unionFind.js`, `linkDetection.js`) have since been archived to
+`experiments/legacy-js/src/` — they're kept only for the JS connectivity
+sweep, see `experiments/legacy-js/README.md`:
 
 | Rust file | Ported from | What it does |
 |---|---|---|
 | `wind_field.rs` | `src/windField.js` | Bilinear interp per pressure level + altitude blending between levels |
-| `balloon.rs` | `src/balloon.js` | Wind advection + target-altitude thermostat |
+| `balloon.rs` | `experiments/legacy-js/src/balloon.js` | Wind advection + target-altitude thermostat |
 | `geo.rs` | `src/geo.js` | Radio horizon, great-circle distance, random sphere point |
-| `spatial_grid.rs` | `src/spatialGrid.js` | Lon/lat cell bucketing for neighbor queries |
-| `union_find.rs` | `src/unionFind.js` | Cluster detection (grounded vs. ungrounded) |
-| `link_detection.rs` | `src/linkDetection.js` | Grid-based edge finder + O(n²) brute-force oracle used in tests |
+| `spatial_grid.rs` | `experiments/legacy-js/src/spatialGrid.js` | Lon/lat cell bucketing for neighbor queries |
+| `union_find.rs` | `experiments/legacy-js/src/unionFind.js` | Cluster detection (grounded vs. ungrounded) |
+| `link_detection.rs` | `experiments/legacy-js/src/linkDetection.js` | Grid-based edge finder + O(n²) brute-force oracle used in tests |
 | `tower.rs` | `src/towerModel.js` | Plain tower data (no Cesium entity — that stays client-side) |
 | `sim.rs` | `src/main.js`'s `tick()` | Owns `World`, runs the tick loop, throttles link recompute the same way (`LINK_UPDATE_EVERY_N_TICKS`) |
 | `config.rs` | `src/config.js` | Hand-mirrored constants — **keep these in sync manually** until one side is deleted |
@@ -110,9 +114,10 @@ random balloon fields) surfaced a real gap: near either pole, two nodes on
 opposite sides can be close in great-circle distance while differing in
 longitude by up to 180°. The grid's search window didn't account for
 wrapping *over* the pole, so it could miss a real in-range pair. Fixed in
-both `spatial_grid.rs` and the original `src/spatialGrid.js` (same fix,
-kept in sync) — see the `pole_wraparound_edges_are_not_missed` test and the
-comment in `neighbors()` in either file.
+both `spatial_grid.rs` and the original (now archived)
+`experiments/legacy-js/src/spatialGrid.js` (same fix, kept in sync) — see
+the `pole_wraparound_edges_are_not_missed` test and the comment in
+`neighbors()` in either file.
 
 ## Running it
 

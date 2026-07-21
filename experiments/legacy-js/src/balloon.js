@@ -6,7 +6,7 @@ import {
   VERTICAL_GAIN,
   TARGET_DRIFT_CHANCE_PER_TICK,
   TARGET_DRIFT_RANGE,
-} from './config.js';
+} from '../../../src/config.js';
 
 // ---------------------------------------------------------------------------
 // Balloon model — wind-driven horizontal motion + simple buoyancy/ballast
