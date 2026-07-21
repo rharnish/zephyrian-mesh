@@ -74,7 +74,10 @@ def transition_zone(rows):
 
 def chart_series(rows):
     """avg pctRadio by horizonCoeff -> [values ordered by ascending nBalloons],
-    matching the `data` object shape sweep-chart.html expects."""
+    matching the `data` object shape sweep-chart.html expects. Balloon counts
+    not swept for a given coefficient (e.g. a denser sub-sweep added only for
+    some coefficients) come back as null rather than crashing, so the sweep
+    grid doesn't have to be a full rectangle."""
     n_values = sorted({r["nBalloons"] for r in rows})
     coeffs = sorted({r["horizonCoeff"] for r in rows})
     series = {}
@@ -83,7 +86,7 @@ def chart_series(rows):
         for r in rows:
             if r["horizonCoeff"] == c:
                 by_n[r["nBalloons"]].append(r["pctRadio"])
-        series[f"{c:g}"] = [mean(by_n[n]) for n in n_values]
+        series[f"{c:g}"] = [mean(by_n[n]) if by_n[n] else None for n in n_values]
     return {"xLabels": [str(n) for n in n_values], "series": series}
 
 

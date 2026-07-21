@@ -39,9 +39,12 @@ use std::time::Instant;
 const PAYLOAD_INTERVAL_SEC: i64 = 5 * 60; // fixed, not swept
 const FIXED_ACK_DURATION_SEC: i64 = 30; // taken out of the sweep, same as JS
 
-const HORIZON_COEFFS: [f64; 4] = [3.4, 3.6, 3.8, 4.0];
-const N_BALLOONS: [u32; 6] = [50, 100, 200, 400, 800, 1600];
-const FALLBACK_TIMEOUT_MIN: [i64; 4] = [10, 20, 30, 60];
+//const HORIZON_COEFFS: [f64; 4] = [3.4, 3.6, 3.8, 4.0];
+//const N_BALLOONS: [u32; 6] = [50, 100, 200, 400, 800, 1600];
+// const FALLBACK_TIMEOUT_MIN: [i64; 4] = [10, 20, 30, 60];
+const HORIZON_COEFFS: [f64; 2] = [3.4, 4.0];
+const N_BALLOONS: [u32; 6] = [500, 600, 700, 800, 900, 1000];
+const FALLBACK_TIMEOUT_MIN: [i64; 2] = [10, 60];
 
 const RESULTS_DIR: &str = "experiments/results-rust";
 
@@ -256,7 +259,12 @@ fn combine_json_to_csv(out_path: &str) -> std::io::Result<usize> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
             let content = std::fs::read_to_string(&path)?;
-            rows.push(serde_json::from_str(&content).unwrap());
+            match serde_json::from_str(&content) {
+                Ok(row) => rows.push(row),
+                // Non-combo JSON can land in RESULTS_DIR too (e.g. chart-data.json
+                // written by summarize_sweep.py) — skip rather than panic on it.
+                Err(_) => eprintln!("skipping non-combo-result JSON file: {}", path.display()),
+            }
         }
     }
     rows.sort_by(|a, b| {
