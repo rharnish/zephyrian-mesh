@@ -1,22 +1,31 @@
-// Rust port of experiments/connectivity-sweep.mjs — same model, same sweep
-// grid, same output format (JSON per combo + combined CSV), so results are
-// directly comparable to the JS run already checked into
-// experiments/results/ and experiments/connectivity-sweep-results.csv.
-// Reuses sim-server's already-ported physics/link-detection modules as a
-// library (see ../lib.rs) rather than reimplementing them.
+// Rust port of experiments/connectivity-sweep.mjs — same model, same output
+// format (JSON per combo + combined CSV), so results are directly
+// comparable to the JS run already checked into experiments/results/ and
+// experiments/connectivity-sweep-results.csv. Reuses sim-server's
+// already-ported physics/link-detection modules as a library (see ../lib.rs)
+// rather than reimplementing them.
 //
-// Writes to SEPARATE output paths (experiments/results-rust/,
+// Writes to SEPARATE output paths by default (experiments/results-rust/,
 // experiments/connectivity-sweep-results-rust.csv) so the existing JS
 // results aren't touched — this run exists to compare wall-clock time and
 // (ideally) confirm matching output, not to replace the JS data.
+//
+// The sweep grid itself lives in a JSON config file (default:
+// experiments/sweep-config.json — see SweepConfig below), not in code, so
+// running a new experiment doesn't need a rebuild. `full` parallelizes
+// across combos in-process with rayon (one wind fetch, one process to
+// profile) and auto-combines into the CSV when done — this replaced the
+// old shard-script model (see run-shards-rust.sh in git history) where
+// N separate processes each fetched wind and had to be launched/waited-on
+// externally.
 //
 // Usage (run from the sim-server/ directory, or repo root — paths below
 // are relative to cwd, matching connectivity-sweep.mjs's convention of
 // being run from the repo root):
 //   cargo run --release --bin connectivity_sweep -- bench
 //   cargo run --release --bin connectivity_sweep -- quick
-//   cargo run --release --bin connectivity_sweep -- full [shardIndex] [shardCount]
-//   cargo run --release --bin connectivity_sweep -- combine [outPath]
+//   cargo run --release --bin connectivity_sweep -- full [configPath] [outCsvPath]
+//   cargo run --release --bin connectivity_sweep -- combine [resultsDir] [outPath]
 //
 // Uses real wind data fetched once at startup from wind_backend.py (same
 // endpoint sim-server's main binary uses), falling back to zero wind if
@@ -26,6 +35,7 @@
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_server::balloon::Balloon;
 use sim_server::config::{BALLOON_MAX_ALT, BALLOON_MIN_ALT, GRID_CELL_SIZE_DEG, INITIAL_TOWERS, WIND_API_URL};
@@ -34,19 +44,55 @@ use sim_server::link_detection::ConnectivityScratch;
 use sim_server::spatial_grid::SpatialGrid;
 use sim_server::tower::Tower;
 use sim_server::wind_field::WindField;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 const PAYLOAD_INTERVAL_SEC: i64 = 5 * 60; // fixed, not swept
-const FIXED_ACK_DURATION_SEC: i64 = 30; // taken out of the sweep, same as JS
 
-//const HORIZON_COEFFS: [f64; 4] = [3.4, 3.6, 3.8, 4.0];
-//const N_BALLOONS: [u32; 6] = [50, 100, 200, 400, 800, 1600];
-// const FALLBACK_TIMEOUT_MIN: [i64; 4] = [10, 20, 30, 60];
-const HORIZON_COEFFS: [f64; 2] = [3.4, 4.0];
-const N_BALLOONS: [u32; 6] = [500, 600, 700, 800, 900, 1000];
-const FALLBACK_TIMEOUT_MIN: [i64; 2] = [10, 60];
+const DEFAULT_CONFIG_PATH: &str = "experiments/sweep-config.json";
+const DEFAULT_RESULTS_DIR: &str = "experiments/results-rust";
+const DEFAULT_OUT_CSV: &str = "experiments/connectivity-sweep-results-rust.csv";
+const DEFAULT_ACK_DURATION_SEC: i64 = 30;
+const DEFAULT_DURATION_HOURS: f64 = 24.0;
 
-const RESULTS_DIR: &str = "experiments/results-rust";
+fn default_ack_duration_sec() -> i64 {
+    DEFAULT_ACK_DURATION_SEC
+}
+fn default_duration_hours() -> f64 {
+    DEFAULT_DURATION_HOURS
+}
+fn default_results_dir() -> String {
+    DEFAULT_RESULTS_DIR.to_string()
+}
+fn default_out_csv() -> String {
+    DEFAULT_OUT_CSV.to_string()
+}
+
+// The sweep grid, loaded from JSON (default path: experiments/sweep-config.json)
+// instead of being hardcoded, so a new experiment is "edit the file, re-run"
+// rather than "edit the source, rebuild". All fields but the three grid arrays
+// are optional and fall back to the defaults above.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SweepConfig {
+    horizon_coeffs: Vec<f64>,
+    n_balloons: Vec<u32>,
+    fallback_timeout_min: Vec<i64>,
+    #[serde(default = "default_ack_duration_sec")]
+    ack_duration_sec: i64,
+    #[serde(default = "default_duration_hours")]
+    duration_hours: f64,
+    #[serde(default = "default_results_dir")]
+    results_dir: String,
+    #[serde(default = "default_out_csv")]
+    out_csv: String,
+}
+
+fn load_config(path: &str) -> SweepConfig {
+    let content = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("failed to read sweep config {path}: {e}"));
+    serde_json::from_str(&content).unwrap_or_else(|e| panic!("failed to parse sweep config {path}: {e}"))
+}
 
 struct Combo {
     horizon_coeff: f64,
@@ -228,12 +274,12 @@ fn run_combo(combo: &Combo, wind: &WindField, duration_sec: i64) -> ResultRow {
     }
 }
 
-fn combos() -> Vec<Combo> {
+fn combos(config: &SweepConfig) -> Vec<Combo> {
     let mut out = Vec::new();
-    for &horizon_coeff in &HORIZON_COEFFS {
-        for &n_balloons in &N_BALLOONS {
-            for &fallback_timeout_min in &FALLBACK_TIMEOUT_MIN {
-                out.push(Combo { horizon_coeff, n_balloons, fallback_timeout_min, ack_duration_sec: FIXED_ACK_DURATION_SEC });
+    for &horizon_coeff in &config.horizon_coeffs {
+        for &n_balloons in &config.n_balloons {
+            for &fallback_timeout_min in &config.fallback_timeout_min {
+                out.push(Combo { horizon_coeff, n_balloons, fallback_timeout_min, ack_duration_sec: config.ack_duration_sec });
             }
         }
     }
@@ -245,16 +291,16 @@ fn combo_file_name(combo: &Combo) -> String {
     format!("h{h}_n{}_t{}_a{}.json", combo.n_balloons, combo.fallback_timeout_min, combo.ack_duration_sec)
 }
 
-fn write_combo_json(combo: &Combo, row: &ResultRow) -> std::io::Result<String> {
-    std::fs::create_dir_all(RESULTS_DIR)?;
-    let path = format!("{RESULTS_DIR}/{}", combo_file_name(combo));
+fn write_combo_json(results_dir: &str, combo: &Combo, row: &ResultRow) -> std::io::Result<String> {
+    std::fs::create_dir_all(results_dir)?;
+    let path = format!("{results_dir}/{}", combo_file_name(combo));
     std::fs::write(&path, serde_json::to_string_pretty(row).unwrap())?;
     Ok(path)
 }
 
-fn combine_json_to_csv(out_path: &str) -> std::io::Result<usize> {
+fn combine_json_to_csv(results_dir: &str, out_path: &str) -> std::io::Result<usize> {
     let mut rows: Vec<ResultRow> = Vec::new();
-    for entry in std::fs::read_dir(RESULTS_DIR)? {
+    for entry in std::fs::read_dir(results_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
@@ -340,9 +386,9 @@ fn main() {
             let duration_sec = 60 * 60; // 1 sim hour
             let combo = Combo {
                 horizon_coeff: 4.0,
-                n_balloons: *N_BALLOONS.iter().max().unwrap(),
+                n_balloons: 1600, // worst case across every sweep run so far
                 fallback_timeout_min: 30,
-                ack_duration_sec: FIXED_ACK_DURATION_SEC,
+                ack_duration_sec: DEFAULT_ACK_DURATION_SEC,
             };
             println!(
                 "Benchmarking worst case (n={}, ackDurationSec={}) over {} sim hour(s)...",
@@ -363,7 +409,6 @@ fn main() {
                 wall_sec * 24.0,
                 wall_sec * 24.0 / 60.0
             );
-            println!("Total combos in full sweep: {}", HORIZON_COEFFS.len() * N_BALLOONS.len() * FALLBACK_TIMEOUT_MIN.len());
         }
         "quick" => {
             let wind = fetch_wind_field_blocking();
@@ -371,7 +416,7 @@ fn main() {
             println!("{:<10} {:<12} {:<14} {:<10} {:<12}", "nBalloons", "horizonCoeff", "totalPayloads", "pctRadio", "pctSatellite");
             for &n_balloons in &[50, 200] {
                 for &horizon_coeff in &[3.4, 4.0] {
-                    let combo = Combo { horizon_coeff, n_balloons, fallback_timeout_min: 20, ack_duration_sec: FIXED_ACK_DURATION_SEC };
+                    let combo = Combo { horizon_coeff, n_balloons, fallback_timeout_min: 20, ack_duration_sec: DEFAULT_ACK_DURATION_SEC };
                     let row = run_combo(&combo, &wind, duration_sec);
                     println!(
                         "{:<10} {:<12} {:<14} {:<10.1} {:<12.1}",
@@ -381,48 +426,58 @@ fn main() {
             }
         }
         "full" => {
+            let config_path = args.get(2).map(String::as_str).unwrap_or(DEFAULT_CONFIG_PATH);
+            let config = load_config(config_path);
+            let out_csv = args.get(3).map(String::as_str).unwrap_or(config.out_csv.as_str()).to_string();
+            let results_dir = config.results_dir.clone();
+            let duration_sec = (config.duration_hours * 3600.0) as i64;
+
             let wind = fetch_wind_field_blocking();
-            let shard_index: usize = args.get(2).map(|s| s.parse().unwrap()).unwrap_or(0);
-            let shard_count: usize = args.get(3).map(|s| s.parse().unwrap()).unwrap_or(1);
-            let duration_sec = 24 * 60 * 60; // 24 sim hours, matching the JS sweep
-            let all: Vec<Combo> = combos().into_iter().enumerate().filter(|(i, _)| i % shard_count == shard_index).map(|(_, c)| c).collect();
+            let all = combos(&config);
             println!(
-                "Running full sweep shard {shard_index}/{shard_count}: {} combinations x {} sim hours each.",
+                "Loaded {config_path} — running {} combination(s) x {} sim hours each across {} thread(s).",
                 all.len(),
-                duration_sec / 3600
+                config.duration_hours,
+                rayon::current_num_threads()
             );
-            std::fs::create_dir_all(RESULTS_DIR).unwrap();
+            std::fs::create_dir_all(&results_dir).unwrap();
+
             let t0 = Instant::now();
-            let mut done = 0usize;
-            for (i, combo) in all.iter().enumerate() {
-                let path = format!("{RESULTS_DIR}/{}", combo_file_name(combo));
+            let done = AtomicUsize::new(0);
+            let total = all.len();
+            all.par_iter().for_each(|combo| {
+                let path = format!("{results_dir}/{}", combo_file_name(combo));
                 if std::path::Path::new(&path).exists() {
-                    println!("[shard {shard_index}] [{}/{}] already done, skipping: {path}", i + 1, all.len());
-                    continue;
+                    println!("[skip] already done: {path}");
+                    return;
                 }
                 let row = run_combo(combo, &wind, duration_sec);
-                write_combo_json(combo, &row).unwrap();
-                done += 1;
+                write_combo_json(&results_dir, combo, &row).unwrap();
+                let n_done = done.fetch_add(1, Ordering::Relaxed) + 1;
                 let elapsed = t0.elapsed().as_secs_f64();
-                let rate = done as f64 / elapsed;
-                let eta_sec = if rate > 0.0 { (all.len() - (i + 1)) as f64 / rate } else { 0.0 };
+                let rate = n_done as f64 / elapsed;
+                let eta_sec = if rate > 0.0 { (total - n_done) as f64 / rate } else { 0.0 };
                 println!(
-                    "[shard {shard_index}] [{}/{}] wrote {path} — elapsed {:.0}s, ETA {:.1} min",
-                    i + 1,
-                    all.len(),
+                    "[{n_done}/{total}] wrote {path} — elapsed {:.0}s, ETA {:.1} min",
                     elapsed,
                     eta_sec / 60.0
                 );
-            }
-            println!("Shard {shard_index} done.");
+            });
+
+            println!("Sweep done, combining results into {out_csv}");
+            let n = combine_json_to_csv(&results_dir, &out_csv).unwrap();
+            println!("Combined {n} result file(s) from {results_dir}/ into {out_csv}");
         }
         "combine" => {
-            let out_path = args.get(2).map(String::as_str).unwrap_or("experiments/connectivity-sweep-results-rust.csv");
-            let n = combine_json_to_csv(out_path).unwrap();
-            println!("Combined {n} result file(s) from {RESULTS_DIR}/ into {out_path}");
+            let results_dir = args.get(2).map(String::as_str).unwrap_or(DEFAULT_RESULTS_DIR);
+            let out_path = args.get(3).map(String::as_str).unwrap_or(DEFAULT_OUT_CSV);
+            let n = combine_json_to_csv(results_dir, out_path).unwrap();
+            println!("Combined {n} result file(s) from {results_dir}/ into {out_path}");
         }
         other => {
-            eprintln!("Unknown mode \"{other}\". Use: bench | quick | full [shardIndex] [shardCount] | combine [outPath]");
+            eprintln!(
+                "Unknown mode \"{other}\". Use: bench | quick | full [configPath] [outCsvPath] | combine [resultsDir] [outPath]"
+            );
             std::process::exit(1);
         }
     }

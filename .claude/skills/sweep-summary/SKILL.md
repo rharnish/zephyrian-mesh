@@ -6,7 +6,8 @@ description: Turn a connectivity-sweep results CSV (JS or Rust connectivity_swee
 # sweep-summary
 
 Workflow for writing up a connectivity-sweep run (`experiments/run-shards.sh`
-or `experiments/run-shards-rust.sh`) once its CSV exists. Three steps:
+for JS, or `connectivity_sweep full` for Rust — see `experiments/README.md`)
+once its CSV exists. Three steps:
 compute, write, chart. Only the first step is mechanical — the other two are
 judgment calls this skill does not automate away.
 
@@ -30,7 +31,7 @@ eyeballing the CSV.
 ## 2. Write — `experiments/sweep-summary-<variant>.md`
 
 Follow the structure of the existing summaries
-([`sweep-summary.md`](../../experiments/sweep-summary.md),
+([`sweep-summary-js.md`](../../experiments/sweep-summary-js.md),
 [`sweep-summary-rust.md`](../../experiments/sweep-summary-rust.md)):
 header with Chart/Data/Generator links, "What was measured", a headline
 finding, secondary-parameter effects, a practical takeaway, and a
@@ -61,6 +62,7 @@ results directory), so committing it needs `git add -f`.
   topology/wind/parameters. Trust the script's auto-detected `n_best`, don't
   assume it matches a previous run.
 - `results-rust-no-wind/` and `results-rust/` are different runs (see
-  `connectivity_sweep.rs`'s wind-fetch fallback) — check the shard logs for
-  "Loaded real wind field" vs. "using zero wind" before writing prose that
-  claims one or the other; don't infer it from the directory name alone.
+  `connectivity_sweep.rs`'s wind-fetch fallback) — check the run's console
+  output (or `shard*.log` for older JS shard-script runs) for "Loaded real
+  wind field" vs. "using zero wind" before writing prose that claims one or
+  the other; don't infer it from the directory name alone.
