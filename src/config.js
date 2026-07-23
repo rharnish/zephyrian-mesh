@@ -19,13 +19,19 @@ export const TIME_SCALE = 60;                 // 1 real second = 60 sim seconds
 
 export const EARTH_RADIUS = 6371000;          // meters
 
-export const WIND_API_URL = 'http://127.0.0.1:8000/api/wind-levels';
+// Use the page's own hostname rather than hardcoding 127.0.0.1, so this
+// still works when the frontend is opened from a browser on another
+// computer (npm run dev --host) — 127.0.0.1 in that browser would mean the
+// browser's own machine, not the one running wind_backend.py/sim-server.
+const BACKEND_HOST = window.location.hostname;
+
+export const WIND_API_URL = `http://${BACKEND_HOST}:8000/api/wind-levels`;
 
 // sim-server (rust/sim-server, née rust/sim-core plan B) owns balloon/tower
 // simulation state; the frontend is a thin client that renders whatever it
 // broadcasts. See sim-server/README.md.
-export const SIM_SERVER_URL = 'http://127.0.0.1:8080';
-export const SIM_SERVER_WS_URL = 'ws://127.0.0.1:8080/ws';
+export const SIM_SERVER_URL = `http://${BACKEND_HOST}:8080`;
+export const SIM_SERVER_WS_URL = `ws://${BACKEND_HOST}:8080/ws`;
 
 // Buoyancy/ballast controller (simple target-altitude thermostat, per spec)
 export const MAX_VERTICAL_RATE = 3;           // m/s, max climb/descend speed

@@ -196,8 +196,8 @@ async function initCesium() {
   //  - horizon coefficient: updates immediately, and rebuilds every
   //    tower's range-gradient overlay so it reflects the new value; synced
   //    to sim-server on release so radio range there matches the display.
-  //  - balloon count: applied on click (not live-as-you-type), sent to
-  //    sim-server as a respawn command.
+  //  - balloon count: live label on drag, synced to sim-server on release
+  //    as a respawn command (same pattern as the horizon coefficient).
   const panel = document.createElement('div');
   panel.style.cssText = `
     position: fixed; top: 10px; left: 10px; z-index: 1000;
@@ -216,14 +216,16 @@ async function initCesium() {
           <span>Horizon coeff.</span>
           <span id="horizonCoeffValue">${params.horizonRefractionCoeff.toFixed(2)}</span>
         </label>
-        <input id="horizonCoeffSlider" type="range" min="2" max="6" step="0.05"
+        <input id="horizonCoeffSlider" type="range" min="2.5" max="4.2" step="0.05"
                value="${params.horizonRefractionCoeff}" style="width: 100%;" />
       </div>
-      <div style="display:flex; gap:6px; align-items:center;">
-        <label style="flex:1;">Balloons</label>
-        <input id="numBalloonsInput" type="number" min="1" max="5000" step="10"
-               value="${params.numBalloons}" style="width: 70px;" />
-        <button id="applyNumBalloons">Apply</button>
+      <div>
+        <label style="display:flex; justify-content:space-between;">
+          <span>Balloons</span>
+          <span id="numBalloonsValue">${params.numBalloons}</span>
+        </label>
+        <input id="numBalloonsSlider" type="range" min="1" max="2000" step="10"
+               value="${params.numBalloons}" style="width: 100%;" />
       </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <input id="windVectorsToggle" type="checkbox" />
@@ -322,11 +324,16 @@ async function initCesium() {
     }).catch((e) => console.error('Failed to sync horizon coefficient to sim-server:', e));
   });
 
-  const numBalloonsInput = panel.querySelector('#numBalloonsInput');
-  const applyNumBalloonsBtn = panel.querySelector('#applyNumBalloons');
-  applyNumBalloonsBtn.addEventListener('click', () => {
-    const requested = parseInt(numBalloonsInput.value, 10);
-    if (!Number.isFinite(requested) || requested < 1) return;
+  const numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
+  const numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');
+  numBalloonsSlider.addEventListener('input', () => {
+    numBalloonsValueLabel.textContent = numBalloonsSlider.value; // live label, cheap
+  });
+  numBalloonsSlider.addEventListener('change', () => {
+    // Sync to sim-server only on release (not every drag tick) — this
+    // triggers a full clear+respawn of every balloon there, so it's not
+    // something to send on every 'input' event.
+    const requested = parseInt(numBalloonsSlider.value, 10);
     params.numBalloons = requested;
     fetch(`${SIM_SERVER_URL}/api/balloons/count`, {
       method: 'POST',

@@ -4,8 +4,61 @@
 # in the foreground so its output is visible here; Ctrl-C (or any exit)
 # stops all three together. See RUNNING.md for the manual/three-terminal
 # version of this same sequence.
+#
+# Usage: ./run-all.sh [--local] [-h|--help]
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+usage() {
+  cat <<'EOF'
+Usage: ./run-all.sh [--local] [-h|--help]
+
+  (default)  dev mode — everything bound to 127.0.0.1, only reachable from
+             this computer.
+  --local    wind_backend.py and the Vite dev server bind to 0.0.0.0, so
+             another computer on the LAN can open
+             http://<this-machine's-LAN-IP>:5173 and reach everything
+             (sim-server already binds 0.0.0.0). The frontend reads back
+             whatever hostname it was loaded from (see src/config.js), so no
+             other change is needed. Also opens 5173/8000/8080 in ufw
+             (asking for sudo) and closes them again on exit.
+  -h, --help Show this help and exit.
+EOF
+}
+
+MODE="dev"
+for arg in "$@"; do
+  case "$arg" in
+    --local) MODE="local" ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+echo "Mode: $MODE"
+
+LAN_PORTS=(5173 8000 8080)
+
+open_lan_ports() {
+  echo "Opening ${LAN_PORTS[*]} in ufw for LAN access (sudo)..."
+  for port in "${LAN_PORTS[@]}"; do
+    sudo ufw allow "$port/tcp" || echo "Warning: failed to open $port/tcp in ufw" >&2
+  done
+}
+
+close_lan_ports() {
+  echo "Closing ${LAN_PORTS[*]} in ufw (sudo)..."
+  for port in "${LAN_PORTS[@]}"; do
+    sudo ufw delete allow "$port/tcp" 2>/dev/null || true
+  done
+}
+
+if [[ "$MODE" == "local" ]]; then
+  open_lan_ports
+fi
 
 LOG_DIR="$(mktemp -d)"
 echo "Logs: $LOG_DIR"
@@ -17,6 +70,9 @@ cleanup() {
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" 2>/dev/null || true
   done
+  if [[ "$MODE" == "local" ]]; then
+    close_lan_ports
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -40,7 +96,10 @@ if port_open 8000; then
   echo "Something is already listening on :8000 — assuming wind_backend.py is up, skipping."
 else
   echo "Starting wind_backend.py..."
-  (cd weather-data-server && exec ./run.sh) > "$LOG_DIR/wind_backend.log" 2>&1 &
+  (
+    [[ "$MODE" == "local" ]] && export WIND_BACKEND_HOST=0.0.0.0
+    cd weather-data-server && exec ./run.sh
+  ) > "$LOG_DIR/wind_backend.log" 2>&1 &
   PIDS+=($!)
   wait_for_log "$LOG_DIR/wind_backend.log" "Application startup complete" "wind_backend.py" 60
 fi
@@ -61,4 +120,8 @@ fi
 
 # --- 3. frontend (port 5173, foreground) -----------------------------------
 echo "Starting frontend — press Ctrl-C to stop everything."
-npm run dev
+if [[ "$MODE" == "local" ]]; then
+  npm run dev -- --host
+else
+  npm run dev
+fi

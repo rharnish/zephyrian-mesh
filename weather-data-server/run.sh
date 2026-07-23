@@ -12,4 +12,4 @@ if [ ! -d .venv ]; then
   .venv/bin/pip install -r requirements.txt -q
 fi
 
-exec .venv/bin/uvicorn wind_backend:app --host 127.0.0.1 --port 8000 --reload
+exec .venv/bin/uvicorn wind_backend:app --host "${WIND_BACKEND_HOST:-127.0.0.1}" --port 8000 --reload
