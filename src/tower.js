@@ -29,7 +29,8 @@ export class Tower extends TowerModel {
         // text: label ?? `Tower ${this.displayIndex}`,
         text: label ?? this.label,
         font: '12px sans-serif',
-        pixelOffset: new Cesium.Cartesian2(0, -20),
+        pixelOffset: new Cesium.Cartesian2(0, 20),
+        verticalOrigin: Cesium.VerticalOrigin.TOP,
       },
     });
     this.entity.__isTower = true;

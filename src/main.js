@@ -89,7 +89,7 @@ async function initCesium() {
       seen.add(t.id);
       if (!towerById.has(t.id)) {
         const tower = new Tower(t.lon, t.lat, t.heightM);
-        tower.addToScene(viewer, `T-${t.id}`);
+        tower.addToScene(viewer);
         towerById.set(t.id, tower);
       }
       // Towers are static once created (no move command exists), so no

@@ -16,7 +16,9 @@ export class TowerModel {
     this.lon = lon;
     this.lat = lat;
     this.heightM = heightM;
-    // Separate display label just for the on-map label.
-    this.label = `T-${lon.toFixed(2)}_${lat.toFixed(2)}`;
+    // Separate display label just for the on-map label, e.g. "82.32 W 29.65 N".
+    const lonDir = lon < 0 ? 'W' : 'E';
+    const latDir = lat < 0 ? 'S' : 'N';
+    this.label = `${Math.abs(lon).toFixed(2)} ${lonDir} ${Math.abs(lat).toFixed(2)} ${latDir}`;
   }
 }
