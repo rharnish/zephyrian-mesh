@@ -3,7 +3,7 @@ import * as Cesium from 'cesium';
 
 import configData from './user-config.json';
 
-import { params, WIND_API_URL, SIM_SERVER_URL, SIM_SERVER_WS_URL } from './config.js';
+import { params, WIND_API_URL, SIM_SERVER_URL, SIM_SERVER_WS_URL, BALLOON_MIN_ALT, BALLOON_MAX_ALT } from './config.js';
 import { WindField } from './windField.js';
 import { WindVectorField } from './windVectors.js';
 import { Tower } from './tower.js';
@@ -11,6 +11,72 @@ import { Tower } from './tower.js';
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
 Cesium.Ion.defaultAccessToken = configData.CESIUM_ION_DEFAULT_ACCESS_TOKEN;
+
+// Balloon icon layout, shared between drawing and billboard anchoring. The
+// basket sits at the very bottom of the canvas so a BOTTOM-origin billboard
+// places the basket — not the envelope — at the entity's actual position,
+// which is also where radio-link edges terminate: edges visually connect
+// basket to basket, not balloon-envelope to balloon-envelope.
+const BALLOON_ICON_WIDTH = 16;
+const BALLOON_ICON_HEIGHT = 30;
+const BALLOON_BASKET_TOP_Y = 25;
+const BALLOON_BASKET_HEIGHT = 4;
+
+// Draws a hot-air-balloon glyph (teardrop envelope + single rigging line +
+// basket) onto a canvas. `fullness` (0..1) controls the envelope shape: 0 is
+// a narrow, elongated teardrop (low-altitude balloon, not yet fully
+// inflated), 1 is a fuller, rounder teardrop (high-altitude balloon at max
+// inflation). Rendered in white so it can be recolored per-entity via
+// billboard.color (Cesium multiplies the image by that tint).
+function buildBalloonIcon(fullness) {
+  const canvas = document.createElement('canvas');
+  canvas.width = BALLOON_ICON_WIDTH;
+  canvas.height = BALLOON_ICON_HEIGHT;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+
+  const cx = BALLOON_ICON_WIDTH / 2;
+  const topY = 2;
+  const rx = 4 + 3 * fullness; // envelope bulge half-width: 4..7
+  const bulgeCenterY = topY + rx;
+  const bulgeBottomY = bulgeCenterY + rx;
+  const tipY = bulgeBottomY + (12 - 9 * fullness); // point length: long/narrow at low fullness, short/round at high fullness
+
+  // Teardrop: rounded top (semicircle) tapering to a point at tipY.
+  ctx.beginPath();
+  ctx.arc(cx, bulgeCenterY, rx, Math.PI, 0, false);
+  ctx.quadraticCurveTo(cx + rx * 0.3, bulgeBottomY, cx, tipY);
+  ctx.quadraticCurveTo(cx - rx * 0.3, bulgeBottomY, cx - rx, bulgeCenterY);
+  ctx.closePath();
+  ctx.fill();
+
+  // Single rigging line from the envelope's point down to the basket.
+  ctx.beginPath();
+  ctx.moveTo(cx, tipY);
+  ctx.lineTo(cx, BALLOON_BASKET_TOP_Y);
+  ctx.stroke();
+
+  // Basket
+  ctx.fillRect(cx - 2, BALLOON_BASKET_TOP_Y, 4, BALLOON_BASKET_HEIGHT);
+
+  return canvas;
+}
+
+// Precomputed set of balloon glyphs spanning narrow (low altitude) to full
+// (high altitude), plus a lookup from altitude to the nearest glyph.
+const BALLOON_ICON_COUNT = 10;
+const balloonIcons = Array.from({ length: BALLOON_ICON_COUNT }, (_, i) =>
+  buildBalloonIcon(i / (BALLOON_ICON_COUNT - 1))
+);
+
+function balloonIconForAltitude(altM) {
+  const t = Cesium.Math.clamp((altM - BALLOON_MIN_ALT) / (BALLOON_MAX_ALT - BALLOON_MIN_ALT), 0, 1);
+  const index = Math.round(t * (BALLOON_ICON_COUNT - 1));
+  return balloonIcons[index];
+}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -57,20 +123,49 @@ async function initCesium() {
   // Cesium entities against sim-server's snapshots (add/update/remove) --
   // no local physics or link-detection state lives here anymore.
   const balloonEntities = new Map(); // id -> Cesium.Entity
+  const balloonPositions = new Map(); // id -> Cesium.Cartesian3, mirrors balloonEntities for cheap link-line lookups
   const towerById = new Map(); // id -> Tower (rendering wrapper)
 
+  const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
+
+  // 2D mode draws balloons as plain dots (glyph detail reads as noise at
+  // flat-map zoom levels and shapes don't "point" meaningfully without a
+  // 3D horizon); 3D and Columbus View use the altitude-glyph billboard.
+  // `forceDots` is a manual override (see "Force dots" checkbox below) for
+  // eyeballing dot-vs-glyph render performance in any scene mode.
+  let forceDots = false;
+  function useDots() {
+    return forceDots || viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+  }
+
   function reconcileBalloons(serverBalloons) {
+    const show2D = useDots();
     const seen = new Set();
     for (const b of serverBalloons) {
       seen.add(b.id);
       const position = Cesium.Cartesian3.fromDegrees(b.lon, b.lat, b.alt);
+      balloonPositions.set(b.id, position);
+      const icon = balloonIconForAltitude(b.alt);
       const entity = balloonEntities.get(b.id);
       if (entity) {
         entity.position = position;
+        entity.billboard.image = icon;
       } else {
         const newEntity = viewer.entities.add({
           position,
-          point: { pixelSize: 6, color: Cesium.Color.CYAN },
+          point: {
+            pixelSize: 6,
+            color: BALLOON_COLOR,
+            show: show2D,
+          },
+          billboard: {
+            image: icon,
+            width: BALLOON_ICON_WIDTH,
+            height: BALLOON_ICON_HEIGHT,
+            color: BALLOON_COLOR,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            show: !show2D,
+          },
         });
         balloonEntities.set(b.id, newEntity);
       }
@@ -79,9 +174,22 @@ async function initCesium() {
       if (!seen.has(id)) {
         viewer.entities.remove(entity);
         balloonEntities.delete(id);
+        balloonPositions.delete(id);
       }
     }
   }
+
+  // Flip every existing balloon between dot and glyph rendering whenever the
+  // scene finishes morphing into/out of 2D, or the "Force dots" override
+  // changes (see updateBalloonRenderModeForAll's other call site below).
+  function updateBalloonRenderModeForAll() {
+    const show2D = useDots();
+    for (const entity of balloonEntities.values()) {
+      entity.point.show = show2D;
+      entity.billboard.show = !show2D;
+    }
+  }
+  viewer.scene.morphComplete.addEventListener(updateBalloonRenderModeForAll);
 
   function reconcileTowers(serverTowers) {
     const seen = new Set();
@@ -110,36 +218,62 @@ async function initCesium() {
   const GROUNDED_LINK_COLOR = Cesium.Color.LIME.withAlpha(0.6);   // cluster reaches a tower
   const UNGROUNDED_LINK_COLOR = Cesium.Color.GRAY.withAlpha(0.5); // balloon-only cluster
 
-  // pairKey -> live Polyline primitive, so unchanged links are reused
-  // instead of destroyed/recreated every tick.
+  // pairKey -> { primitive, aKey, bKey }, so unchanged links are reused
+  // instead of destroyed/recreated every tick. aKey/bKey (e.g. "b12", "t3",
+  // parsed from pairKey) let refreshLinkPositions() below look up each
+  // endpoint's *current* position every tick, not just on the throttled
+  // ticks where sim-server recomputes edge topology — otherwise a link's
+  // line stays frozen at its endpoints' positions as of the last topology
+  // recompute while the balloon billboards keep moving every tick, which
+  // reads as a "ghost edge" detached from its nodes until the next
+  // recompute catches it up (most visible after something briefly stalls
+  // the main thread, e.g. a 2D/3D scene-mode morph).
   const linkPrimitives = new Map();
+
+  function positionForNodeKey(key) {
+    const id = Number(key.slice(1));
+    if (key[0] === 'b') return balloonPositions.get(id);
+    const tower = towerById.get(id);
+    return tower ? Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM) : undefined;
+  }
+
+  function refreshLinkPositions() {
+    for (const link of linkPrimitives.values()) {
+      const posA = positionForNodeKey(link.aKey);
+      const posB = positionForNodeKey(link.bKey);
+      if (posA && posB) {
+        link.primitive.positions = [posA, posB];
+      }
+    }
+  }
 
   function syncLinks(edges) {
     const edgesByPairKey = new Map(edges.map((e) => [e.pairKey, e]));
 
     // Remove links that no longer exist.
-    for (const [pairKey, primitive] of linkPrimitives) {
+    for (const [pairKey, link] of linkPrimitives) {
       if (!edgesByPairKey.has(pairKey)) {
-        linkCollection.remove(primitive);
+        linkCollection.remove(link.primitive);
         linkPrimitives.delete(pairKey);
       }
     }
     // Add or update current links.
     for (const edge of edges) {
+      const [aKey, bKey] = edge.pairKey.split('|');
       const posA = Cesium.Cartesian3.fromDegrees(edge.a[0], edge.a[1], edge.a[2]);
       const posB = Cesium.Cartesian3.fromDegrees(edge.b[0], edge.b[1], edge.b[2]);
       const color = edge.grounded ? GROUNDED_LINK_COLOR : UNGROUNDED_LINK_COLOR;
       const existing = linkPrimitives.get(edge.pairKey);
       if (existing) {
-        existing.positions = [posA, posB];
-        existing.material.uniforms.color = color;
+        existing.primitive.positions = [posA, posB];
+        existing.primitive.material.uniforms.color = color;
       } else {
         const primitive = linkCollection.add({
           positions: [posA, posB],
           width: 2,
           material: Cesium.Material.fromType('Color', { color }),
         });
-        linkPrimitives.set(edge.pairKey, primitive);
+        linkPrimitives.set(edge.pairKey, { primitive, aKey, bKey });
       }
     }
   }
@@ -155,6 +289,7 @@ async function initCesium() {
       if (snapshot.edges) {
         syncLinks(snapshot.edges);
       }
+      refreshLinkPositions();
     };
     ws.onerror = (e) => console.error('sim-server WebSocket error (is sim-server running?):', e);
     ws.onclose = () => {
@@ -219,13 +354,17 @@ async function initCesium() {
         <input id="horizonCoeffSlider" type="range" min="2.5" max="4.2" step="0.05"
                value="${params.horizonRefractionCoeff}" style="width: 100%;" />
       </div>
-      <div>
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <label style="display:flex; justify-content:space-between;">
           <span>Balloons</span>
           <span id="numBalloonsValue">${params.numBalloons}</span>
         </label>
         <input id="numBalloonsSlider" type="range" min="1" max="2000" step="10"
                value="${params.numBalloons}" style="width: 100%;" />
+        <div style="display:flex; gap:6px; align-items:center; margin-top: 4px;">
+          <input id="forceDotsToggle" type="checkbox" />
+          <label for="forceDotsToggle" style="flex:1;">Force dots (perf test)</label>
+        </div>
       </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <input id="windVectorsToggle" type="checkbox" />
@@ -254,6 +393,12 @@ async function initCesium() {
     panel.style.width = collapsed ? '220px' : 'auto';
     panelCollapseToggle.textContent = collapsed ? '−' : '+';
     panelCollapseToggle.title = collapsed ? 'Collapse' : 'Expand';
+  });
+
+  const forceDotsToggle = panel.querySelector('#forceDotsToggle');
+  forceDotsToggle.addEventListener('change', () => {
+    forceDots = forceDotsToggle.checked;
+    updateBalloonRenderModeForAll();
   });
 
   // Wind-vectors controls stay disabled until the (slow, backgrounded) wind
