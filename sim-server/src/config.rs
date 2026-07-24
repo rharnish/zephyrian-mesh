@@ -24,6 +24,11 @@ pub const GRID_CELL_SIZE_DEG: f64 = 6.0;
 pub const DEFAULT_NUM_BALLOONS: u32 = 400;
 pub const DEFAULT_HORIZON_REFRACTION_COEFF: f64 = 4.12; // km per sqrt(m)
 
+/// Full pool that's always simulated. The slider only changes how many of
+/// these are included in connectivity detection and sent to the client —
+/// it no longer respawns anything.
+pub const BALLOON_POOL_SIZE: u32 = 2000;
+
 // How often (in ticks) to broadcast a snapshot to connected clients, even on
 // non-link ticks (balloon positions still need to look smooth every tick).
 pub const TICK_INTERVAL_MS: u64 = 1000 / 20; // 20 ticks/sec wall-clock

@@ -35,7 +35,8 @@ async fn main() {
     // through `command_tx` (mutations) or `snapshot_tx` (read-only state).
     tokio::spawn(async move {
         let mut world = World::new(wind);
-        world.spawn_balloons(config::DEFAULT_NUM_BALLOONS);
+        world.spawn_balloon_pool(config::BALLOON_POOL_SIZE);
+        world.set_visible_count(config::DEFAULT_NUM_BALLOONS);
         for &(lon, lat, height_m) in config::INITIAL_TOWERS {
             world.add_tower(lon, lat, height_m);
         }

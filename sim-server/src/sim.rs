@@ -47,6 +47,7 @@ pub struct World {
     pub towers: Vec<Tower>,
     pub wind: WindField,
     pub horizon_refraction_coeff: f64,
+    pub visible_count: usize,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
@@ -62,6 +63,7 @@ impl World {
             towers: Vec::new(),
             wind,
             horizon_refraction_coeff: DEFAULT_HORIZON_REFRACTION_COEFF,
+            visible_count: 0,
             next_balloon_id: 0,
             next_tower_id: 0,
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
@@ -71,7 +73,8 @@ impl World {
         }
     }
 
-    pub fn spawn_balloons(&mut self, n: u32) {
+    /// Spawns the full always-on pool. Call once at startup.
+    pub fn spawn_balloon_pool(&mut self, n: u32) {
         self.balloons.clear();
         for _ in 0..n {
             let (lon, lat) = random_global_position(&mut self.rng);
@@ -79,6 +82,12 @@ impl World {
             self.balloons.push(Balloon::new(self.next_balloon_id, lon, lat, alt));
             self.next_balloon_id += 1;
         }
+    }
+
+    /// Changes how many (of the already-flying pool) are visible/connected —
+    /// no respawn, no discontinuity.
+    pub fn set_visible_count(&mut self, n: u32) {
+        self.visible_count = (n as usize).min(self.balloons.len());
     }
 
     pub fn add_tower(&mut self, lon: f64, lat: f64, height_m: f64) {
@@ -92,7 +101,7 @@ impl World {
 
     pub fn apply(&mut self, cmd: Command) {
         match cmd {
-            Command::SetBalloonCount(n) => self.spawn_balloons(n),
+            Command::SetBalloonCount(n) => self.set_visible_count(n),
             Command::AddTower { lon, lat, height_m } => self.add_tower(lon, lat, height_m),
             Command::RemoveTower { id } => self.remove_tower(id),
             Command::SetHorizonRefractionCoeff(c) => self.horizon_refraction_coeff = c,
@@ -101,9 +110,13 @@ impl World {
 
     /// Advance one tick. Returns a snapshot to broadcast.
     pub fn tick(&mut self, dt_seconds: f64) -> Snapshot {
+        // Full pool always steps physics — this is what keeps balloons
+        // "already in flight" when the slider reveals more of them.
         for b in &mut self.balloons {
             b.step(dt_seconds, &self.wind, &mut self.rng);
         }
+
+        let visible = &self.balloons[..self.visible_count];
 
         self.tick_count += 1;
         let recompute_links = self.tick_count % LINK_UPDATE_EVERY_N_TICKS as u64 == 0;
@@ -111,7 +124,7 @@ impl World {
         let edges = if recompute_links {
             let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, self.horizon_refraction_coeff);
             let grid_edges = compute_grid_edges(
-                &self.balloons,
+                visible,
                 &self.towers,
                 &mut self.grid,
                 max_range_km,
@@ -122,7 +135,7 @@ impl World {
             for t in &self.towers {
                 self.union_find.make_set(&format!("t{}", t.id));
             }
-            for b in &self.balloons {
+            for b in visible {
                 self.union_find.make_set(&format!("b{}", b.id));
             }
             for e in &grid_edges {
@@ -164,6 +177,6 @@ impl World {
             None
         };
 
-        Snapshot { tick: self.tick_count, balloons: self.balloons.clone(), towers: self.towers.clone(), edges }
+        Snapshot { tick: self.tick_count, balloons: visible.to_vec(), towers: self.towers.clone(), edges }
     }
 }
