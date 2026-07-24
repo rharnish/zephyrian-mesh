@@ -1,0 +1,269 @@
+<style>
+  :root {
+    --bg: #eef0f2;
+    --surface: #ffffff;
+    --ink: #16202b;
+    --muted: #5a6b7a;
+    --line: #c9d1d8;
+    --line-strong: #aab5bf;
+
+    --client: #3f8fc4;
+    --client-bg: #e7f1f8;
+    --sim: #b56b1f;
+    --sim-bg: #f7ecdd;
+    --wind: #3f8a5c;
+    --wind-bg: #e7f3ec;
+
+    --radius: 3px;
+    --mono: ui-monospace, "Cascadia Code", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Charter", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f151c;
+      --surface: #161f29;
+      --ink: #e3e9ee;
+      --muted: #8a99a8;
+      --line: #2b3946;
+      --line-strong: #3d4e5c;
+
+      --client: #6cb6e8;
+      --client-bg: #172733;
+      --sim: #e0a458;
+      --sim-bg: #2b2015;
+      --wind: #74c491;
+      --wind-bg: #172a1f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f151c;
+    --surface: #161f29;
+    --ink: #e3e9ee;
+    --muted: #8a99a8;
+    --line: #2b3946;
+    --line-strong: #3d4e5c;
+
+    --client: #6cb6e8;
+    --client-bg: #172733;
+    --sim: #e0a458;
+    --sim-bg: #2b2015;
+    --wind: #74c491;
+    --wind-bg: #172a1f;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f2;
+    --surface: #ffffff;
+    --ink: #16202b;
+    --muted: #5a6b7a;
+    --line: #c9d1d8;
+    --line-strong: #aab5bf;
+
+    --client: #3f8fc4;
+    --client-bg: #e7f1f8;
+    --sim: #b56b1f;
+    --sim-bg: #f7ecdd;
+    --wind: #3f8a5c;
+    --wind-bg: #e7f3ec;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); font-family: var(--serif); }
+  body { margin: 0; }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 64px 28px 88px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .page { animation: rise 0.5s ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  }
+
+  .titleblock {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 16px;
+    margin-bottom: 44px;
+  }
+  .titleblock h1 {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin: 0 0 6px;
+  }
+  .titleblock .sub {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--muted);
+    font-size: 14.5px;
+    margin: 0;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .box {
+    width: 100%;
+    max-width: 480px;
+    border: 1px solid var(--line-strong);
+    border-left-width: 6px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 18px 22px;
+  }
+  .box.client { border-left-color: var(--client); }
+  .box.sim { border-left-color: var(--sim); }
+  .box.wind { border-left-color: var(--wind); }
+
+  .box .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 2px;
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+  .box.client .tag { color: var(--client); background: var(--client-bg); }
+  .box.sim .tag { color: var(--sim); background: var(--sim-bg); }
+  .box.wind .tag { color: var(--wind); background: var(--wind-bg); }
+
+  .box h2 {
+    font-family: var(--mono);
+    font-size: 15px;
+    margin: 0 0 6px;
+    font-weight: 700;
+  }
+  .box p {
+    font-family: var(--serif);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--muted);
+    margin: 0;
+    max-width: 52ch;
+  }
+
+  .link {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .link .rule {
+    width: 1px;
+    height: 14px;
+    background: var(--line-strong);
+  }
+  .link .proto {
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--line-strong);
+    white-space: nowrap;
+  }
+  .link .detail {
+    color: var(--muted);
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 12px;
+    text-align: center;
+    max-width: 34ch;
+  }
+
+  .bypass {
+    margin-top: 28px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .bypass .proto {
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px dashed var(--line-strong);
+    color: var(--wind);
+    white-space: nowrap;
+  }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    text-align: center;
+  }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 480px) {
+    .box { max-width: 100%; }
+  }
+</style>
+
+<div class="page">
+
+  <div class="titleblock">
+    <h1>cesium-dirigible — architecture (overview)</h1>
+    <p class="sub">three processes, started together by ./run-all.sh</p>
+  </div>
+
+  <div class="stack">
+
+    <div class="box client">
+      <span class="tag">client</span>
+      <h2>Browser — Vite + CesiumJS</h2>
+      <p>Renders the globe, balloons, towers and radio links. Computes nothing — reconciles whatever the sim-server sends and forwards user actions back to it.</p>
+    </div>
+
+    <div class="link">
+      <span class="rule"></span>
+      <span class="proto">WS + REST</span>
+      <span class="detail">live snapshots over WebSocket; user actions (add tower, set balloon count…) over REST</span>
+      <span class="rule"></span>
+    </div>
+
+    <div class="box sim">
+      <span class="tag">sim-server</span>
+      <h2>Rust — Axum, authoritative</h2>
+      <p>Owns the one true simulation state: balloon physics, wind advection, radio-link detection. Broadcasts a snapshot every tick.</p>
+    </div>
+
+    <div class="link">
+      <span class="rule"></span>
+      <span class="proto">GET wind data</span>
+      <span class="detail">fetched once at startup; falls back to zero wind if unavailable</span>
+      <span class="rule"></span>
+    </div>
+
+    <div class="box wind">
+      <span class="tag">weather-data-server</span>
+      <h2>Python — FastAPI + xarray</h2>
+      <p>Serves ERA5 pressure-level wind data. The only backend either of the other two processes actually talks to.</p>
+    </div>
+
+    <div class="bypass">
+      <span class="proto">GET wind data</span>
+      <span>— the browser also fetches this directly, in the background, for the optional wind-arrow overlay</span>
+    </div>
+
+  </div>
+
+  <footer>see architecture.html for the full module-level diagram</footer>
+
+</div>

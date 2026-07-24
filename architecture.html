@@ -1,0 +1,414 @@
+<style>
+  :root {
+    --bg: #eef0f2;
+    --surface: #ffffff;
+    --surface-2: #f7f8f9;
+    --ink: #16202b;
+    --muted: #5a6b7a;
+    --line: #c9d1d8;
+    --line-strong: #aab5bf;
+
+    --client: #3f8fc4;
+    --client-bg: #e7f1f8;
+    --sim: #b56b1f;
+    --sim-bg: #f7ecdd;
+    --wind: #3f8a5c;
+    --wind-bg: #e7f3ec;
+
+    --radius: 3px;
+    --mono: ui-monospace, "Cascadia Code", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Charter", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f151c;
+      --surface: #161f29;
+      --surface-2: #1c2732;
+      --ink: #e3e9ee;
+      --muted: #8a99a8;
+      --line: #2b3946;
+      --line-strong: #3d4e5c;
+
+      --client: #6cb6e8;
+      --client-bg: #172733;
+      --sim: #e0a458;
+      --sim-bg: #2b2015;
+      --wind: #74c491;
+      --wind-bg: #172a1f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f151c;
+    --surface: #161f29;
+    --surface-2: #1c2732;
+    --ink: #e3e9ee;
+    --muted: #8a99a8;
+    --line: #2b3946;
+    --line-strong: #3d4e5c;
+
+    --client: #6cb6e8;
+    --client-bg: #172733;
+    --sim: #e0a458;
+    --sim-bg: #2b2015;
+    --wind: #74c491;
+    --wind-bg: #172a1f;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f2;
+    --surface: #ffffff;
+    --surface-2: #f7f8f9;
+    --ink: #16202b;
+    --muted: #5a6b7a;
+    --line: #c9d1d8;
+    --line-strong: #aab5bf;
+
+    --client: #3f8fc4;
+    --client-bg: #e7f1f8;
+    --sim: #b56b1f;
+    --sim-bg: #f7ecdd;
+    --wind: #3f8a5c;
+    --wind-bg: #e7f3ec;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+  }
+  body { margin: 0; }
+
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 56px 28px 80px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .page { animation: rise 0.5s ease-out; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+  }
+
+  .titleblock {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 8px;
+  }
+  .titleblock h1 {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin: 0 0 6px;
+  }
+  .titleblock .sub {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--muted);
+    font-size: 15px;
+    margin: 0;
+  }
+  .titleblock .meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.7;
+    white-space: nowrap;
+  }
+  .titleblock .meta b { color: var(--ink); font-weight: 600; }
+
+  .legend {
+    display: flex;
+    gap: 22px;
+    margin: 22px 0 40px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  .lane {
+    border: 1px solid var(--line-strong);
+    border-left-width: 5px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 20px 22px 22px;
+    margin-bottom: 0;
+  }
+  .lane.client { border-left-color: var(--client); }
+  .lane.sim { border-left-color: var(--sim); }
+  .lane.wind { border-left-color: var(--wind); }
+
+  .lane-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .lane-head .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 2px;
+  }
+  .lane.client .tag { color: var(--client); background: var(--client-bg); }
+  .lane.sim .tag { color: var(--sim); background: var(--sim-bg); }
+  .lane.wind .tag { color: var(--wind); background: var(--wind-bg); }
+
+  .lane-head h2 {
+    font-family: var(--mono);
+    font-size: 15px;
+    margin: 0;
+    font-weight: 700;
+  }
+  .lane-head .path {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .hub {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .hub .name { font-family: var(--mono); font-weight: 700; font-size: 13.5px; }
+  .hub .role { font-family: var(--serif); font-size: 13px; color: var(--muted); }
+  .hub .arrow { color: var(--muted); font-family: var(--mono); }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .chip {
+    flex: 1 1 200px;
+    min-width: 190px;
+    border-top: 2px solid var(--line-strong);
+    padding: 9px 2px 0;
+  }
+  .chip .name {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .chip .role {
+    font-family: var(--serif);
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-top: 2px;
+    line-height: 1.4;
+  }
+
+  .connector {
+    position: relative;
+    margin: 0 0 0 26px;
+    padding: 16px 0 16px 26px;
+    border-left: 2px dashed var(--line-strong);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .connector .line {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .connector .line .dir { color: var(--ink); font-weight: 700; }
+  .connector .line .proto {
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 2px;
+  }
+  .connector .line.ws .proto { color: var(--client); background: var(--client-bg); }
+  .connector .line.rest .proto { color: var(--sim); background: var(--sim-bg); }
+  .connector .line.bypass { border-left: none; }
+  .connector .line.bypass .proto { color: var(--wind); background: var(--wind-bg); }
+  .connector .line .detail { color: var(--muted); font-family: var(--serif); font-style: italic; font-size: 12.5px; }
+  .connector .bypass-mark {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px dashed var(--line-strong);
+    border-radius: 10px;
+    padding: 1px 8px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .notes {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 2px solid var(--ink);
+  }
+  .notes h3 {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .notes dl {
+    display: grid;
+    grid-template-columns: 128px 1fr;
+    gap: 12px 20px;
+    margin: 0;
+  }
+  .notes dt {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink);
+    padding-top: 2px;
+  }
+  .notes dd {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 14.5px;
+    line-height: 1.55;
+    max-width: 62ch;
+    color: var(--ink);
+  }
+  .notes dd .file { font-family: var(--mono); font-size: 0.9em; color: var(--muted); }
+
+  .scrollwrap { overflow-x: auto; }
+
+  @media (max-width: 620px) {
+    .titleblock { flex-direction: column; align-items: flex-start; }
+    .titleblock .meta { text-align: left; }
+    .notes dl { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="page">
+
+  <div class="titleblock">
+    <div>
+      <h1>cesium-dirigible — system architecture</h1>
+      <p class="sub">three processes, one shared world state, started together</p>
+    </div>
+    <div class="meta">
+      <div>DWG&nbsp; <b>ARCHITECTURE-01</b></div>
+      <div>STARTUP&nbsp; <b>./run-all.sh</b></div>
+      <div>SCALE&nbsp; <b>logical, not physical</b></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--client)"></span>browser client</span>
+    <span><span class="swatch" style="background:var(--sim)"></span>sim-server</span>
+    <span><span class="swatch" style="background:var(--wind)"></span>weather-data-server</span>
+  </div>
+
+  <div class="scrollwrap" style="min-width: 560px;">
+
+    <section class="lane client">
+      <div class="lane-head">
+        <span class="tag">client</span>
+        <h2>Browser — Vite + CesiumJS</h2>
+        <span class="path">src/</span>
+      </div>
+      <div class="hub">
+        <span class="name">main.js</span>
+        <span class="arrow">→</span>
+        <span class="role">orchestrator: inits the Cesium viewer, reconciles balloons/towers against server snapshots, wires the UI. Holds no physics or link-detection logic of its own.</span>
+      </div>
+      <div class="chips">
+        <div class="chip"><div class="name">config.js</div><div class="role">server URLs & tunable params</div></div>
+        <div class="chip"><div class="name">windField.js</div><div class="role">WindField model, client-side copy</div></div>
+        <div class="chip"><div class="name">windVectors.js</div><div class="role">wind-arrow overlay rendering</div></div>
+        <div class="chip"><div class="name">tower.js / towerModel.js</div><div class="role">tower entity rendering</div></div>
+        <div class="chip"><div class="name">geo.js</div><div class="role">geo math helpers</div></div>
+      </div>
+    </section>
+
+    <div class="connector">
+      <div class="line ws"><span class="dir">↕</span><span class="proto">WS /ws</span><span class="detail">Snapshot: balloons, towers, edges — every tick</span></div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">POST/DELETE /api/towers · POST /api/balloons/count · POST /api/horizon-coeff</span></div>
+    </div>
+
+    <section class="lane sim">
+      <div class="lane-head">
+        <span class="tag">sim-server</span>
+        <h2>Rust — Axum, authoritative</h2>
+        <span class="path">sim-server/src/</span>
+      </div>
+      <div class="hub">
+        <span class="name">main.rs → sim.rs</span>
+        <span class="arrow">→</span>
+        <span class="role">one task owns <em>World</em> exclusively — no locks. Commands arrive over an mpsc channel; Snapshots go out over a broadcast channel.</span>
+      </div>
+      <div class="chips">
+        <div class="chip"><div class="name">balloon.rs</div><div class="role">balloon state + wind advection</div></div>
+        <div class="chip"><div class="name">tower.rs</div><div class="role">tower state</div></div>
+        <div class="chip"><div class="name">wind_field.rs</div><div class="role">WindField, Rust copy</div></div>
+        <div class="chip"><div class="name">link_detection.rs</div><div class="role">compute_grid_edges + brute-force oracle for tests</div></div>
+        <div class="chip"><div class="name">spatial_grid.rs</div><div class="role">SpatialGrid, used by link_detection</div></div>
+        <div class="chip"><div class="name">union_find.rs</div><div class="role">UnionFind for network components</div></div>
+        <div class="chip"><div class="name">geo.rs</div><div class="role">horizon_km, precompute</div></div>
+        <div class="chip"><div class="name">config.rs</div><div class="role">tick rate, balloon count, ports</div></div>
+      </div>
+    </section>
+
+    <div class="connector">
+      <div class="line rest"><span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">at startup, blocking — falls back to zero wind on failure</span></div>
+      <div class="line bypass">
+        <span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">from the browser client, in the background — ~356MB / 55s, for the wind-arrow overlay only</span>
+        <span class="bypass-mark">bypasses sim-server</span>
+      </div>
+    </div>
+
+    <section class="lane wind">
+      <div class="lane-head">
+        <span class="tag">weather-data-server</span>
+        <h2>Python — FastAPI + xarray</h2>
+        <span class="path">weather-data-server/</span>
+      </div>
+      <div class="hub">
+        <span class="name">wind_backend.py</span>
+        <span class="arrow">→</span>
+        <span class="role">serves multi-level (pressure-level) ERA5 wind data, parsed with xarray. The only backend either the client or sim-server actually talks to.</span>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="notes">
+    <h3>Field notes</h3>
+    <dl>
+      <dt>Authority</dt>
+      <dd>All balloon physics and radio-link detection run server-side in <span class="file">sim-server</span>. The browser is a thin renderer that reconciles Cesium entities against whatever it's sent and forwards user actions as REST commands — it computes nothing itself.</dd>
+
+      <dt>Dual wind fetch</dt>
+      <dd>Wind data is fetched twice, independently, by design. <span class="file">sim-server</span> fetches its own copy at startup for advection; the browser fetches a second copy in the background purely for the optional arrow overlay. Neither blocks on the other.</dd>
+
+      <dt>Not in the loop</dt>
+      <dd><span class="file">weather-data-server/get_wind_data.py</span> is an older, separate prototype script — not part of the running app. The live backend is <span class="file">wind_backend.py</span>.</dd>
+    </dl>
+  </div>
+
+</div>
