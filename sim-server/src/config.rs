@@ -1,7 +1,7 @@
 // Mirrors the constants in cesium-app/src/config.js that the sim loop needs.
 // Keep these in sync by hand for now — see RUST_SIM_PLAN.md.
 
-pub const BALLOON_MIN_ALT: f64 = 15000.0; // meters
+pub const BALLOON_MIN_ALT: f64 = 1000.0; // meters
 pub const BALLOON_MAX_ALT: f64 = 25000.0; // meters
 pub const TICK_DT_SECONDS: f64 = 1.0; // simulated seconds per tick
 pub const TIME_SCALE: f64 = 60.0; // 1 real second = 60 sim seconds

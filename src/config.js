@@ -12,7 +12,7 @@ export const params = {
   horizonRefractionCoeff: 4.12, // km per sqrt(m); 3.57 for pure geometric LoS
 };
 
-export const BALLOON_MIN_ALT = 15000;         // meters
+export const BALLOON_MIN_ALT = 1000;          // meters
 export const BALLOON_MAX_ALT = 25000;         // meters
 export const TICK_DT_SECONDS = 1;             // simulated seconds per animation frame
 export const TIME_SCALE = 60;                 // 1 real second = 60 sim seconds
