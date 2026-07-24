@@ -98,8 +98,13 @@ export class WindVectorField {
         if (speed < MIN_SPEED_TO_DRAW) continue;
 
         const { base, tip, head1, head2 } = computeArrowGeometry(lon, lat, level.altitudeM, u, v);
+        // Opaque (alpha 1.0): Cesium's PolylineCollection renders translucent
+        // material with depthMask:false (no early-z), forcing full alpha-blend
+        // compositing on every overlapping fragment across the whole visible
+        // arrow field — a steady per-frame GPU cost, not a one-time build cost.
+        // At thousands of arrows this was the FPS killer, not draw-call count.
         const [r, g, b] = speedToColor(speed);
-        const color = new Cesium.Color(r / 255, g / 255, b / 255, 0.85);
+        const color = new Cesium.Color(r / 255, g / 255, b / 255, 1.0);
 
         // Single continuous polyline tracing shaft + both arrowhead strokes
         // (base -> tip -> head1 -> back to tip -> head2). Same visual shape

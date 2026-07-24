@@ -239,7 +239,7 @@ async function initCesium() {
           <span>Arrow density (stride)</span>
           <span id="windVectorStrideValue">12</span>
         </label>
-        <input id="windVectorStride" type="range" min="2" max="30" step="1" value="12"
+        <input id="windVectorStride" type="range" min="2" max="12" step="1" value="12"
                style="width: 100%;" disabled />
       </div>
     </div>
