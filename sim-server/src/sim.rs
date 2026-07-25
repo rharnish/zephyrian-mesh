@@ -33,6 +33,7 @@ pub struct EdgeSnapshot {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub tick: u64,
     pub balloons: Vec<Balloon>,
@@ -40,6 +41,9 @@ pub struct Snapshot {
     /// `None` on ticks where links weren't recomputed (still throttled the
     /// same way main.js throttles it) — client keeps the last edge set.
     pub edges: Option<Vec<EdgeSnapshot>>,
+    /// Broadcast so every connected tab's slider stays in sync with
+    /// whichever tab last changed it (server is the source of truth).
+    pub horizon_refraction_coeff: f64,
 }
 
 pub struct World {
@@ -177,6 +181,12 @@ impl World {
             None
         };
 
-        Snapshot { tick: self.tick_count, balloons: visible.to_vec(), towers: self.towers.clone(), edges }
+        Snapshot {
+            tick: self.tick_count,
+            balloons: visible.to_vec(),
+            towers: self.towers.clone(),
+            edges,
+            horizon_refraction_coeff: self.horizon_refraction_coeff,
+        }
     }
 }

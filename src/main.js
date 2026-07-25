@@ -126,6 +126,45 @@ async function initCesium() {
   const balloonPositions = new Map(); // id -> Cesium.Cartesian3, mirrors balloonEntities for cheap link-line lookups
   const towerById = new Map(); // id -> Tower (rendering wrapper)
 
+  // Control-panel elements + drag/cooldown state, assigned once the panel
+  // is built below. Lets other tabs' slider changes (arriving via
+  // sim-server snapshots, since the server is the source of truth for both
+  // values) update this tab's controls too, without fighting a slider the
+  // user is actively dragging — or just released — in this tab right now.
+  // The cooldown window matters because our own POST and the next
+  // broadcast snapshot race: a snapshot computed just before the server
+  // applied our change would otherwise snap the slider back to the old
+  // value for a tick before jumping forward again, which reads as the
+  // slider "resisting" quick successive changes.
+  const REMOTE_SYNC_COOLDOWN_MS = 600;
+  let horizonSlider, horizonValueLabel, numBalloonsSlider, numBalloonsValueLabel;
+  let isDraggingHorizon = false;
+  let isDraggingBalloons = false;
+  let horizonCooldownUntil = 0;
+  let numBalloonsCooldownUntil = 0;
+
+  function syncControlsFromSnapshot(snapshot) {
+    if (!horizonSlider) return; // panel not built yet
+    const now = Date.now();
+    if (!isDraggingHorizon && now >= horizonCooldownUntil && typeof snapshot.horizonRefractionCoeff === 'number') {
+      const coeff = snapshot.horizonRefractionCoeff;
+      if (coeff !== params.horizonRefractionCoeff) {
+        params.horizonRefractionCoeff = coeff;
+        horizonSlider.value = coeff;
+        horizonValueLabel.textContent = coeff.toFixed(2);
+        for (const tower of towerById.values()) tower.refreshRangeCircle(viewer);
+      }
+    }
+    if (!isDraggingBalloons && now >= numBalloonsCooldownUntil) {
+      const n = snapshot.balloons.length;
+      if (n !== params.numBalloons) {
+        params.numBalloons = n;
+        numBalloonsSlider.value = n;
+        numBalloonsValueLabel.textContent = n;
+      }
+    }
+  }
+
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
 
   // 2D mode always draws balloons as plain dots (glyph detail reads as
@@ -290,6 +329,7 @@ async function initCesium() {
         syncLinks(snapshot.edges);
       }
       refreshLinkPositions();
+      syncControlsFromSnapshot(snapshot);
     };
     ws.onerror = (e) => console.error('sim-server WebSocket error (is sim-server running?):', e);
     ws.onclose = () => {
@@ -447,9 +487,10 @@ async function initCesium() {
     strideValueLabel.textContent = strideSlider.value; // live label, cheap
   });
 
-  const horizonSlider = panel.querySelector('#horizonCoeffSlider');
-  const horizonValueLabel = panel.querySelector('#horizonCoeffValue');
+  horizonSlider = panel.querySelector('#horizonCoeffSlider');
+  horizonValueLabel = panel.querySelector('#horizonCoeffValue');
   horizonSlider.addEventListener('input', () => {
+    isDraggingHorizon = true;
     params.horizonRefractionCoeff = parseFloat(horizonSlider.value);
     horizonValueLabel.textContent = params.horizonRefractionCoeff.toFixed(2);
     // Range depends on the coefficient, so every tower's gradient overlay
@@ -461,7 +502,10 @@ async function initCesium() {
   horizonSlider.addEventListener('change', () => {
     // Sync to sim-server only on release (not every drag tick) — this
     // triggers a full grid rebuild there, so it's not something to send on
-    // every 'input' event.
+    // every 'input' event. Server echoes it back in every snapshot, which
+    // is how other tabs pick up the change (see syncControlsFromSnapshot).
+    isDraggingHorizon = false;
+    horizonCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
     fetch(`${SIM_SERVER_URL}/api/horizon-coeff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -469,15 +513,20 @@ async function initCesium() {
     }).catch((e) => console.error('Failed to sync horizon coefficient to sim-server:', e));
   });
 
-  const numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
-  const numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');
+  numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
+  numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');
   numBalloonsSlider.addEventListener('input', () => {
+    isDraggingBalloons = true;
     numBalloonsValueLabel.textContent = numBalloonsSlider.value; // live label, cheap
   });
   numBalloonsSlider.addEventListener('change', () => {
     // Sync to sim-server only on release (not every drag tick) — this
     // triggers a full clear+respawn of every balloon there, so it's not
-    // something to send on every 'input' event.
+    // something to send on every 'input' event. Server echoes the live
+    // visible count in every snapshot, which is how other tabs pick up
+    // the change (see syncControlsFromSnapshot).
+    isDraggingBalloons = false;
+    numBalloonsCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
     const requested = parseInt(numBalloonsSlider.value, 10);
     params.numBalloons = requested;
     fetch(`${SIM_SERVER_URL}/api/balloons/count`, {
