@@ -110,3 +110,29 @@ removing the stash — don't leave debug globals in committed code.
   before-screenshot, trigger the interaction (`click`/`eval`), wait again,
   then take the after-screenshot — don't compare an unsettled state against
   a settled one.
+- **Snapshot lag makes `eval` reads of server state stale.** This headless
+  Chromium uses software GL (you'll see "GPU stall due to ReadPixels"
+  warnings) and can't reconcile a few hundred balloons + links at the
+  server's 20 Hz. WebSocket snapshots back up, so the page can be reflecting
+  server state from *seconds* ago. If you `eval` a server-driven value (a
+  slider echo, `paused`, a tick counter) shortly after triggering a change,
+  you may read the pre-change value even though the server already applied
+  it. Two defenses: (1) wait much longer than feels necessary (5–15s) before
+  reading, and (2) for server-side logic, prefer confirming via the
+  **sim-server log**, not the browser — e.g. `run-all.sh` tees sim-server
+  stderr to `"$LOG_DIR"/sim-server.log` (the `mktemp -d` path it prints as
+  "Logs: …"; also `/tmp/tmp.*/sim-server.log`). A temporary `eprintln!` in
+  the server is often the fastest ground truth. Don't conclude a server
+  feature is broken from a short-wait browser read alone.
+- **Stale / duplicate processes are the #1 time-sink.** Long sessions
+  accumulate orphaned `sim-server` binaries (debug *and* release) and extra
+  `vite` dev servers on different ports. Only one process can bind `:8080`,
+  and a newly-launched sim-server that hits `AddrInUse` **panics and exits**,
+  leaving the browser talking to an *old* binary without your changes — so
+  your feature looks broken. Before trusting any run, confirm exactly what's
+  live: `ss -ltnp | grep ':8080'` (which PID owns it) and
+  `pgrep -af 'target/.*/sim-server'`. `run-all.sh` also *skips* starting
+  sim-server if `:8080` is already occupied. When in doubt, kill all stray
+  `sim-server`/`vite` processes and bring up a single clean stack. A giant
+  tick counter in a snapshot (hours of ticks) is a tell that you're hitting a
+  server from a previous session.
