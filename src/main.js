@@ -128,14 +128,14 @@ async function initCesium() {
 
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
 
-  // 2D mode draws balloons as plain dots (glyph detail reads as noise at
-  // flat-map zoom levels and shapes don't "point" meaningfully without a
-  // 3D horizon); 3D and Columbus View use the altitude-glyph billboard.
-  // `forceDots` is a manual override (see "Force dots" checkbox below) for
-  // eyeballing dot-vs-glyph render performance in any scene mode.
-  let forceDots = false;
+  // 2D mode always draws balloons as plain dots (glyph detail reads as
+  // noise at flat-map zoom levels and shapes don't "point" meaningfully
+  // without a 3D horizon). In 3D/Columbus View, dots are the default and
+  // the "Glyphs" checkbox below opts into the altitude-glyph billboard —
+  // useful for eyeballing dot-vs-glyph render performance.
+  let useGlyphs = false;
   function useDots() {
-    return forceDots || viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+    return !useGlyphs || viewer.scene.mode === Cesium.SceneMode.SCENE2D;
   }
 
   function reconcileBalloons(serverBalloons) {
@@ -362,8 +362,8 @@ async function initCesium() {
         <input id="numBalloonsSlider" type="range" min="1" max="2000" step="10"
                value="${params.numBalloons}" style="width: 100%;" />
         <div style="display:flex; gap:6px; align-items:center; margin-top: 4px;">
-          <input id="forceDotsToggle" type="checkbox" />
-          <label for="forceDotsToggle" style="flex:1;">Force dots (perf test)</label>
+          <input id="glyphsToggle" type="checkbox" />
+          <label for="glyphsToggle" style="flex:1;">Glyphs</label>
         </div>
       </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
@@ -395,9 +395,9 @@ async function initCesium() {
     panelCollapseToggle.title = collapsed ? 'Collapse' : 'Expand';
   });
 
-  const forceDotsToggle = panel.querySelector('#forceDotsToggle');
-  forceDotsToggle.addEventListener('change', () => {
-    forceDots = forceDotsToggle.checked;
+  const glyphsToggle = panel.querySelector('#glyphsToggle');
+  glyphsToggle.addEventListener('change', () => {
+    useGlyphs = glyphsToggle.checked;
     updateBalloonRenderModeForAll();
   });
 
