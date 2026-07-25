@@ -153,9 +153,19 @@ async function initCesium() {
   // of latency on the label is a fine price for a state that can't desync.
   let paused = false;
   let pauseToggle;
+  // Inline SVG (fill:currentColor) rather than the ⏸/▶ unicode glyphs, which
+  // render as orange emoji on most systems and ignore CSS `color`. currentColor
+  // is set to white on the button, so these match the panel's other controls.
+  const PAUSE_ICON =
+    '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="3" height="10"/><rect x="8" y="2" width="3" height="10"/></svg>';
+  const PLAY_ICON =
+    '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 2 L12 7 L3 12 Z"/></svg>';
   function updatePauseButton() {
     if (!pauseToggle) return;
-    pauseToggle.textContent = paused ? 'Resume' : 'Pause';
+    // Media-player convention: show ⏸ while running (click to pause), ▶ while
+    // paused (click to resume). Title carries the word for accessibility.
+    pauseToggle.innerHTML = paused ? PLAY_ICON : PAUSE_ICON;
+    pauseToggle.title = paused ? 'Resume' : 'Pause';
   }
   function requestPause(next) {
     fetch(`${SIM_SERVER_URL}/api/paused`, {
@@ -481,7 +491,11 @@ async function initCesium() {
     </div>
     <div id="panelBody" style="display:flex; flex-direction:column; gap:8px;">
       <div>
-        <button id="pauseToggle" style="width:100%; padding:5px 0; cursor:pointer;">Pause</button>
+        <button id="pauseToggle" title="Pause"
+                style="width:100%; padding:5px 0; cursor:pointer;
+                       display:flex; align-items:center; justify-content:center;
+                       background: rgba(0,0,0,0.25); color:#fff;
+                       border:1px solid rgba(255,255,255,0.25); border-radius:4px;"></button>
         <div style="opacity:0.5; margin-top:3px; text-align:center;">(or press spacebar)</div>
       </div>
       <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
