@@ -424,8 +424,13 @@ async function initCesium() {
 
   // --- User actions: add/remove tower, click on globe -----------------------
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  // Pick over a small rectangle rather than a single pixel, so clicking a
+  // tower (a 12px point) or a balloon doesn't demand pixel-perfect aim. The
+  // range-circle ellipses aren't tagged __isTower, so widening this can't
+  // turn the whole circle into a delete target.
+  const CLICK_PICK_TOLERANCE_PX = 12;
   handler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position);
+    const picked = viewer.scene.pick(click.position, CLICK_PICK_TOLERANCE_PX, CLICK_PICK_TOLERANCE_PX);
     // Clicking a balloon selects it for inspection (takes priority over the
     // add/remove-tower actions below).
     if (Cesium.defined(picked) && picked.id && picked.id.__balloonId !== undefined) {
