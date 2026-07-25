@@ -25,13 +25,19 @@ export const EARTH_RADIUS = 6371000;          // meters
 // browser's own machine, not the one running wind_backend.py/sim-server.
 const BACKEND_HOST = window.location.hostname;
 
-export const WIND_API_URL = `http://${BACKEND_HOST}:8000/api/wind-levels`;
-
 // sim-server (rust/sim-server, née rust/sim-core plan B) owns balloon/tower
 // simulation state; the frontend is a thin client that renders whatever it
 // broadcasts. See sim-server/README.md.
 export const SIM_SERVER_URL = `http://${BACKEND_HOST}:8080`;
 export const SIM_SERVER_WS_URL = `ws://${BACKEND_HOST}:8080/ws`;
+
+// Wind field comes from sim-server, NOT directly from wind_backend.py (port
+// 8000). sim-server fetches the large payload from Python once at startup and
+// re-serves it here, so it's the sole client of the weather backend and the
+// browser fetches wind over the same origin it already uses for everything
+// else. (The browser's copy drives only the wind-vector arrows; balloon
+// physics runs server-side.) See WEATHER_BACKEND_PLAN.md.
+export const WIND_API_URL = `${SIM_SERVER_URL}/api/wind-levels`;
 
 // Buoyancy/ballast controller (simple target-altitude thermostat, per spec)
 export const MAX_VERTICAL_RATE = 3;           // m/s, max climb/descend speed

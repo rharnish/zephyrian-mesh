@@ -11,6 +11,7 @@ use serde::Deserialize;
 use sim_server::config;
 use sim_server::sim::{Command, World};
 use sim_server::wind_field::WindField;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tower_http::cors::CorsLayer;
 
@@ -18,23 +19,33 @@ use tower_http::cors::CorsLayer;
 struct AppState {
     commands: mpsc::UnboundedSender<Command>,
     snapshots: broadcast::Sender<String>,
+    // The wind field, shared with the sim task (World also holds this Arc).
+    // Served to the browser via GET /api/wind-levels so the frontend fetches
+    // wind from sim-server instead of hitting wind_backend.py directly.
+    wind: Arc<WindField>,
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let wind = fetch_wind_field().await;
+    let wind = Arc::new(fetch_wind_field().await);
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Command>();
     let (snapshot_tx, _) = broadcast::channel::<String>(16);
 
-    let state = AppState { commands: command_tx, snapshots: snapshot_tx.clone() };
+    let state = AppState {
+        commands: command_tx,
+        snapshots: snapshot_tx.clone(),
+        wind: wind.clone(),
+    };
 
     // The single task that owns `World`. Everything else only talks to it
     // through `command_tx` (mutations) or `snapshot_tx` (read-only state).
     tokio::spawn(async move {
         let mut world = World::new(wind);
+        // `wind` (the Arc) was moved into World; the HTTP layer keeps its own
+        // clone in AppState.
         world.spawn_balloon_pool(config::BALLOON_POOL_SIZE);
         world.set_visible_count(config::DEFAULT_NUM_BALLOONS);
         for &(lon, lat, height_m) in config::INITIAL_TOWERS {
@@ -66,6 +77,7 @@ async fn main() {
         .route("/api/towers/:id", delete(remove_tower))
         .route("/api/balloons/count", post(set_balloon_count))
         .route("/api/horizon-coeff", post(set_horizon_coeff))
+        .route("/api/wind-levels", get(get_wind_levels))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -94,6 +106,13 @@ async fn fetch_wind_field() -> WindField {
             WindField::zero()
         }
     }
+}
+
+// Serves the wind field to the browser in the same JSON shape wind_backend.py
+// returns (WindField re-serializes to it). The field is static after startup,
+// so this just hands back the shared Arc — no recomputation per request.
+async fn get_wind_levels(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.wind.clone())
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {

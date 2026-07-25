@@ -13,6 +13,7 @@ use crate::tower::Tower;
 use crate::union_find::UnionFind;
 use crate::wind_field::WindField;
 use rand::rngs::StdRng;
+use std::sync::Arc;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
@@ -49,7 +50,9 @@ pub struct Snapshot {
 pub struct World {
     pub balloons: Vec<Balloon>,
     pub towers: Vec<Tower>,
-    pub wind: WindField,
+    // Shared (Arc) with the HTTP layer, which serves this same field to the
+    // browser via GET /api/wind-levels — no second copy of the large payload.
+    pub wind: Arc<WindField>,
     pub horizon_refraction_coeff: f64,
     pub visible_count: usize,
     next_balloon_id: u32,
@@ -61,7 +64,7 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(wind: WindField) -> Self {
+    pub fn new(wind: Arc<WindField>) -> Self {
         World {
             balloons: Vec::new(),
             towers: Vec::new(),

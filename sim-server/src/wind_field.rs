@@ -1,10 +1,16 @@
 // Ported from cesium-app/src/windField.js. Deserializes directly from the
 // JSON shape wind_backend.py's /api/wind-levels already returns, so no
 // changes are needed on the Python side.
+//
+// Also re-serializes back into that exact same shape: sim-server serves this
+// field to the browser (GET /api/wind-levels) so the frontend no longer has
+// to fetch the large payload from wind_backend.py itself. sim-server is the
+// sole client of the Python backend; the browser gets its (arrows-only) copy
+// from here. The `#[serde(rename)]` attrs below apply in both directions.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WindHeader {
     pub nx: usize,
     pub ny: usize,
@@ -16,7 +22,7 @@ pub struct WindHeader {
     pub dy: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Level {
     #[serde(rename = "pressureHpa")]
     pub pressure_hpa: f64,
@@ -26,7 +32,7 @@ pub struct Level {
     pub v_data: Vec<Vec<f64>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WindField {
     pub header: WindHeader,
     pub levels: Vec<Level>,

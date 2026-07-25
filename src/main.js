@@ -101,13 +101,14 @@ async function initCesium() {
 
   // --- Wind field ------------------------------------------------------------
   // Only used for the optional wind-vector-arrow visualization now — balloon
-  // advection happens inside sim-server, using its own independently-fetched
-  // copy of the same data. This fetch is NOT awaited here: the full
-  // /api/wind-levels payload is large and slow (can take the better part of
-  // a minute), and there's no reason for it to block the sim-server
-  // WebSocket connection or anything else below. It resolves in the
-  // background; the wind-vectors panel controls just wait on this promise
-  // themselves before they have anything to show.
+  // advection happens inside sim-server, which owns the authoritative wind
+  // field. We fetch it from sim-server too (WIND_API_URL -> sim-server, not
+  // wind_backend.py), so both share one source and can't disagree. This fetch
+  // is NOT awaited here: the full /api/wind-levels payload is large and slow
+  // (can take the better part of a minute), and there's no reason for it to
+  // block the sim-server WebSocket connection or anything else below. It
+  // resolves in the background; the wind-vectors panel controls just wait on
+  // this promise themselves before they have anything to show.
   const windFieldPromise = WindField.fetchFromBackend(WIND_API_URL).catch((e) => {
     console.error('Failed to load wind field from backend, falling back to zero wind:', e);
     return new WindField(
