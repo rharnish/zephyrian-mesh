@@ -22,6 +22,7 @@ pub enum Command {
     AddTower { lon: f64, lat: f64, height_m: f64 },
     RemoveTower { id: u32 },
     SetHorizonRefractionCoeff(f64),
+    SetPaused(bool),
 }
 
 #[derive(Serialize, Clone)]
@@ -45,6 +46,9 @@ pub struct Snapshot {
     /// Broadcast so every connected tab's slider stays in sync with
     /// whichever tab last changed it (server is the source of truth).
     pub horizon_refraction_coeff: f64,
+    /// Whether the sim is paused. Broadcast so the pause toggle stays in
+    /// sync across tabs (server is the source of truth).
+    pub paused: bool,
 }
 
 pub struct World {
@@ -55,6 +59,7 @@ pub struct World {
     pub wind: Arc<WindField>,
     pub horizon_refraction_coeff: f64,
     pub visible_count: usize,
+    pub paused: bool,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
@@ -71,6 +76,7 @@ impl World {
             wind,
             horizon_refraction_coeff: DEFAULT_HORIZON_REFRACTION_COEFF,
             visible_count: 0,
+            paused: false,
             next_balloon_id: 0,
             next_tower_id: 0,
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
@@ -112,11 +118,28 @@ impl World {
             Command::AddTower { lon, lat, height_m } => self.add_tower(lon, lat, height_m),
             Command::RemoveTower { id } => self.remove_tower(id),
             Command::SetHorizonRefractionCoeff(c) => self.horizon_refraction_coeff = c,
+            Command::SetPaused(p) => self.paused = p,
         }
     }
 
     /// Advance one tick. Returns a snapshot to broadcast.
     pub fn tick(&mut self, dt_seconds: f64) -> Snapshot {
+        // Paused: freeze physics and skip link recompute, but still broadcast
+        // current state so late-joining clients render and the pause toggle
+        // stays in sync. `edges: None` means clients keep their last edge set
+        // (positions aren't moving, so the frozen links stay correct).
+        if self.paused {
+            let visible = &self.balloons[..self.visible_count];
+            return Snapshot {
+                tick: self.tick_count,
+                balloons: visible.to_vec(),
+                towers: self.towers.clone(),
+                edges: None,
+                horizon_refraction_coeff: self.horizon_refraction_coeff,
+                paused: true,
+            };
+        }
+
         // Full pool always steps physics — this is what keeps balloons
         // "already in flight" when the slider reveals more of them.
         for b in &mut self.balloons {
@@ -190,6 +213,7 @@ impl World {
             towers: self.towers.clone(),
             edges,
             horizon_refraction_coeff: self.horizon_refraction_coeff,
+            paused: false,
         }
     }
 }

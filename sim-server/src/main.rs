@@ -77,6 +77,7 @@ async fn main() {
         .route("/api/towers/:id", delete(remove_tower))
         .route("/api/balloons/count", post(set_balloon_count))
         .route("/api/horizon-coeff", post(set_horizon_coeff))
+        .route("/api/paused", post(set_paused))
         .route("/api/wind-levels", get(get_wind_levels))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -169,5 +170,15 @@ async fn set_horizon_coeff(
     Json(body): Json<SetHorizonCoeffBody>,
 ) -> impl IntoResponse {
     let _ = state.commands.send(Command::SetHorizonRefractionCoeff(body.coeff));
+    axum::http::StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct SetPausedBody {
+    paused: bool,
+}
+
+async fn set_paused(State(state): State<AppState>, Json(body): Json<SetPausedBody>) -> impl IntoResponse {
+    let _ = state.commands.send(Command::SetPaused(body.paused));
     axum::http::StatusCode::ACCEPTED
 }

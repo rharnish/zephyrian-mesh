@@ -144,9 +144,34 @@ async function initCesium() {
   let horizonCooldownUntil = 0;
   let numBalloonsCooldownUntil = 0;
 
+  // Pause state. The server is the single source of truth: `paused` and the
+  // button label are updated ONLY from snapshot.paused (see
+  // syncControlsFromSnapshot). A click/spacebar just POSTs the desired state
+  // and waits for the server to echo it back. We deliberately do NOT flip
+  // `paused` optimistically — doing so races the in-flight pre-change
+  // snapshots and makes the toggle misfire (an earlier bug). One round-trip
+  // of latency on the label is a fine price for a state that can't desync.
+  let paused = false;
+  let pauseToggle;
+  function updatePauseButton() {
+    if (!pauseToggle) return;
+    pauseToggle.textContent = paused ? 'Resume' : 'Pause';
+  }
+  function requestPause(next) {
+    fetch(`${SIM_SERVER_URL}/api/paused`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: next }),
+    }).catch((e) => console.error('Failed to sync pause state to sim-server:', e));
+  }
+
   function syncControlsFromSnapshot(snapshot) {
     if (!horizonSlider) return; // panel not built yet
     const now = Date.now();
+    if (typeof snapshot.paused === 'boolean' && snapshot.paused !== paused) {
+      paused = snapshot.paused;
+      updatePauseButton();
+    }
     if (!isDraggingHorizon && now >= horizonCooldownUntil && typeof snapshot.horizonRefractionCoeff === 'number') {
       const coeff = snapshot.horizonRefractionCoeff;
       if (coeff !== params.horizonRefractionCoeff) {
@@ -388,6 +413,10 @@ async function initCesium() {
     </div>
     <div id="panelBody" style="display:flex; flex-direction:column; gap:8px;">
       <div>
+        <button id="pauseToggle" style="width:100%; padding:5px 0; cursor:pointer;">Pause</button>
+        <div style="opacity:0.5; margin-top:3px; text-align:center;">(or press spacebar)</div>
+      </div>
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <label style="display:flex; justify-content:space-between;">
           <span>Horizon coeff.</span>
           <span id="horizonCoeffValue">${params.horizonRefractionCoeff.toFixed(2)}</span>
@@ -434,6 +463,19 @@ async function initCesium() {
     panel.style.width = collapsed ? '220px' : 'auto';
     panelCollapseToggle.textContent = collapsed ? '−' : '+';
     panelCollapseToggle.title = collapsed ? 'Collapse' : 'Expand';
+  });
+
+  pauseToggle = panel.querySelector('#pauseToggle');
+  updatePauseButton();
+  pauseToggle.addEventListener('click', () => requestPause(!paused));
+
+  // Spacebar toggles pause too — but not while typing in a form control.
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' && e.key !== ' ') return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+    e.preventDefault();
+    requestPause(!paused);
   });
 
   const glyphsToggle = panel.querySelector('#glyphsToggle');
