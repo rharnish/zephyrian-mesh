@@ -192,6 +192,60 @@ async function initCesium() {
   }
 
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
+  const SELECTED_BALLOON_COLOR = Cesium.Color.fromCssColorString('#3fd0ff');
+
+  // Balloon selection/inspection. Clicking a balloon selects it; the inspector
+  // panel (built below) shows its live position/altitude. This is the surface
+  // the richer measurements + comms/tamper details attach to later — see
+  // BALLOON_PHYSICS_COMMS_VISION.md.
+  let selectedBalloonId = null;
+  let inspectorPanel, inspectorBody, inspectorTitle; // assigned when the panel is built
+
+  function setBalloonHighlight(id, on) {
+    const e = balloonEntities.get(id);
+    if (!e) return;
+    e.point.color = on ? SELECTED_BALLOON_COLOR : BALLOON_COLOR;
+    e.point.pixelSize = on ? 11 : 6;
+    e.billboard.color = on ? SELECTED_BALLOON_COLOR : BALLOON_COLOR;
+  }
+
+  function selectBalloon(id) {
+    if (selectedBalloonId !== null && selectedBalloonId !== id) setBalloonHighlight(selectedBalloonId, false);
+    selectedBalloonId = id;
+    setBalloonHighlight(id, true);
+    if (inspectorPanel) inspectorPanel.style.display = 'block';
+    if (inspectorTitle) inspectorTitle.textContent = `Balloon #${id}`;
+  }
+
+  function deselectBalloon() {
+    if (selectedBalloonId !== null) setBalloonHighlight(selectedBalloonId, false);
+    selectedBalloonId = null;
+    if (inspectorPanel) inspectorPanel.style.display = 'none';
+  }
+
+  // "82.32 W", "29.65 N" — same convention as the tower labels (towerModel.js).
+  const fmtLon = (lon) => `${Math.abs(lon).toFixed(3)}° ${lon < 0 ? 'W' : 'E'}`;
+  const fmtLat = (lat) => `${Math.abs(lat).toFixed(3)}° ${lat < 0 ? 'S' : 'N'}`;
+
+  function updateInspectorFromSnapshot(snapshot) {
+    if (selectedBalloonId === null || !inspectorBody) return;
+    const b = snapshot.balloons.find((x) => x.id === selectedBalloonId);
+    if (!b) {
+      inspectorBody.innerHTML =
+        `<div style="opacity:0.7;">Not in the active set right now (raise the balloon count to bring it back).</div>`;
+      return;
+    }
+    inspectorBody.innerHTML = `
+      <div style="display:flex; justify-content:space-between;"><span>Latitude</span><span>${fmtLat(b.lat)}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Longitude</span><span>${fmtLon(b.lon)}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Altitude</span><span>${(b.alt / 1000).toFixed(2)} km</span></div>
+      <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
+        Measurements (gas, ballast, temperature, humidity) and comms / tamper
+        details will appear here once those systems are built — see
+        BALLOON_PHYSICS_COMMS_VISION.md.
+      </div>
+    `;
+  }
 
   // 2D mode always draws balloons as plain dots (glyph detail reads as
   // noise at flat-map zoom levels and shapes don't "point" meaningfully
@@ -232,7 +286,9 @@ async function initCesium() {
             show: !show2D,
           },
         });
+        newEntity.__balloonId = b.id; // lets click-picking map back to a balloon id
         balloonEntities.set(b.id, newEntity);
+        if (b.id === selectedBalloonId) setBalloonHighlight(b.id, true);
       }
     }
     for (const [id, entity] of balloonEntities) {
@@ -356,6 +412,7 @@ async function initCesium() {
       }
       refreshLinkPositions();
       syncControlsFromSnapshot(snapshot);
+      updateInspectorFromSnapshot(snapshot);
     };
     ws.onerror = (e) => console.error('sim-server WebSocket error (is sim-server running?):', e);
     ws.onclose = () => {
@@ -369,6 +426,12 @@ async function initCesium() {
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   handler.setInputAction((click) => {
     const picked = viewer.scene.pick(click.position);
+    // Clicking a balloon selects it for inspection (takes priority over the
+    // add/remove-tower actions below).
+    if (Cesium.defined(picked) && picked.id && picked.id.__balloonId !== undefined) {
+      selectBalloon(picked.id.__balloonId);
+      return;
+    }
     if (Cesium.defined(picked) && picked.id && picked.id.__isTower) {
       const entry = [...towerById.entries()].find(([, tower]) => tower.entity === picked.id);
       if (entry) {
@@ -454,6 +517,26 @@ async function initCesium() {
     </div>
   `;
   document.body.appendChild(panel);
+
+  // --- Balloon inspector panel (top-right, shown on selection) ---------------
+  inspectorPanel = document.createElement('div');
+  inspectorPanel.style.cssText = `
+    position: fixed; top: 10px; right: 10px; z-index: 1000; display: none;
+    background: rgba(20, 20, 20, 0.8); color: #fff;
+    font: 12px sans-serif; padding: 10px 12px; border-radius: 6px;
+    width: 240px; border: 1px solid rgba(63, 208, 255, 0.5);
+  `;
+  inspectorPanel.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span id="inspectorTitle" style="font-weight:bold; color:#3fd0ff;">Balloon</span>
+      <button id="inspectorClose" title="Deselect" style="line-height:1;">&times;</button>
+    </div>
+    <div id="inspectorBody" style="display:flex; flex-direction:column; gap:4px;"></div>
+  `;
+  document.body.appendChild(inspectorPanel);
+  inspectorBody = inspectorPanel.querySelector('#inspectorBody');
+  inspectorTitle = inspectorPanel.querySelector('#inspectorTitle');
+  inspectorPanel.querySelector('#inspectorClose').addEventListener('click', deselectBalloon);
 
   const panelBody = panel.querySelector('#panelBody');
   const panelCollapseToggle = panel.querySelector('#panelCollapseToggle');
