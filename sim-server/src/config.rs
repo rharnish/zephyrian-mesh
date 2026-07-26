@@ -104,6 +104,32 @@ pub const BUNDLE_INTERVAL_ROUNDS: u64 = 200;
 /// expire while legitimately in flight. In slice 2 this becomes the ack timeout
 /// that hands the bundle to satellite rather than dropping it.
 pub const BUNDLE_MAX_AGE_ROUNDS: u64 = 150;
+/// How many bundles a balloon may hold at once — its store-and-forward buffer.
+///
+/// Separate from the one-outstanding-bundle rule on *origination*. Conflating
+/// the two was a design error: with a single slot a balloon holding its own
+/// bundle cannot relay anyone else's. Origination stays capped at one
+/// outstanding per balloon; this governs transit traffic.
+///
+/// **What bounds this physically is not memory, and not energy directly.** A
+/// telemetry bundle is a few hundred bytes, so even a small MCU holds thousands
+/// — storage is free. Energy is the real constraint on the platform, but it
+/// limits *transmitting*, not *holding*: a LoRa transmit burst draws ~120 mA
+/// while SRAM retention costs microamps. That constraint is already modelled, as
+/// BEACON_INTERVAL_ROUNDS — the duty cycle — not as queue depth.
+///
+/// The bound that does apply is derived from the other two constants. A balloon
+/// drains one bundle per duty-cycle slot, so anything sitting deeper than
+/// BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS = 30 positions expires before
+/// its turn ever comes. A queue deeper than that is unreachable by construction.
+///
+/// Measured (bin/bundle_delivery.rs, 1200 balloons, degree ~6): raising this
+/// 1 -> 8 cuts blocked handoffs from 25.8k to 2.3k but leaves delivery flat at
+/// 39-45%. So the queue does what it should and is *not* the delivery
+/// bottleneck — the earlier diagnosis was wrong, and blocking was a symptom
+/// rather than the cause. 8 is chosen to make blocking negligible while staying
+/// well under the reachable depth.
+pub const RELAY_QUEUE_CAPACITY: usize = 8;
 /// Hop budget. A bundle whose recorded path reaches this length is dropped.
 /// Sized against p95 mesh depth (see mesh_depth.rs); deeper paths only exist
 /// near percolation, where satellite is the right answer anyway.

@@ -289,10 +289,24 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   | 100 rounds | 36.1% | 937 | 53,090 |
   | 200 rounds | 41.5% | 559 | 25,563 |
 
-  41% is still poor for a mesh where 98% of balloons have a real route, and the residual cause is
-  the single carry slot rather than the origination rate. **Open: give relays a small queue
-  (2–4 slots) while keeping origination capped at one outstanding.** That separates the two limits
-  the design conflated, and should be measured before C2 is called done.
+  **Resolved, and the diagnosis was wrong.** Relays now have a bounded FIFO queue
+  (`RELAY_QUEUE_CAPACITY`) separate from the origination cap. It does what it should — blocked
+  handoffs fall from 25.8k to 2.3k going from 1 slot to 8 — but **delivery stays flat at 39–45%**.
+  Blocking was a symptom, not the bottleneck. What actually limits delivery is still open.
+
+  | queue capacity | delivered/originated | blocked handoffs |
+  |---|---|---|
+  | 1 | 42.0% | 25,813 |
+  | 2 | 38.7% | 15,274 |
+  | 4 | 38.8% | 7,198 |
+  | 8 | 45.1% | 2,274 |
+
+  Those delivery differences are within run-to-run noise; the defensible effect is the 10× drop in
+  blocking. Note also that a balloon drains one bundle per duty-cycle slot, so queue depth beyond
+  `BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS` = 30 is unreachable — bundles that deep expire
+  before their turn. Queue capacity is a policy parameter, not a hardware one: bundles are a few
+  hundred bytes, and the platform's real energy constraint limits *transmitting*, not *holding*,
+  which is already modelled as the duty cycle.
 
 - **A stale next-hop holds, it does not drop.** The believed `next_hop` will frequently no longer
   be a neighbour. The bundle waits in the balloon's buffer until its belief refreshes or the TTL

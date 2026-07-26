@@ -27,11 +27,11 @@ pub struct Balloon {
     /// Next comms round this balloon is awake to transmit (radio duty cycle).
     #[serde(skip)]
     pub next_beacon_round: u64,
-    /// The single telemetry bundle this balloon is holding, if any (see
-    /// bundle.rs). One slot per balloon bounds memory across the whole pool and
+    /// Telemetry bundles this balloon is holding, oldest first (see bundle.rs).
+    /// Bounded by RELAY_QUEUE_CAPACITY, which bounds memory across the pool and
     /// models a real store-and-forward buffer.
     #[serde(skip)]
-    pub carrying: Option<crate::bundle::Bundle>,
+    pub queue: std::collections::VecDeque<crate::bundle::Bundle>,
     /// Next comms round this balloon may originate a bundle.
     #[serde(skip)]
     pub next_bundle_round: u64,
@@ -57,7 +57,7 @@ impl Balloon {
             target_alt: alt,
             belief: None,
             next_beacon_round: 0,
-            carrying: None,
+            queue: std::collections::VecDeque::new(),
             next_bundle_round: 0,
             bundle_seq: 0,
             believed_hops: None,

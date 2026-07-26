@@ -39,10 +39,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1200);
     let rounds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(400);
+    // Optional third arg pins phase 1 to a single coefficient, which is what
+    // makes sweeping RELAY_QUEUE_CAPACITY cheap enough to actually do.
+    let only: Option<f64> = args.get(3).and_then(|s| s.parse().ok());
 
     println!(
-        "n={n}  rounds={rounds}  1 hop = {BEACON_INTERVAL_ROUNDS} rounds \
-         ({:.1} real s, {:.0} sim min)\n",
+        "n={n}  rounds={rounds}  queue={RELAY_QUEUE_CAPACITY}  \
+         originate every {BUNDLE_INTERVAL_ROUNDS}  \
+         1 hop = {BEACON_INTERVAL_ROUNDS} rounds ({:.1} real s, {:.0} sim min)\n",
         BEACON_INTERVAL_ROUNDS as f64 * COMMS_EVERY_N_TICKS as f64 * TICK_INTERVAL_MS as f64
             / 1000.0,
         BEACON_INTERVAL_ROUNDS as f64 * COMMS_ROUND_SIM_SECONDS / 60.0,
@@ -61,7 +65,9 @@ fn main() {
     );
     println!("{}", "-".repeat(82));
 
-    for coeff in [2.5_f64, 3.0, 3.57, 4.12, 5.0] {
+    let coeffs: Vec<f64> =
+        only.map_or_else(|| vec![2.5, 3.0, 3.57, 4.12, 5.0], |c| vec![c]);
+    for coeff in coeffs {
         let mut world = build(n, coeff);
         let mut last = advance_round(&mut world);
         for _ in 1..rounds {

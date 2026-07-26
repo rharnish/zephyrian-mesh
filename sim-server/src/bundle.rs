@@ -16,7 +16,14 @@
 //     strand — which is the designed behaviour, not a failure.
 //   * **A stale next hop holds, it does not drop.** If the believed next hop is
 //     no longer in range the bundle waits for the belief to refresh. That is what
-//     makes this delay-tolerant rather than merely lossy.
+//     makes this delay-tolerant rather than merely lossy. The same applies to a
+//     receiver whose queue is full.
+//
+// Each balloon holds a bounded FIFO queue (RELAY_QUEUE_CAPACITY) and transmits
+// the head of it once per duty-cycle slot. The queue is separate from the
+// one-outstanding rule on origination: capping *carriage* at one meant a balloon
+// holding its own bundle could not relay anyone else's, which gridlocked the
+// mesh and cost roughly half of all deliveries.
 //
 // Not here yet (slice 2): tower acks source-routed back along `path`, and
 // satellite fallback on ack timeout. Until then a bundle that reaches a tower is
@@ -92,10 +99,9 @@ pub fn step(
     // 1. Expire. A bundle nobody could move for this long is out of options;
     //    slice 2 will hand these to satellite instead of dropping them.
     for b in balloons.iter_mut() {
-        if b.carrying.as_ref().is_some_and(|bd| bd.age(round) > BUNDLE_MAX_AGE_ROUNDS) {
-            b.carrying = None;
-            stats.expired += 1;
-        }
+        let before = b.queue.len();
+        b.queue.retain(|bd| bd.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
+        stats.expired += (before - b.queue.len()) as u64;
     }
 
     // 2. Gather this round's transmissions. Two-phase for the same reason as
@@ -104,8 +110,9 @@ pub fn step(
     //    the delay being modelled.
     let mut moves: Vec<(usize, u32)> = Vec::new(); // (from index, to balloon id)
 
+    // One transmission per awake radio, so only the head of the queue moves.
     for &i in awake {
-        let Some(bundle) = balloons[i].carrying.as_ref() else { continue };
+        let Some(bundle) = balloons[i].queue.front() else { continue };
 
         // A balloon with no belief has nowhere to send it. Hold.
         let Some(belief) = balloons[i].belief else { continue };
@@ -115,7 +122,7 @@ pub fn step(
             // still live — belief can be stale, the radio cannot lie.
             None => {
                 if adj.tower_in_range(i).is_some() {
-                    balloons[i].carrying = None;
+                    balloons[i].queue.pop_front();
                     stats.delivered += 1;
                 }
                 // Otherwise hold: the belief will expire or refresh.
@@ -125,12 +132,12 @@ pub fn step(
                     continue; // stale next hop — hold, don't drop
                 }
                 if bundle.path.contains(&next) {
-                    balloons[i].carrying = None;
+                    balloons[i].queue.pop_front();
                     stats.dropped_loop += 1;
                     continue;
                 }
                 if bundle.path.len() >= BUNDLE_MAX_HOPS {
-                    balloons[i].carrying = None;
+                    balloons[i].queue.pop_front();
                     stats.dropped_ttl += 1;
                     continue;
                 }
@@ -139,32 +146,37 @@ pub fn step(
         }
     }
 
-    // 3. Apply. A receiver already holding a bundle has nowhere to put it, so
-    //    the handoff simply fails and the sender keeps carrying — the same
-    //    hold-don't-drop rule as a stale next hop. Dropping here instead loses
-    //    the overwhelming majority of traffic the moment the mesh is busy, which
-    //    is what the first run of bundle_delivery.rs showed: 18270 of 21634
-    //    bundles destroyed by congestion alone.
+    // 3. Apply. A receiver whose queue is full has nowhere to put it, so the
+    //    handoff fails and the sender keeps carrying — the same hold-don't-drop
+    //    rule as a stale next hop. Dropping here instead loses the overwhelming
+    //    majority of traffic the moment the mesh is busy, which is what the
+    //    first run of bundle_delivery.rs showed: 18270 of 21634 bundles
+    //    destroyed by congestion alone.
     for (from, to) in moves {
         let to_idx = to as usize;
-        let free = balloons.get(to_idx).is_some_and(|r| r.carrying.is_none());
-        if !free {
+        let has_room =
+            balloons.get(to_idx).is_some_and(|r| r.queue.len() < RELAY_QUEUE_CAPACITY);
+        if !has_room {
             stats.blocked += 1;
             continue;
         }
-        let Some(mut bundle) = balloons[from].carrying.take() else { continue };
+        let Some(mut bundle) = balloons[from].queue.pop_front() else { continue };
         bundle.path.push(to);
-        balloons[to_idx].carrying = Some(bundle);
+        balloons[to_idx].queue.push_back(bundle);
     }
 
-    // 4. Originate. Bounded by the single carry slot: a balloon still holding
-    //    something produces nothing new.
+    // 4. Originate. Two independent limits: the queue must have room (shared
+    //    with transit traffic), and the balloon may have only *one of its own*
+    //    bundles outstanding — the rule the relay queue was wrongly enforcing.
     for &i in awake {
         let b = &mut balloons[i];
-        if b.carrying.is_some() || round < b.next_bundle_round {
+        if round < b.next_bundle_round || b.queue.len() >= RELAY_QUEUE_CAPACITY {
             continue;
         }
-        b.carrying = Some(Bundle {
+        if b.queue.iter().any(|bd| bd.origin_id == b.id) {
+            continue; // own bundle still in hand
+        }
+        b.queue.push_back(Bundle {
             origin_id: b.id,
             seq: b.bundle_seq,
             created_at_round: round,
@@ -249,13 +261,13 @@ mod tests {
         balloons[3].next_bundle_round = 0;
 
         step(&mut balloons, &adj, &awake, 0, &mut stats); // b3 originates
-        assert_eq!(balloons[3].carrying.as_ref().unwrap().path, vec![3]);
+        assert_eq!(balloons[3].queue.front().unwrap().path, vec![3]);
 
         step(&mut balloons, &adj, &awake, 1, &mut stats); // 3 -> 2
-        assert_eq!(balloons[2].carrying.as_ref().unwrap().path, vec![3, 2]);
+        assert_eq!(balloons[2].queue.front().unwrap().path, vec![3, 2]);
 
         step(&mut balloons, &adj, &awake, 2, &mut stats); // 2 -> 1
-        let held = balloons[1].carrying.as_ref().unwrap();
+        let held = balloons[1].queue.front().unwrap();
         assert_eq!(held.path, vec![3, 2, 1]);
         assert_eq!(held.hops(), 2);
     }
@@ -276,7 +288,7 @@ mod tests {
         for b in balloons.iter_mut() {
             b.next_bundle_round = u64::MAX;
         }
-        balloons[1].carrying = Some(Bundle {
+        balloons[1].queue.push_back(Bundle {
             origin_id: 1,
             seq: 0,
             created_at_round: 0,
@@ -286,7 +298,7 @@ mod tests {
         for round in 0..10 {
             step(&mut balloons, &adj, &awake, round, &mut stats);
         }
-        assert!(balloons[1].carrying.is_some(), "should still be holding");
+        assert!(!balloons[1].queue.is_empty(), "should still be holding");
         assert_eq!(stats.resolved(), 0, "nothing should have resolved: {stats:?}");
     }
 
@@ -307,7 +319,7 @@ mod tests {
         for b in balloons.iter_mut() {
             b.next_bundle_round = u64::MAX;
         }
-        balloons[1].carrying = Some(Bundle {
+        balloons[1].queue.push_back(Bundle {
             origin_id: 1, seq: 0, created_at_round: 0, path: vec![1],
         });
 
@@ -317,7 +329,73 @@ mod tests {
             step(&mut balloons, &adj, &awake, round, &mut stats);
         }
         assert_eq!(stats.dropped_loop, 1, "stats: {stats:?}");
-        assert!(balloons.iter().all(|b| b.carrying.is_none()));
+        assert!(balloons.iter().all(|b| b.queue.is_empty()));
+    }
+
+    /// The whole point of the queue: a relay busy with its own bundle must still
+    /// be able to accept someone else's.
+    #[test]
+    fn a_relay_carrying_its_own_bundle_still_accepts_transit_traffic() {
+        let (mut balloons, _t, adj) = line(3);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+
+        // b1 (the middle relay) is holding one of its own; b2 sends through it.
+        // Only b2 is awake — if b1 also transmitted it would forward its own
+        // bundle onward in the same step and the queue would net out at 1,
+        // which says nothing about whether it accepted the transit bundle.
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        balloons[1].queue.push_back(Bundle {
+            origin_id: 1, seq: 0, created_at_round: 0, path: vec![1],
+        });
+        balloons[2].queue.push_back(Bundle {
+            origin_id: 2, seq: 0, created_at_round: 0, path: vec![2],
+        });
+
+        step(&mut balloons, &adj, &[2], 1, &mut stats);
+        assert_eq!(balloons[1].queue.len(), 2, "relay should have accepted transit");
+        assert_eq!(stats.blocked, 0);
+    }
+
+    #[test]
+    fn a_full_queue_blocks_the_handoff_without_losing_the_bundle() {
+        let (mut balloons, _t, adj) = line(3);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        for k in 0..RELAY_QUEUE_CAPACITY {
+            balloons[1].queue.push_back(Bundle {
+                origin_id: 1, seq: k as u64, created_at_round: 0, path: vec![1],
+            });
+        }
+        balloons[2].queue.push_back(Bundle {
+            origin_id: 2, seq: 0, created_at_round: 0, path: vec![2],
+        });
+
+        // b2 is awake but b1 is full: the handoff fails and b2 keeps it.
+        step(&mut balloons, &adj, &[2], 1, &mut stats);
+        assert_eq!(stats.blocked, 1);
+        assert_eq!(balloons[2].queue.len(), 1, "sender must keep the bundle");
+        assert_eq!(stats.resolved(), 0, "nothing lost: {stats:?}");
+    }
+
+    #[test]
+    fn a_balloon_originates_only_one_of_its_own_at_a_time() {
+        let mut balloons = vec![Balloon::new(0, 0.0, 0.0, 18000.0)];
+        let adj = MeshAdjacency::default();
+        let mut stats = BundleStats::default();
+        // Plenty of queue room and the interval always elapsed, yet only one of
+        // its own may be outstanding.
+        for round in 0..10 {
+            balloons[0].next_bundle_round = 0;
+            step(&mut balloons, &adj, &[0], round, &mut stats);
+        }
+        assert_eq!(stats.originated, 1, "stats: {stats:?}");
+        assert_eq!(balloons[0].queue.len(), 1);
     }
 
     #[test]

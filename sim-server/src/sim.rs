@@ -151,15 +151,16 @@ impl World {
     }
 
     fn count_carrying(&self) -> u64 {
-        self.balloons[..self.visible_count].iter().filter(|b| b.carrying.is_some()).count() as u64
+        self.balloons[..self.visible_count].iter().map(|b| b.queue.len() as u64).sum()
     }
 
     /// Holding a bundle but currently believing no route — waiting, not lost.
     fn count_stranded(&self) -> u64 {
         self.balloons[..self.visible_count]
             .iter()
-            .filter(|b| b.carrying.is_some() && b.belief.is_none())
-            .count() as u64
+            .filter(|b| !b.queue.is_empty() && b.belief.is_none())
+            .map(|b| b.queue.len() as u64)
+            .sum()
     }
 
     /// Cumulative bundle outcomes, for offline harnesses.
