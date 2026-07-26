@@ -11,6 +11,7 @@ use rand::Rng;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Balloon {
     pub id: u32,
     pub lon: f64,
@@ -18,11 +19,36 @@ pub struct Balloon {
     pub alt: f64,
     #[serde(skip)]
     pub target_alt: f64,
+    /// This balloon's own belief about reaching a tower, learned only from
+    /// beacons that arrived (see beacon.rs). Not serialized — the client gets
+    /// the derived `believed_hops` instead.
+    #[serde(skip)]
+    pub belief: Option<crate::beacon::RouteBelief>,
+    /// Next tick this balloon is awake to transmit (radio duty cycle).
+    #[serde(skip)]
+    pub next_beacon_tick: u64,
+    /// Hops to a tower as this balloon *believes*; `None` if it currently
+    /// knows of no route. This is what the balloon would act on.
+    pub believed_hops: Option<u32>,
+    /// Ground truth from union-find — whether it can *actually* reach a tower.
+    /// Sent alongside `believed_hops` purely so the UI can show where the two
+    /// disagree; nothing in the simulation may read this on a balloon's behalf.
+    pub grounded: bool,
 }
 
 impl Balloon {
     pub fn new(id: u32, lon: f64, lat: f64, alt: f64) -> Self {
-        Balloon { id, lon, lat, alt, target_alt: alt }
+        Balloon {
+            id,
+            lon,
+            lat,
+            alt,
+            target_alt: alt,
+            belief: None,
+            next_beacon_tick: 0,
+            believed_hops: None,
+            grounded: false,
+        }
     }
 
     pub fn step(&mut self, dt_seconds: f64, wind: &WindField, rng: &mut impl Rng) {

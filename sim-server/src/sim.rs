@@ -55,6 +55,12 @@ pub struct Snapshot {
     pub mean_degree: f64,
     /// Share (0..100) of visible balloons whose component contains a tower.
     pub grounded_pct: f64,
+    /// Share that *believe* they have a route (from beacons they received).
+    pub believed_grounded_pct: f64,
+    /// Share believing in a route they no longer have — belief outliving truth.
+    pub belief_stale_pct: f64,
+    /// Share with a real route they haven't been told about yet.
+    pub belief_unaware_pct: f64,
 }
 
 pub struct World {
@@ -70,6 +76,10 @@ pub struct World {
     // tick()). Held across non-link ticks so every snapshot can carry it.
     mean_degree: f64,
     grounded_pct: f64,
+    believed_grounded_pct: f64,
+    belief_stale_pct: f64,
+    belief_unaware_pct: f64,
+    adjacency: crate::beacon::MeshAdjacency,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
@@ -89,6 +99,10 @@ impl World {
             paused: false,
             mean_degree: 0.0,
             grounded_pct: 0.0,
+            believed_grounded_pct: 0.0,
+            belief_stale_pct: 0.0,
+            belief_unaware_pct: 0.0,
+            adjacency: Default::default(),
             next_balloon_id: 0,
             next_tower_id: 0,
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
@@ -104,7 +118,10 @@ impl World {
         for _ in 0..n {
             let (lon, lat) = random_global_position(&mut self.rng);
             let alt = BALLOON_MIN_ALT + self.rng.gen_range(0.0..(BALLOON_MAX_ALT - BALLOON_MIN_ALT));
-            self.balloons.push(Balloon::new(self.next_balloon_id, lon, lat, alt));
+            let mut b = Balloon::new(self.next_balloon_id, lon, lat, alt);
+            // Stagger duty-cycle phases so the fleet doesn't transmit in unison.
+            b.next_beacon_tick = crate::beacon::initial_slot(&mut self.rng);
+            self.balloons.push(b);
             self.next_balloon_id += 1;
         }
     }
@@ -151,6 +168,9 @@ impl World {
                 paused: true,
                 mean_degree: self.mean_degree,
                 grounded_pct: self.grounded_pct,
+                believed_grounded_pct: self.believed_grounded_pct,
+                belief_stale_pct: self.belief_stale_pct,
+                belief_unaware_pct: self.belief_unaware_pct,
             };
         }
 
@@ -160,15 +180,13 @@ impl World {
             b.step(dt_seconds, &self.wind, &mut self.rng);
         }
 
-        let visible = &self.balloons[..self.visible_count];
-
         self.tick_count += 1;
         let recompute_links = self.tick_count % LINK_UPDATE_EVERY_N_TICKS as u64 == 0;
 
         let edges = if recompute_links {
             let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, self.horizon_refraction_coeff);
             let grid_edges = compute_grid_edges(
-                visible,
+                &self.balloons[..self.visible_count],
                 &self.towers,
                 &mut self.grid,
                 max_range_km,
@@ -179,7 +197,7 @@ impl World {
             for t in &self.towers {
                 self.union_find.make_set(&format!("t{}", t.id));
             }
-            for b in visible {
+            for b in &self.balloons[..self.visible_count] {
                 self.union_find.make_set(&format!("b{}", b.id));
             }
             for e in &grid_edges {
@@ -195,29 +213,36 @@ impl World {
             // two ways of moving the same number, and the mesh percolates
             // around degree ~4.5 (measured in bin/mesh_depth.rs). Surfacing it
             // keeps a slider drag from walking blindly across that transition.
-            if !visible.is_empty() {
-                let mut degree: std::collections::HashMap<String, u32> =
-                    std::collections::HashMap::new();
-                for e in &grid_edges {
-                    *degree.entry(e.a_key.clone()).or_insert(0) += 1;
-                    *degree.entry(e.b_key.clone()).or_insert(0) += 1;
+            let mut degree: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+            for e in &grid_edges {
+                *degree.entry(e.a_key.clone()).or_insert(0) += 1;
+                *degree.entry(e.b_key.clone()).or_insert(0) += 1;
+            }
+            let mut deg_total: u64 = 0;
+            let mut grounded_count: u64 = 0;
+            for i in 0..self.visible_count {
+                let key = format!("b{}", self.balloons[i].id);
+                deg_total += degree.get(&key).copied().unwrap_or(0) as u64;
+                // Ground truth, stamped onto the balloon for the UI only. The
+                // beacon protocol must never consult this — see beacon.rs.
+                let grounded = grounded_roots.contains(&self.union_find.find(&key));
+                self.balloons[i].grounded = grounded;
+                if grounded {
+                    grounded_count += 1;
                 }
-                let mut deg_total: u64 = 0;
-                let mut grounded_count: u64 = 0;
-                for b in visible {
-                    let key = format!("b{}", b.id);
-                    deg_total += degree.get(&key).copied().unwrap_or(0) as u64;
-                    if grounded_roots.contains(&self.union_find.find(&key)) {
-                        grounded_count += 1;
-                    }
-                }
-                let n = visible.len() as f64;
+            }
+            if self.visible_count > 0 {
+                let n = self.visible_count as f64;
                 self.mean_degree = deg_total as f64 / n;
                 self.grounded_pct = 100.0 * grounded_count as f64 / n;
             } else {
                 self.mean_degree = 0.0;
                 self.grounded_pct = 0.0;
             }
+
+            // Who can hear whom, for the beacon flood below.
+            self.adjacency.rebuild(&grid_edges, self.visible_count, &self.towers);
 
             let by_key = |key: &str| -> (f64, f64, f64) {
                 if let Some(id_str) = key.strip_prefix('b') {
@@ -250,15 +275,53 @@ impl World {
             None
         };
 
+        // Decentralized discovery. Runs every tick (not just link ticks) —
+        // beacon slots are per-node and jittered, so they don't align with the
+        // link-recompute cadence. Only visible balloons take part, since only
+        // they have edges.
+        crate::beacon::step(
+            &mut self.balloons[..self.visible_count],
+            &mut self.towers,
+            &self.adjacency,
+            self.tick_count,
+            &mut self.rng,
+        );
+
+        // Publish each balloon's *belief* and tally how far it has drifted
+        // from truth. `stale` = believes it has a route but doesn't; `unaware`
+        // = has a route but doesn't know it. Both are expected, not errors.
+        let mut believes = 0u64;
+        let mut stale = 0u64;
+        let mut unaware = 0u64;
+        for b in &mut self.balloons[..self.visible_count] {
+            b.believed_hops = b.belief.map(|x| x.hop_count);
+            match (b.believed_hops.is_some(), b.grounded) {
+                (true, true) => believes += 1,
+                (true, false) => {
+                    believes += 1;
+                    stale += 1;
+                }
+                (false, true) => unaware += 1,
+                (false, false) => {}
+            }
+        }
+        let n = self.visible_count.max(1) as f64;
+        self.believed_grounded_pct = 100.0 * believes as f64 / n;
+        self.belief_stale_pct = 100.0 * stale as f64 / n;
+        self.belief_unaware_pct = 100.0 * unaware as f64 / n;
+
         Snapshot {
             tick: self.tick_count,
-            balloons: visible.to_vec(),
+            balloons: self.balloons[..self.visible_count].to_vec(),
             towers: self.towers.clone(),
             edges,
             horizon_refraction_coeff: self.horizon_refraction_coeff,
             paused: false,
             mean_degree: self.mean_degree,
             grounded_pct: self.grounded_pct,
+            believed_grounded_pct: self.believed_grounded_pct,
+            belief_stale_pct: self.belief_stale_pct,
+            belief_unaware_pct: self.belief_unaware_pct,
         }
     }
 }

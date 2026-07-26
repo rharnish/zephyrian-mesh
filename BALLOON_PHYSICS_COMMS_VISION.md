@@ -120,9 +120,18 @@ same count from a fresher epoch). That suppression is what keeps a flood from be
 without it every balloon re-broadcasts every beacon forever. A balloon with no unexpired belief
 considers itself **ungrounded**, and behaves accordingly.
 
-**Beliefs expire.** Each belief carries a staleness timeout. Miss enough beacon intervals and it
-is dropped, and the balloon reverts to "I don't know of any route" — even if the graph in fact
-still connects it by some path it hasn't been told about. **Belief and ground truth are allowed
+**Beliefs expire — on the age of the news, not on when it was last repeated.** Each beacon carries
+the tick its tower emitted it; relays copy that stamp verbatim and may never refresh it. A belief
+is dropped once that stamp is older than `BELIEF_MAX_AGE_TICKS`, and the balloon reverts to "I
+don't know of any route" — even if the graph in fact still connects it by some path it hasn't been
+told about.
+
+The obvious alternative — expire a belief if you haven't *heard* one lately — is broken, and
+measurably so: any relay of stale news renews its lease, so a cluster cut off from every tower
+sustains dead routes indefinitely by passing them in circles. Implementing it that way produced a
+field that never forgot, holding ~60% of balloons in a confident belief in routes that did not
+exist, *with every tower deleted from the world*. This is OSPF's LSA MaxAge distinction, and it is
+easy to get wrong. **Belief and ground truth are allowed
 to diverge, in both directions**: a balloon can think it's grounded moments after its link broke,
 and can think it's isolated while sitting on a perfectly good path. Those divergences are the
 interesting behavior, not bugs to be engineered away. (The server can still compute truth via
@@ -182,7 +191,7 @@ Proposed starting constants:
 | Parameter | Value | Rationale |
 |---|---|---|
 | Beacon interval | ~5 sim min, jittered ±20% | Duty cycle. ~1.7 link rounds, so the comms and topology clocks stay decoupled; jitter avoids lockstep rebroadcast collisions. |
-| Belief staleness timeout | 3–4× beacon interval (15–20 sim min) | "Missed 3 beacons → assume gone," the OSPF dead-interval convention. Refresh rate is one interval regardless of depth, so this need not scale with hop count. |
+| Belief max age | ~60 sim min (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~45 ticks to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §3. |
 | Bundle TTL / max hops | ~20 | Covers p95 depth at operational densities; deliberately truncates the critical-regime tails, where handing off to satellite is the correct policy anyway. |
 | Ack timeout → satellite | a few beacon intervals | Must exceed a plausible round trip (2× path traversal), or satellite will fire while the ack is still legitimately in flight. |
 
@@ -301,9 +310,19 @@ done in either order, or interleaved.
 - **C4.** Frontend: selection, animated packet along recorded path, ack animation, comms log panel,
   tamper-demo, last-delivery glyph.
 
-Each phase is independently reviewable and visually demonstrable. C1 is the recommended starting
-point for the comms work — it is small, self-contained, and everything else builds on the belief
-state it establishes.
+Each phase is independently reviewable and visually demonstrable. **C1 is done** — beacon
+protocol, belief expiry, and the belief-vs-truth overlay are in `sim-server/src/beacon.rs` and the
+Controls panel. C2 is the next step.
+
+**Verification convention (learned the hard way in C1).** Every comms phase needs an offline
+harness under `sim-server/src/bin/`, not just a look at the globe. `sim-server` is a library, so a
+binary can drive a real `World` with `WindField::zero()` and run hundreds of ticks in
+milliseconds. The properties that matter here are temporal — does belief converge, does it decay,
+does it decay *completely* — and none of them are visible in a screenshot. C1's protocol bug (a
+belief-refresh rule that let cut-off clusters sustain dead routes forever) only surfaced in a
+scenario with every tower deleted from the world, which is trivial offline and impossible to stage
+by clicking. `bin/beacon_convergence.rs` is the template; C2 should get the equivalent for
+delivery and ack loss.
 
 ## Reused existing pieces
 

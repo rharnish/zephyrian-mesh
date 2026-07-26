@@ -140,6 +140,7 @@ async function initCesium() {
   const REMOTE_SYNC_COOLDOWN_MS = 600;
   let horizonSlider, horizonValueLabel, numBalloonsSlider, numBalloonsValueLabel;
   let meshDegreeValue, meshDegreeBar, meshGroundedValue;
+  let beliefLegend, beliefOkValue, beliefStaleValue, beliefUnawareValue, beliefNoneValue;
 
   // Mean degree at which a random geometric graph percolates. Below it the
   // mesh is islands, above it a giant component; see sim-server/src/bin/
@@ -230,10 +231,41 @@ async function initCesium() {
       : '#5fd08a';
     meshDegreeBar.style.backgroundColor = color;
     meshDegreeValue.style.color = color;
+
+    if (typeof snapshot.believedGroundedPct !== 'number') return;
+    // "believes and is right" is everything that believes, minus those whose
+    // belief is stale; the remainder with no belief splits into unaware (a
+    // route exists) and none.
+    const stale = snapshot.beliefStalePct;
+    const unaware = snapshot.beliefUnawarePct;
+    const ok = snapshot.believedGroundedPct - stale;
+    beliefOkValue.textContent = `${ok.toFixed(0)}%`;
+    beliefStaleValue.textContent = `${stale.toFixed(0)}%`;
+    beliefUnawareValue.textContent = `${unaware.toFixed(0)}%`;
+    beliefNoneValue.textContent = `${Math.max(0, 100 - ok - stale - unaware).toFixed(0)}%`;
   }
 
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
   const SELECTED_BALLOON_COLOR = Cesium.Color.fromCssColorString('#3fd0ff');
+
+  // Belief-vs-truth overlay (BALLOON_PHYSICS_COMMS_VISION.md §5). The server
+  // sends each balloon's own belief (`believedHops`, learned only from beacons
+  // that reached it) alongside the union-find ground truth (`grounded`). The
+  // two disagreeing is the expected behavior of a duty-cycled mesh, not an
+  // error — this overlay is how you watch it happen.
+  const BELIEF_COLORS = {
+    ok: Cesium.Color.fromCssColorString('#5fd08a'),      // believes, and is right
+    stale: Cesium.Color.fromCssColorString('#e05561'),   // believes a route it has lost
+    unaware: Cesium.Color.fromCssColorString('#e0a355'), // has a route, hasn't heard yet
+    none: Cesium.Color.fromCssColorString('#6a6f78'),    // no belief, no route
+  };
+  let beliefOverlayEnabled = false;
+
+  function beliefKey(b) {
+    const believes = b.believedHops !== null && b.believedHops !== undefined;
+    if (believes) return b.grounded ? 'ok' : 'stale';
+    return b.grounded ? 'unaware' : 'none';
+  }
 
   // Balloon selection/inspection. Clicking a balloon selects it; the inspector
   // panel (built below) shows its live position/altitude. This is the surface
@@ -242,25 +274,38 @@ async function initCesium() {
   let selectedBalloonId = null;
   let inspectorPanel, inspectorBody, inspectorTitle; // assigned when the panel is built
 
-  function setBalloonHighlight(id, on) {
+  // Single place that decides a balloon's tint: selection wins, then the
+  // belief overlay if enabled, then the default. Called on selection change,
+  // on overlay toggle, and whenever a balloon's belief state changes.
+  function applyBalloonColor(id) {
     const e = balloonEntities.get(id);
     if (!e) return;
-    e.point.color = on ? SELECTED_BALLOON_COLOR : BALLOON_COLOR;
-    e.point.pixelSize = on ? 11 : 6;
-    e.billboard.color = on ? SELECTED_BALLOON_COLOR : BALLOON_COLOR;
+    const selected = id === selectedBalloonId;
+    const color = selected
+      ? SELECTED_BALLOON_COLOR
+      : beliefOverlayEnabled
+        ? BELIEF_COLORS[e.__beliefKey] ?? BALLOON_COLOR
+        : BALLOON_COLOR;
+    e.point.color = color;
+    e.point.pixelSize = selected ? 11 : 6;
+    e.billboard.color = color;
   }
 
   function selectBalloon(id) {
-    if (selectedBalloonId !== null && selectedBalloonId !== id) setBalloonHighlight(selectedBalloonId, false);
+    const previous = selectedBalloonId;
+    // Update the selection *before* recoloring, since applyBalloonColor reads
+    // selectedBalloonId to decide the tint.
     selectedBalloonId = id;
-    setBalloonHighlight(id, true);
+    if (previous !== null && previous !== id) applyBalloonColor(previous);
+    applyBalloonColor(id);
     if (inspectorPanel) inspectorPanel.style.display = 'block';
     if (inspectorTitle) inspectorTitle.textContent = `Balloon #${id}`;
   }
 
   function deselectBalloon() {
-    if (selectedBalloonId !== null) setBalloonHighlight(selectedBalloonId, false);
+    const previous = selectedBalloonId;
     selectedBalloonId = null;
+    if (previous !== null) applyBalloonColor(previous);
     if (inspectorPanel) inspectorPanel.style.display = 'none';
   }
 
@@ -276,13 +321,29 @@ async function initCesium() {
         `<div style="opacity:0.7;">Not in the active set right now (raise the balloon count to bring it back).</div>`;
       return;
     }
+    // Deliberately shows the balloon's belief and the truth as two separate
+    // rows: the balloon acts on the former and has no access to the latter.
+    const key = beliefKey(b);
+    const beliefText =
+      b.believedHops === null || b.believedHops === undefined
+        ? 'no route known'
+        : `${b.believedHops} hop${b.believedHops === 1 ? '' : 's'} to a tower`;
+    const verdict = {
+      ok: ['#5fd08a', 'belief matches reality'],
+      stale: ['#e05561', 'stale — that route is gone'],
+      unaware: ['#e0a355', 'a route exists, not heard yet'],
+      none: ['#6a6f78', 'isolated, and knows it'],
+    }[key];
     inspectorBody.innerHTML = `
       <div style="display:flex; justify-content:space-between;"><span>Latitude</span><span>${fmtLat(b.lat)}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Longitude</span><span>${fmtLon(b.lon)}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Altitude</span><span>${(b.alt / 1000).toFixed(2)} km</span></div>
+      <div style="display:flex; justify-content:space-between; margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Actually grounded</span><span>${b.grounded ? 'yes' : 'no'}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Verdict</span><span style="color:${verdict[0]};">${verdict[1]}</span></div>
       <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
-        Measurements (gas, ballast, temperature, humidity) and comms / tamper
-        details will appear here once those systems are built — see
+        Measurements (gas, ballast, temperature, humidity) and the message log /
+        tamper chain will appear here once those systems are built — see
         BALLOON_PHYSICS_COMMS_VISION.md.
       </div>
     `;
@@ -307,9 +368,16 @@ async function initCesium() {
       balloonPositions.set(b.id, position);
       const icon = balloonIconForAltitude(b.alt);
       const entity = balloonEntities.get(b.id);
+      const key = beliefKey(b);
       if (entity) {
         entity.position = position;
         entity.billboard.image = icon;
+        // Only touch color when the belief state actually changed — this runs
+        // for every balloon every snapshot.
+        if (entity.__beliefKey !== key) {
+          entity.__beliefKey = key;
+          if (beliefOverlayEnabled) applyBalloonColor(b.id);
+        }
       } else {
         const newEntity = viewer.entities.add({
           position,
@@ -328,8 +396,9 @@ async function initCesium() {
           },
         });
         newEntity.__balloonId = b.id; // lets click-picking map back to a balloon id
+        newEntity.__beliefKey = key;
         balloonEntities.set(b.id, newEntity);
-        if (b.id === selectedBalloonId) setBalloonHighlight(b.id, true);
+        if (b.id === selectedBalloonId || beliefOverlayEnabled) applyBalloonColor(b.id);
       }
     }
     for (const [id, entity] of balloonEntities) {
@@ -573,6 +642,33 @@ async function initCesium() {
           <span id="meshGroundedValue">&ndash;</span>
         </label>
       </div>
+      <!-- Belief vs. truth. Balloons only know what beacons told them, so
+           their belief lags reality (stale) or trails behind it (unaware).
+           See BALLOON_PHYSICS_COMMS_VISION.md §3. -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input id="beliefOverlayToggle" type="checkbox" />
+          <label for="beliefOverlayToggle" style="flex:1;">Belief overlay</label>
+        </div>
+        <div id="beliefLegend" style="display:none; margin-top:5px; opacity:0.85;">
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#5fd08a;">&#9679;</span> believes, correct</span>
+            <span id="beliefOkValue">&ndash;</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#e05561;">&#9679;</span> stale belief</span>
+            <span id="beliefStaleValue">&ndash;</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#e0a355;">&#9679;</span> unaware of route</span>
+            <span id="beliefUnawareValue">&ndash;</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#6a6f78;">&#9679;</span> no route known</span>
+            <span id="beliefNoneValue">&ndash;</span>
+          </div>
+        </div>
+      </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <input id="windVectorsToggle" type="checkbox" />
         <label for="windVectorsToggle" style="flex:1;">Wind vectors</label>
@@ -716,6 +812,18 @@ async function initCesium() {
   meshDegreeValue = panel.querySelector('#meshDegreeValue');
   meshDegreeBar = panel.querySelector('#meshDegreeBar');
   meshGroundedValue = panel.querySelector('#meshGroundedValue');
+
+  beliefLegend = panel.querySelector('#beliefLegend');
+  beliefOkValue = panel.querySelector('#beliefOkValue');
+  beliefStaleValue = panel.querySelector('#beliefStaleValue');
+  beliefUnawareValue = panel.querySelector('#beliefUnawareValue');
+  beliefNoneValue = panel.querySelector('#beliefNoneValue');
+  const beliefOverlayToggle = panel.querySelector('#beliefOverlayToggle');
+  beliefOverlayToggle.addEventListener('change', () => {
+    beliefOverlayEnabled = beliefOverlayToggle.checked;
+    beliefLegend.style.display = beliefOverlayEnabled ? 'block' : 'none';
+    for (const id of balloonEntities.keys()) applyBalloonColor(id);
+  });
 
   numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
   numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');

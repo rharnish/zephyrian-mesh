@@ -1,4 +1,5 @@
 pub mod balloon;
+pub mod beacon;
 pub mod config;
 pub mod geo;
 pub mod link_detection;
