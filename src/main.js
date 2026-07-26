@@ -139,6 +139,13 @@ async function initCesium() {
   // slider "resisting" quick successive changes.
   const REMOTE_SYNC_COOLDOWN_MS = 600;
   let horizonSlider, horizonValueLabel, numBalloonsSlider, numBalloonsValueLabel;
+  let meshDegreeValue, meshDegreeBar, meshGroundedValue;
+
+  // Mean degree at which a random geometric graph percolates. Below it the
+  // mesh is islands, above it a giant component; see sim-server/src/bin/
+  // mesh_depth.rs for the measurement this comes from.
+  const PERCOLATION_DEGREE = 4.5;
+  const MESH_DEGREE_BAR_MAX = 10; // full-width degree; threshold lands at 45%
   let isDraggingHorizon = false;
   let isDraggingBalloons = false;
   let horizonCooldownUntil = 0;
@@ -199,6 +206,30 @@ async function initCesium() {
         numBalloonsValueLabel.textContent = n;
       }
     }
+    updateMeshHealth(snapshot);
+  }
+
+  // Unlike the sliders, this readout is never user-driven — it just mirrors
+  // whatever the server last measured, so there's no drag/cooldown guard.
+  function updateMeshHealth(snapshot) {
+    if (!meshDegreeValue) return; // panel not built yet
+    const degree = snapshot.meanDegree;
+    const grounded = snapshot.groundedPct;
+    if (typeof degree !== 'number' || typeof grounded !== 'number') return;
+
+    meshDegreeValue.textContent = degree.toFixed(1);
+    meshGroundedValue.textContent = `${grounded.toFixed(0)}%`;
+
+    const pct = Math.min(100, (degree / MESH_DEGREE_BAR_MAX) * 100);
+    meshDegreeBar.style.width = `${pct}%`;
+    // Red well below the threshold, amber in the critical band either side of
+    // it (where paths get long and delivery turns erratic), green above.
+    const color =
+      degree < PERCOLATION_DEGREE - 1 ? '#e05561'
+      : degree < PERCOLATION_DEGREE + 1 ? '#e0a355'
+      : '#5fd08a';
+    meshDegreeBar.style.backgroundColor = color;
+    meshDegreeValue.style.color = color;
   }
 
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
@@ -518,6 +549,30 @@ async function initCesium() {
           <label for="glyphsToggle" style="flex:1;">Glyphs</label>
         </div>
       </div>
+      <!-- Mesh health. Both sliders above are really two ways of moving mean
+           degree, and the mesh percolates around degree ~4.5 — below it the
+           network shatters into islands, above it nearly everything reaches a
+           tower. The tick mark is that threshold, so a drag shows how close
+           the current settings are to falling apart. -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
+        <label style="display:flex; justify-content:space-between;">
+          <span>Mesh degree</span>
+          <span id="meshDegreeValue">&ndash;</span>
+        </label>
+        <div style="position:relative; height:5px; margin:5px 0 6px;
+                    background:rgba(255,255,255,0.15); border-radius:3px;">
+          <div id="meshDegreeBar"
+               style="height:100%; width:0%; border-radius:3px; background:#888;
+                      transition: width 0.2s linear, background-color 0.2s linear;"></div>
+          <div title="percolation threshold (degree 4.5)"
+               style="position:absolute; left:45%; top:-3px; bottom:-3px; width:1px;
+                      background:rgba(255,255,255,0.8);"></div>
+        </div>
+        <label style="display:flex; justify-content:space-between;">
+          <span>Grounded</span>
+          <span id="meshGroundedValue">&ndash;</span>
+        </label>
+      </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <input id="windVectorsToggle" type="checkbox" />
         <label for="windVectorsToggle" style="flex:1;">Wind vectors</label>
@@ -657,6 +712,10 @@ async function initCesium() {
       body: JSON.stringify({ coeff: params.horizonRefractionCoeff }),
     }).catch((e) => console.error('Failed to sync horizon coefficient to sim-server:', e));
   });
+
+  meshDegreeValue = panel.querySelector('#meshDegreeValue');
+  meshDegreeBar = panel.querySelector('#meshDegreeBar');
+  meshGroundedValue = panel.querySelector('#meshGroundedValue');
 
   numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
   numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');

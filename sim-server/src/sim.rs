@@ -49,6 +49,12 @@ pub struct Snapshot {
     /// Whether the sim is paused. Broadcast so the pause toggle stays in
     /// sync across tabs (server is the source of truth).
     pub paused: bool,
+    /// Mean number of links per visible balloon (counting tower links).
+    /// Carried on every snapshot, not just link ticks, so the readout holds
+    /// steady between recomputes instead of blinking.
+    pub mean_degree: f64,
+    /// Share (0..100) of visible balloons whose component contains a tower.
+    pub grounded_pct: f64,
 }
 
 pub struct World {
@@ -60,6 +66,10 @@ pub struct World {
     pub horizon_refraction_coeff: f64,
     pub visible_count: usize,
     pub paused: bool,
+    // Last computed mesh-health readout (see the link-recompute block in
+    // tick()). Held across non-link ticks so every snapshot can carry it.
+    mean_degree: f64,
+    grounded_pct: f64,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
@@ -77,6 +87,8 @@ impl World {
             horizon_refraction_coeff: DEFAULT_HORIZON_REFRACTION_COEFF,
             visible_count: 0,
             paused: false,
+            mean_degree: 0.0,
+            grounded_pct: 0.0,
             next_balloon_id: 0,
             next_tower_id: 0,
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
@@ -137,6 +149,8 @@ impl World {
                 edges: None,
                 horizon_refraction_coeff: self.horizon_refraction_coeff,
                 paused: true,
+                mean_degree: self.mean_degree,
+                grounded_pct: self.grounded_pct,
             };
         }
 
@@ -174,6 +188,35 @@ impl World {
             let mut grounded_roots = std::collections::HashSet::new();
             for t in &self.towers {
                 grounded_roots.insert(self.union_find.find(&format!("t{}", t.id)));
+            }
+
+            // Mesh-health readout. Mean degree is the quantity that actually
+            // governs connectivity: the balloon-count and horizon sliders are
+            // two ways of moving the same number, and the mesh percolates
+            // around degree ~4.5 (measured in bin/mesh_depth.rs). Surfacing it
+            // keeps a slider drag from walking blindly across that transition.
+            if !visible.is_empty() {
+                let mut degree: std::collections::HashMap<String, u32> =
+                    std::collections::HashMap::new();
+                for e in &grid_edges {
+                    *degree.entry(e.a_key.clone()).or_insert(0) += 1;
+                    *degree.entry(e.b_key.clone()).or_insert(0) += 1;
+                }
+                let mut deg_total: u64 = 0;
+                let mut grounded_count: u64 = 0;
+                for b in visible {
+                    let key = format!("b{}", b.id);
+                    deg_total += degree.get(&key).copied().unwrap_or(0) as u64;
+                    if grounded_roots.contains(&self.union_find.find(&key)) {
+                        grounded_count += 1;
+                    }
+                }
+                let n = visible.len() as f64;
+                self.mean_degree = deg_total as f64 / n;
+                self.grounded_pct = 100.0 * grounded_count as f64 / n;
+            } else {
+                self.mean_degree = 0.0;
+                self.grounded_pct = 0.0;
             }
 
             let by_key = |key: &str| -> (f64, f64, f64) {
@@ -214,6 +257,8 @@ impl World {
             edges,
             horizon_refraction_coeff: self.horizon_refraction_coeff,
             paused: false,
+            mean_degree: self.mean_degree,
+            grounded_pct: self.grounded_pct,
         }
     }
 }
