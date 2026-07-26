@@ -335,7 +335,7 @@
       <div class="hub">
         <span class="name">main.js</span>
         <span class="arrow">→</span>
-        <span class="role">orchestrator: inits the Cesium viewer, reconciles balloons/towers against server snapshots, wires the UI. Holds no physics or link-detection logic of its own.</span>
+        <span class="role">orchestrator: inits the Cesium viewer, reconciles balloons/towers against server snapshots, wires the UI (pause/resume, click-to-inspect balloon panel). Holds no physics or link-detection logic of its own.</span>
       </div>
       <div class="chips">
         <div class="chip"><div class="name">config.js</div><div class="role">server URLs & tunable params</div></div>
@@ -347,8 +347,9 @@
     </section>
 
     <div class="connector">
-      <div class="line ws"><span class="dir">↕</span><span class="proto">WS /ws</span><span class="detail">Snapshot: balloons, towers, edges — every tick</span></div>
-      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">POST/DELETE /api/towers · POST /api/balloons/count · POST /api/horizon-coeff</span></div>
+      <div class="line ws"><span class="dir">↕</span><span class="proto">WS /ws</span><span class="detail">Snapshot: balloons, towers, edges, paused, horizonRefractionCoeff — every tick</span></div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">POST/DELETE /api/towers · POST /api/balloons/count · POST /api/horizon-coeff · POST /api/paused</span></div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">GET /api/wind-levels — browser's arrows-only copy, re-served from sim-server's own fetch</span></div>
     </div>
 
     <section class="lane sim">
@@ -360,7 +361,7 @@
       <div class="hub">
         <span class="name">main.rs → sim.rs</span>
         <span class="arrow">→</span>
-        <span class="role">one task owns <em>World</em> exclusively — no locks. Commands arrive over an mpsc channel; Snapshots go out over a broadcast channel.</span>
+        <span class="role">one task owns <em>World</em> exclusively — no locks. Commands (incl. SetPaused) arrive over an mpsc channel; Snapshots go out over a broadcast channel. Also re-serves its wind fetch to the browser over GET /api/wind-levels.</span>
       </div>
       <div class="chips">
         <div class="chip"><div class="name">balloon.rs</div><div class="role">balloon state + wind advection</div></div>
@@ -375,11 +376,7 @@
     </section>
 
     <div class="connector">
-      <div class="line rest"><span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">at startup, blocking — falls back to zero wind on failure</span></div>
-      <div class="line bypass">
-        <span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">from the browser client, in the background — ~356MB / 55s, for the wind-arrow overlay only</span>
-        <span class="bypass-mark">bypasses sim-server</span>
-      </div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">at startup, blocking — falls back to zero wind on failure. Held as an Arc and re-served to the browser, so there's only one fetch and one copy of the payload.</span></div>
     </div>
 
     <section class="lane wind">
@@ -403,8 +400,11 @@
       <dt>Authority</dt>
       <dd>All balloon physics and radio-link detection run server-side in <span class="file">sim-server</span>. The browser is a thin renderer that reconciles Cesium entities against whatever it's sent and forwards user actions as REST commands — it computes nothing itself.</dd>
 
-      <dt>Dual wind fetch</dt>
-      <dd>Wind data is fetched twice, independently, by design. <span class="file">sim-server</span> fetches its own copy at startup for advection; the browser fetches a second copy in the background purely for the optional arrow overlay. Neither blocks on the other.</dd>
+      <dt>Single wind fetch</dt>
+      <dd><span class="file">sim-server</span> is now the sole client of <span class="file">wind_backend.py</span>. It fetches the field once at startup, holds it as a shared <span class="file">Arc</span>, and re-serves it over its own <span class="file">GET /api/wind-levels</span>. The browser fetches its (arrows-only) copy from sim-server in the background, not from Python directly — one fetch to Python, one payload in memory.</dd>
+
+      <dt>Paused, synced</dt>
+      <dd>Pause state and the horizon-refraction coefficient both live on <span class="file">World</span> and are broadcast in every <span class="file">Snapshot</span>, so all connected tabs stay in sync. Controls POST the desired change and wait for the server to echo it back rather than flipping optimistically, avoiding races with in-flight snapshots.</dd>
 
       <dt>Not in the loop</dt>
       <dd><span class="file">weather-data-server/get_wind_data.py</span> is an older, separate prototype script — not part of the running app. The live backend is <span class="file">wind_backend.py</span>.</dd>

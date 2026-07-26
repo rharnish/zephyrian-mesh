@@ -46,9 +46,9 @@ flowchart TB
         wind_backend["wind_backend.py<br/>serves ERA5 pressure-level<br/>wind data via xarray"]
     end
 
-    main -- "WebSocket /ws<br/>(Snapshot: balloons, towers, edges)" --> main_rs
-    main -- "REST: POST/DELETE /api/towers,<br/>POST /api/balloons/count,<br/>POST /api/horizon-coeff" --> main_rs
-    main -- "GET /api/wind-levels<br/>(background, for arrow overlay)" --> wind_backend
+    main -- "WebSocket /ws<br/>(Snapshot: balloons, towers, edges,<br/>paused, horizonRefractionCoeff)" --> main_rs
+    main -- "REST: POST/DELETE /api/towers,<br/>POST /api/balloons/count,<br/>POST /api/horizon-coeff,<br/>POST /api/paused" --> main_rs
+    main -- "GET /api/wind-levels<br/>(background, for arrow overlay)" --> main_rs
     main_rs -- "GET /api/wind-levels<br/>(startup, for balloon advection)" --> wind_backend
 ```
 
@@ -61,12 +61,21 @@ flowchart TB
   JSON `Snapshot`s over a `broadcast` channel to every connected client.
 - **The browser client is a thin renderer.** `src/main.js` holds no physics
   or link-detection logic; it reconciles Cesium entities against whatever
-  `sim-server` broadcasts and forwards user actions as REST commands.
-- **Wind data is fetched twice, independently.** `sim-server` fetches its own
-  copy at startup (for advection) and falls back to zero wind if
-  `wind_backend.py` isn't running. The browser fetches a second copy in the
-  background, purely for the optional wind-vector-arrow overlay — this
-  fetch is slow (~55s / 356MB, see `WIND_TRANSFER_PERF.md`) and intentionally
-  non-blocking.
+  `sim-server` broadcasts and forwards user actions as REST commands. It also
+  supports click-to-inspect: clicking a balloon selects it and opens an
+  inspector panel with its live lat/lon/altitude, refreshed each snapshot.
+- **`sim-server` is the sole client of the weather backend.** It fetches the
+  wind field once at startup (for advection) and falls back to zero wind if
+  `wind_backend.py` isn't running. It holds that field as a shared `Arc` and
+  re-serves it over its own `GET /api/wind-levels`, so the browser's
+  (arrows-only) copy — slow to transfer, ~55s / 356MB, see
+  `WIND_TRANSFER_PERF.md` — comes from `sim-server`, not from Python
+  directly. One fetch to Python, one payload in memory.
+- **Pause and slider values are broadcast, not local.** A `SetPaused`
+  command and `paused` flag on `World` back a `POST /api/paused` endpoint;
+  when paused, `World::tick` freezes physics/link recomputation. Both
+  `paused` and `horizonRefractionCoeff` are included in every `Snapshot` so
+  all connected tabs stay in sync — controls POST the desired value and wait
+  for the server to echo it back rather than flipping optimistically.
 - **`weather-data-server/get_wind_data.py`** is a separate, older prototype
   script (not part of the running app) — the live backend is `wind_backend.py`.

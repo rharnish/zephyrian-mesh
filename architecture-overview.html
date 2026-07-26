@@ -234,32 +234,27 @@
     <div class="link">
       <span class="rule"></span>
       <span class="proto">WS + REST</span>
-      <span class="detail">live snapshots over WebSocket; user actions (add tower, set balloon count…) over REST</span>
+      <span class="detail">live snapshots over WebSocket (balloons, towers, edges, paused, horizon coeff); user actions (add tower, set balloon count, pause…) over REST</span>
       <span class="rule"></span>
     </div>
 
     <div class="box sim">
       <span class="tag">sim-server</span>
       <h2>Rust — Axum, authoritative</h2>
-      <p>Owns the one true simulation state: balloon physics, wind advection, radio-link detection. Broadcasts a snapshot every tick.</p>
+      <p>Owns the one true simulation state: balloon physics, wind advection, radio-link detection. Broadcasts a snapshot every tick. Also re-serves its wind data to the browser.</p>
     </div>
 
     <div class="link">
       <span class="rule"></span>
       <span class="proto">GET wind data</span>
-      <span class="detail">fetched once at startup; falls back to zero wind if unavailable</span>
+      <span class="detail">sim-server fetches once at startup, falls back to zero wind if unavailable; the browser now fetches its own (arrows-only) copy from sim-server, not from Python</span>
       <span class="rule"></span>
     </div>
 
     <div class="box wind">
       <span class="tag">weather-data-server</span>
       <h2>Python — FastAPI + xarray</h2>
-      <p>Serves ERA5 pressure-level wind data. The only backend either of the other two processes actually talks to.</p>
-    </div>
-
-    <div class="bypass">
-      <span class="proto">GET wind data</span>
-      <span>— the browser also fetches this directly, in the background, for the optional wind-arrow overlay</span>
+      <p>Serves ERA5 pressure-level wind data. sim-server is now its only client — the browser no longer talks to it directly.</p>
     </div>
 
   </div>
