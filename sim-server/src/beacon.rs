@@ -1,4 +1,4 @@
-// Decentralized connectivity discovery — C1 of BALLOON_PHYSICS_COMMS_VISION.md.
+// Decentralized connectivity discovery — C1 of MESH_COMMS_DESIGN.md.
 //
 // The rule this module exists to enforce: **a balloon is never told whether it
 // can reach a tower.** It has no access to the edge list, the union-find, or

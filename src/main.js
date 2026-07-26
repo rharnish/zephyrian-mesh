@@ -248,7 +248,7 @@ async function initCesium() {
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
   const SELECTED_BALLOON_COLOR = Cesium.Color.fromCssColorString('#3fd0ff');
 
-  // Belief-vs-truth overlay (BALLOON_PHYSICS_COMMS_VISION.md §5). The server
+  // Belief-vs-truth overlay (MESH_COMMS_DESIGN.md §3). The server
   // sends each balloon's own belief (`believedHops`, learned only from beacons
   // that reached it) alongside the union-find ground truth (`grounded`). The
   // two disagreeing is the expected behavior of a duty-cycled mesh, not an
@@ -270,7 +270,7 @@ async function initCesium() {
   // Balloon selection/inspection. Clicking a balloon selects it; the inspector
   // panel (built below) shows its live position/altitude. This is the surface
   // the richer measurements + comms/tamper details attach to later — see
-  // BALLOON_PHYSICS_COMMS_VISION.md.
+  // MESH_COMMS_DESIGN.md.
   let selectedBalloonId = null;
   let inspectorPanel, inspectorBody, inspectorTitle; // assigned when the panel is built
 
@@ -344,7 +344,7 @@ async function initCesium() {
       <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
         Measurements (gas, ballast, temperature, humidity) and the message log /
         tamper chain will appear here once those systems are built — see
-        BALLOON_PHYSICS_COMMS_VISION.md.
+        MESH_COMMS_DESIGN.md.
       </div>
     `;
   }
@@ -644,7 +644,7 @@ async function initCesium() {
       </div>
       <!-- Belief vs. truth. Balloons only know what beacons told them, so
            their belief lags reality (stale) or trails behind it (unaware).
-           See BALLOON_PHYSICS_COMMS_VISION.md §3. -->
+           See MESH_COMMS_DESIGN.md §1. -->
       <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <div style="display:flex; gap:6px; align-items:center;">
           <input id="beliefOverlayToggle" type="checkbox" />

@@ -39,8 +39,7 @@ pub const COMMS_EVERY_N_TICKS: u64 = 8;
 /// physical durations rather than counts.
 pub const COMMS_ROUND_SIM_SECONDS: f64 = COMMS_EVERY_N_TICKS as f64 * TICK_DT_SECONDS * TIME_SCALE;
 
-// --- Beacon-based connectivity discovery (see BALLOON_PHYSICS_COMMS_VISION.md
-// §3).
+// --- Beacon-based connectivity discovery (see MESH_COMMS_DESIGN.md §1).
 //
 // What makes discovery slow here is radio *duty cycling*, not propagation
 // delay: links survive for hours of sim time (a balloon drifts ~0.4% of link
