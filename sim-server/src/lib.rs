@@ -1,5 +1,6 @@
 pub mod balloon;
 pub mod beacon;
+pub mod bundle;
 pub mod config;
 pub mod geo;
 pub mod link_detection;

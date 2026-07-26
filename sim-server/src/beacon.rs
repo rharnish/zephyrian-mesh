@@ -64,6 +64,10 @@ impl RouteBelief {
 pub struct MeshAdjacency {
     balloon_adj: Vec<Vec<u32>>,
     tower_adj: Vec<Vec<u32>>,
+    /// A tower this balloon can currently hear directly, if any. Maintained
+    /// alongside `tower_adj` so bundle forwarding can test "can I hand this
+    /// straight to the ground?" without scanning every tower.
+    balloon_tower: Vec<Option<u32>>,
 }
 
 fn parse_key(key: &str) -> Option<(bool, u32)> {
@@ -82,6 +86,8 @@ impl MeshAdjacency {
         self.balloon_adj.resize(n_balloons, Vec::new());
         self.tower_adj.clear();
         self.tower_adj.resize(towers.len(), Vec::new());
+        self.balloon_tower.clear();
+        self.balloon_tower.resize(n_balloons, None);
 
         let tower_slot: HashMap<u32, usize> =
             towers.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
@@ -105,11 +111,28 @@ impl MeshAdjacency {
                 ((true, b_id), (false, t_id)) | ((false, t_id), (true, b_id)) => {
                     if let Some(&slot) = tower_slot.get(&t_id) {
                         self.tower_adj[slot].push(b_id);
+                        if let Some(e) = self.balloon_tower.get_mut(b_id as usize) {
+                            *e = Some(t_id);
+                        }
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Balloons this one can currently hear. Empty if it has no live links.
+    pub fn neighbors(&self, i: usize) -> &[u32] {
+        self.balloon_adj.get(i).map_or(&[], |v| v.as_slice())
+    }
+
+    pub fn is_neighbor(&self, i: usize, id: u32) -> bool {
+        self.neighbors(i).contains(&id)
+    }
+
+    /// A tower this balloon can hand a bundle straight to, if any.
+    pub fn tower_in_range(&self, i: usize) -> Option<u32> {
+        self.balloon_tower.get(i).copied().flatten()
     }
 }
 
@@ -146,13 +169,17 @@ pub fn initial_slot(rng: &mut impl Rng) -> u64 {
 /// visible balloons participate in link detection, so only they can hear or
 /// be heard. (A balloon hidden by the slider keeps its belief until it simply
 /// ages out, and rediscovers from scratch if it becomes visible again.)
+/// Returns the indices of balloons that woke and transmitted this round. Bundle
+/// forwarding reuses that set rather than keeping its own schedule: a radio that
+/// is awake is awake for both, which is what makes BEACON_INTERVAL_ROUNDS the
+/// forwarding rate as well (see MESH_COMMS_DESIGN.md §4).
 pub fn step(
     balloons: &mut [Balloon],
     towers: &mut [Tower],
     adj: &MeshAdjacency,
     round: u64,
     rng: &mut impl Rng,
-) {
+) -> Vec<usize> {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
     for b in balloons.iter_mut() {
         if b.belief.is_some_and(|bel| bel.is_expired(round)) {
@@ -187,11 +214,13 @@ pub fn step(
         }
     }
 
+    let mut awake: Vec<usize> = Vec::new();
     for i in 0..balloons.len() {
         if round < balloons[i].next_beacon_round {
             continue;
         }
         balloons[i].next_beacon_round = next_slot(round, rng);
+        awake.push(i);
         // A balloon with no belief has nothing to say. Silence is itself
         // information the neighbours never get — they can't tell "no route"
         // from "not transmitting".
@@ -227,6 +256,8 @@ pub fn step(
             b.belief = Some(offer);
         }
     }
+
+    awake
 }
 
 #[cfg(test)]

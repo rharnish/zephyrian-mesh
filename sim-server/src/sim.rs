@@ -61,6 +61,16 @@ pub struct Snapshot {
     pub belief_stale_pct: f64,
     /// Share with a real route they haven't been told about yet.
     pub belief_unaware_pct: f64,
+    /// Telemetry bundles delivered to a tower over the radio mesh, cumulative.
+    pub bundles_delivered: u64,
+    /// Bundles that left circulation without arriving — looped, ran out of hop
+    /// budget, hit a busy relay, or aged out. Cumulative.
+    pub bundles_lost: u64,
+    /// Bundles currently being carried by some balloon.
+    pub bundles_in_flight: u64,
+    /// Bundles being held by a balloon that currently believes no route —
+    /// waiting rather than lost. This is the delay-tolerant part, made visible.
+    pub bundles_stranded: u64,
 }
 
 pub struct World {
@@ -79,6 +89,7 @@ pub struct World {
     believed_grounded_pct: f64,
     belief_stale_pct: f64,
     belief_unaware_pct: f64,
+    bundle_stats: crate::bundle::BundleStats,
     adjacency: crate::beacon::MeshAdjacency,
     next_balloon_id: u32,
     next_tower_id: u32,
@@ -102,6 +113,7 @@ impl World {
             believed_grounded_pct: 0.0,
             belief_stale_pct: 0.0,
             belief_unaware_pct: 0.0,
+            bundle_stats: Default::default(),
             adjacency: Default::default(),
             next_balloon_id: 0,
             next_tower_id: 0,
@@ -121,6 +133,7 @@ impl World {
             let mut b = Balloon::new(self.next_balloon_id, lon, lat, alt);
             // Stagger duty-cycle phases so the fleet doesn't transmit in unison.
             b.next_beacon_round = crate::beacon::initial_slot(&mut self.rng);
+            b.next_bundle_round = self.rng.gen_range(0..BUNDLE_INTERVAL_ROUNDS);
             self.balloons.push(b);
             self.next_balloon_id += 1;
         }
@@ -135,6 +148,23 @@ impl World {
     pub fn add_tower(&mut self, lon: f64, lat: f64, height_m: f64) {
         self.towers.push(Tower::new(self.next_tower_id, lon, lat, height_m));
         self.next_tower_id += 1;
+    }
+
+    fn count_carrying(&self) -> u64 {
+        self.balloons[..self.visible_count].iter().filter(|b| b.carrying.is_some()).count() as u64
+    }
+
+    /// Holding a bundle but currently believing no route — waiting, not lost.
+    fn count_stranded(&self) -> u64 {
+        self.balloons[..self.visible_count]
+            .iter()
+            .filter(|b| b.carrying.is_some() && b.belief.is_none())
+            .count() as u64
+    }
+
+    /// Cumulative bundle outcomes, for offline harnesses.
+    pub fn bundle_stats(&self) -> crate::bundle::BundleStats {
+        self.bundle_stats
     }
 
     pub fn remove_tower(&mut self, id: u32) {
@@ -171,6 +201,10 @@ impl World {
                 believed_grounded_pct: self.believed_grounded_pct,
                 belief_stale_pct: self.belief_stale_pct,
                 belief_unaware_pct: self.belief_unaware_pct,
+                bundles_delivered: self.bundle_stats.delivered,
+                bundles_lost: self.bundle_stats.resolved() - self.bundle_stats.delivered,
+                bundles_in_flight: self.count_carrying(),
+                bundles_stranded: self.count_stranded(),
             };
         }
 
@@ -280,12 +314,23 @@ impl World {
         // and jittered, so they don't align with the link-recompute cadence.
         // Only visible balloons take part, since only they have edges.
         if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
-            crate::beacon::step(
+            let round = self.tick_count / COMMS_EVERY_N_TICKS;
+            // Beacons first, so a bundle forwarded this round uses the freshest
+            // belief available rather than one a round old. `awake` is the set
+            // of radios that transmitted; bundles ride the same duty cycle.
+            let awake = crate::beacon::step(
                 &mut self.balloons[..self.visible_count],
                 &mut self.towers,
                 &self.adjacency,
-                self.tick_count / COMMS_EVERY_N_TICKS,
+                round,
                 &mut self.rng,
+            );
+            crate::bundle::step(
+                &mut self.balloons[..self.visible_count],
+                &self.adjacency,
+                &awake,
+                round,
+                &mut self.bundle_stats,
             );
         }
 
@@ -324,6 +369,10 @@ impl World {
             believed_grounded_pct: self.believed_grounded_pct,
             belief_stale_pct: self.belief_stale_pct,
             belief_unaware_pct: self.belief_unaware_pct,
+            bundles_delivered: self.bundle_stats.delivered,
+            bundles_lost: self.bundle_stats.resolved() - self.bundle_stats.delivered,
+            bundles_in_flight: self.count_carrying(),
+            bundles_stranded: self.count_stranded(),
         }
     }
 }

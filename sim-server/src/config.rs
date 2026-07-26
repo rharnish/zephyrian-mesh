@@ -82,6 +82,33 @@ pub const BELIEF_MAX_AGE_ROUNDS: u64 = 60;
 /// anyway (see mesh_depth.rs). Also bounds distance-vector count-to-infinity.
 pub const BEACON_MAX_HOPS: u32 = 20;
 
+// --- Telemetry bundles (C2, see MESH_COMMS_DESIGN.md §1 and §4) -------------
+//
+// Bundles advance one hop per *duty-cycle slot*, not per round: a bundle moves
+// only when the balloon holding it wakes to transmit, which is the same slot it
+// beacons on. So one hop costs BEACON_INTERVAL_ROUNDS rounds, and a path of
+// depth d takes d * BEACON_INTERVAL_ROUNDS rounds one way.
+//
+/// How often a balloon originates a telemetry bundle (200 rounds ≈ 6.7 sim
+/// hours). Measured, not chosen: at 25 the mesh gridlocks — every balloon is
+/// permanently carrying, so nobody can relay, and delivery falls to 29% with
+/// 81k blocked handoffs. Backing off to 200 leaves in-flight at ~half the fleet
+/// and raises delivery to 41%. See bin/bundle_delivery.rs.
+///
+/// 41% is still poor, and the remaining cause is the one-bundle carry slot
+/// rather than the origination rate — see the note on relay queues in
+/// MESH_COMMS_DESIGN.md §4.
+pub const BUNDLE_INTERVAL_ROUNDS: u64 = 200;
+/// How long a bundle may go unresolved before it is given up on. Must exceed a
+/// deep-path traversal (14 hops x BEACON_INTERVAL_ROUNDS = 70 rounds) or bundles
+/// expire while legitimately in flight. In slice 2 this becomes the ack timeout
+/// that hands the bundle to satellite rather than dropping it.
+pub const BUNDLE_MAX_AGE_ROUNDS: u64 = 150;
+/// Hop budget. A bundle whose recorded path reaches this length is dropped.
+/// Sized against p95 mesh depth (see mesh_depth.rs); deeper paths only exist
+/// near percolation, where satellite is the right answer anyway.
+pub const BUNDLE_MAX_HOPS: usize = 20;
+
 pub const GRID_CELL_SIZE_DEG: f64 = 6.0;
 
 pub const DEFAULT_NUM_BALLOONS: u32 = 400;

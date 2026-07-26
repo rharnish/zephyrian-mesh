@@ -252,10 +252,8 @@ overlay** shipped with C1.
 
 ## 4. C2 design decisions (settled, not yet implemented)
 
-Four questions came up scoping C2. Three are decided; the fourth is deliberately deferred until
-the comms clock is tuned, because before §1.2 it was not answerable by observation.
-
-**Decided.**
+Four questions came up scoping C2. All are now settled — the fourth was deliberately deferred
+until the comms clock was tuned, because before §1.2 it was not answerable by observation.
 
 - **Ack loss reuses the C1 belief-vs-truth shape.** Each bundle carries two independent states:
   what the *balloon* can know, and what the *server* knows. The balloon may only ever act on the
@@ -278,19 +276,47 @@ the comms clock is tuned, because before §1.2 it was not answerable by observat
   buffer, and keeps the counters interpretable. Free-running emission mostly buys queue-management
   complexity.
 
+  **Measured caveat, and an open question this raised.** Implementing it revealed that "one
+  outstanding" was quietly conflating two separate limits: how often a balloon *originates*, and
+  how many bundles it can *carry*. Capping carry at one gridlocks relaying — a balloon holding its
+  own bundle cannot relay anyone else's, so at `BUNDLE_INTERVAL_ROUNDS = 25` every balloon is
+  permanently full, 81k handoffs are blocked, and delivery sits at 29% despite 98% of the field
+  being genuinely grounded. Backing origination off to 200 rounds relieves it substantially:
+
+  | origination interval | delivered/originated | in flight (of 1200) | blocked handoffs |
+  |---|---|---|---|
+  | 25 rounds | 29.2% | 1171 | 81,069 |
+  | 100 rounds | 36.1% | 937 | 53,090 |
+  | 200 rounds | 41.5% | 559 | 25,563 |
+
+  41% is still poor for a mesh where 98% of balloons have a real route, and the residual cause is
+  the single carry slot rather than the origination rate. **Open: give relays a small queue
+  (2–4 slots) while keeping origination capped at one outstanding.** That separates the two limits
+  the design conflated, and should be measured before C2 is called done.
+
 - **A stale next-hop holds, it does not drop.** The believed `next_hop` will frequently no longer
   be a neighbour. The bundle waits in the balloon's buffer until its belief refreshes or the TTL
   expires. This is what makes the network delay-tolerant rather than merely lossy, and holding is
   what generates the interesting late deliveries.
 
-**Open.**
+- **A bundle advances one hop per duty-cycle slot**, not one per tick. It moves on the balloon's
+  existing beacon slot — a radio that is awake is awake for both — so `BEACON_INTERVAL_ROUNDS`
+  doubles as the forwarding rate and one hop costs 5 rounds (2 real seconds, 10 simulated
+  minutes).
 
-- **Does a bundle advance one hop per tick, or one hop per duty-cycle slot?** The duty-cycle
-  version (reusing the balloon's beacon slot, since a radio that is awake is awake for both) is
-  the coherent physical story and makes ack timeouts meaningful, since beliefs can then expire
-  mid-flight. The per-tick version delivers roughly 5× faster. Settle it by watching both once
-  `COMMS_EVERY_N_TICKS` is tuned — before §1.2 the two were 0.7 s and 3.5 s on screen, i.e.
-  indistinguishable.
+  This was left open until the clock was tuned, because the alternatives were indistinguishable on
+  screen. With `TIME_SCALE = 15` settled they are not, and the timing turns out to *derive* a
+  behavior the design had only asserted:
+
+  | path depth | one-way | round trip | vs. belief expiry (60 rounds) |
+  |---|---|---|---|
+  | 5 hops (healthy mesh) | 25 rounds | 50 rounds | fits |
+  | 14 hops (at percolation) | 70 rounds | 140 rounds | strands before the ack returns |
+
+  So **round-trip radio delivery completes within a belief lifetime only above the percolation
+  threshold.** Below it bundles strand and satellite fallback takes over — exactly what §1.1 says
+  should happen, now falling out of the numbers instead of being stipulated. Per-tick forwarding
+  would deliver everything in under a second and erase the distinction entirely.
 
 ## Suggested phasing
 
