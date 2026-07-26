@@ -4,7 +4,8 @@ Design notes (thinking, not yet an implementation plan) for making balloon verti
 physically real — buoyancy driven by ballast and lift gas, with a command uplink that acts through
 those finite actuators. Companion to `MESH_COMMS_DESIGN.md` (the comms half, which is independent
 of this one — see "Relationship to the comms track" below), `WEATHER_BACKEND_PLAN.md`, and
-`RUST_SIM_PLAN.md`.
+`RUST_SIM_PLAN.md`. `TIMING_MODEL.md` converts the simulation's clocks into seconds — relevant
+here because `TICK_DT_SECONDS` and `TIME_SCALE` set how fast the physics below actually runs.
 
 ## Where things stand today
 

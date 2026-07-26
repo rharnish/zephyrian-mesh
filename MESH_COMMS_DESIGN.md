@@ -125,6 +125,9 @@ rather than a fudge factor, and it is the parameter that makes belief lag truth.
 
 ### 1.2 The comms clock — why the protocol has its own
 
+*(For the whole timing model converted to seconds, plus the levers and their costs, see
+`TIMING_MODEL.md`. This section is the rationale; that document is the arithmetic.)*
+
 Comms constants are denominated in **rounds**, not ticks. A round is `COMMS_EVERY_N_TICKS`
 world ticks, exactly the pattern `LINK_UPDATE_EVERY_N_TICKS` already uses for link detection.
 
