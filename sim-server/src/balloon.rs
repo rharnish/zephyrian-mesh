@@ -24,9 +24,9 @@ pub struct Balloon {
     /// the derived `believed_hops` instead.
     #[serde(skip)]
     pub belief: Option<crate::beacon::RouteBelief>,
-    /// Next tick this balloon is awake to transmit (radio duty cycle).
+    /// Next comms round this balloon is awake to transmit (radio duty cycle).
     #[serde(skip)]
-    pub next_beacon_tick: u64,
+    pub next_beacon_round: u64,
     /// Hops to a tower as this balloon *believes*; `None` if it currently
     /// knows of no route. This is what the balloon would act on.
     pub believed_hops: Option<u32>,
@@ -45,7 +45,7 @@ impl Balloon {
             alt,
             target_alt: alt,
             belief: None,
-            next_beacon_tick: 0,
+            next_beacon_round: 0,
             believed_hops: None,
             grounded: false,
         }

@@ -14,13 +14,13 @@ pub struct Tower {
     /// tell a fresh wave from a stale one (see beacon.rs).
     #[serde(skip)]
     pub beacon_epoch: u64,
-    /// Next tick this tower transmits a beacon.
+    /// Next comms round this tower transmits a beacon.
     #[serde(skip)]
-    pub next_beacon_tick: u64,
+    pub next_beacon_round: u64,
 }
 
 impl Tower {
     pub fn new(id: u32, lon: f64, lat: f64, height_m: f64) -> Self {
-        Tower { id, lon, lat, height_m, beacon_epoch: 0, next_beacon_tick: 0 }
+        Tower { id, lon, lat, height_m, beacon_epoch: 0, next_beacon_round: 0 }
     }
 }

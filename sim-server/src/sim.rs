@@ -120,7 +120,7 @@ impl World {
             let alt = BALLOON_MIN_ALT + self.rng.gen_range(0.0..(BALLOON_MAX_ALT - BALLOON_MIN_ALT));
             let mut b = Balloon::new(self.next_balloon_id, lon, lat, alt);
             // Stagger duty-cycle phases so the fleet doesn't transmit in unison.
-            b.next_beacon_tick = crate::beacon::initial_slot(&mut self.rng);
+            b.next_beacon_round = crate::beacon::initial_slot(&mut self.rng);
             self.balloons.push(b);
             self.next_balloon_id += 1;
         }
@@ -275,17 +275,19 @@ impl World {
             None
         };
 
-        // Decentralized discovery. Runs every tick (not just link ticks) —
-        // beacon slots are per-node and jittered, so they don't align with the
-        // link-recompute cadence. Only visible balloons take part, since only
-        // they have edges.
-        crate::beacon::step(
-            &mut self.balloons[..self.visible_count],
-            &mut self.towers,
-            &self.adjacency,
-            self.tick_count,
-            &mut self.rng,
-        );
+        // Decentralized discovery, on the comms clock rather than the tick
+        // clock (see config::COMMS_EVERY_N_TICKS). Beacon slots are per-node
+        // and jittered, so they don't align with the link-recompute cadence.
+        // Only visible balloons take part, since only they have edges.
+        if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
+            crate::beacon::step(
+                &mut self.balloons[..self.visible_count],
+                &mut self.towers,
+                &self.adjacency,
+                self.tick_count / COMMS_EVERY_N_TICKS,
+                &mut self.rng,
+            );
+        }
 
         // Publish each balloon's *belief* and tally how far it has drifted
         // from truth. `stale` = believes it has a route but doesn't; `unaware`

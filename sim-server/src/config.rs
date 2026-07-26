@@ -19,19 +19,38 @@ pub const TARGET_DRIFT_RANGE: f64 = 4000.0; // meters
 // Link detection throttling: recompute/broadcast edges every N ticks.
 pub const LINK_UPDATE_EVERY_N_TICKS: u32 = 3;
 
+// --- Comms clock ------------------------------------------------------------
+//
+// The comms protocol steps on its own divisor of the tick clock, exactly like
+// LINK_UPDATE_EVERY_N_TICKS above. This exists because TICK_INTERVAL_MS has to
+// serve two unrelated jobs: it is the snapshot rate (which must stay fast — the
+// client sets balloon positions directly per snapshot, with no interpolation,
+// so anything much below 20 Hz visibly stutters) *and* it was the protocol
+// clock. Denominating comms in ticks therefore locked the whole protocol to
+// 1200x real time: the measured discovery arc of ~47 ticks crossed the planet
+// in 2.4 real seconds, and belief expiry in 3. Nothing was observable.
+//
+// With comms on its own clock the protocol's real-time pace is tunable without
+// touching physics smoothness. All the constants below are in *rounds*, not
+// ticks; one round is COMMS_EVERY_N_TICKS ticks.
+pub const COMMS_EVERY_N_TICKS: u64 = 8;
+
+/// Simulated seconds in one comms round — for reading the constants below as
+/// physical durations rather than counts.
+pub const COMMS_ROUND_SIM_SECONDS: f64 = COMMS_EVERY_N_TICKS as f64 * TICK_DT_SECONDS * TIME_SCALE;
+
 // --- Beacon-based connectivity discovery (see BALLOON_PHYSICS_COMMS_VISION.md
-// §3). One tick is TICK_DT_SECONDS * TIME_SCALE = 60 simulated seconds, so a
-// tick is a simulated minute and these constants read directly as minutes.
+// §3).
 //
 // What makes discovery slow here is radio *duty cycling*, not propagation
 // delay: links survive for hours of sim time (a balloon drifts ~0.4% of link
 // range per link round), so if nodes transmitted continuously every belief
 // would instantly equal ground truth and there'd be nothing to simulate. Real
 // HAB radios can't afford that — they wake, beacon, and sleep.
-/// Nominal gap between a node's beacon transmissions (~5 simulated minutes).
-pub const BEACON_INTERVAL_TICKS: u64 = 5;
+/// Nominal gap between a node's beacon transmissions, in comms rounds.
+pub const BEACON_INTERVAL_ROUNDS: u64 = 5;
 /// +/- jitter on that gap, so nodes don't fall into lockstep.
-pub const BEACON_JITTER_TICKS: u64 = 1;
+pub const BEACON_JITTER_ROUNDS: u64 = 1;
 /// Maximum age of the *news*, measured from when the tower emitted the wave —
 /// not from when this balloon last heard it repeated. Keying expiry on when a
 /// belief was last heard does not work: any relay of stale news renews its
@@ -41,10 +60,12 @@ pub const BEACON_JITTER_TICKS: u64 = 1;
 /// This is OSPF's LSA MaxAge idea. The floor on it is propagation time: a
 /// belief has to survive long enough to reach the far end of the mesh, or deep
 /// balloons expire it on arrival and can never hold a route. Measured
-/// convergence is ~45 ticks to reach 99% of a 1200-balloon field, so this must
-/// sit above that — it is ~9 beacon intervals, not the 3-4 a contact-recency
-/// timeout would want.
-pub const BELIEF_MAX_AGE_TICKS: u64 = 60;
+/// convergence is ~47 rounds to reach 99% of a 1200-balloon field, so this must
+/// sit above that — it is ~12 beacon intervals, not the 3-4 a contact-recency
+/// timeout would want. **Not a pacing dial**: lower it toward the convergence
+/// figure and deep balloons expire beliefs on arrival. Retune the comms clock
+/// instead.
+pub const BELIEF_MAX_AGE_ROUNDS: u64 = 60;
 /// Stop rebroadcasting past this depth. Paths this long only occur near the
 /// percolation threshold, where handing off to satellite is the right policy
 /// anyway (see mesh_depth.rs). Also bounds distance-vector count-to-infinity.

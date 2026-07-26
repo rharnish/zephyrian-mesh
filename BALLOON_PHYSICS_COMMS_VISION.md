@@ -186,14 +186,40 @@ transmit continuously on their power budget; they wake, beacon, and sleep. A lin
 geometrically and still carry nothing because both ends were asleep. That is a physical constraint
 rather than a fudge factor, and it is the parameter that makes belief lag truth.
 
-Proposed starting constants:
+### 3.2 The comms clock — why the protocol has its own
+
+Comms constants are denominated in **rounds**, not ticks. A round is `COMMS_EVERY_N_TICKS`
+world ticks, exactly the pattern `LINK_UPDATE_EVERY_N_TICKS` already uses for link detection.
+
+This is not cosmetic. `TICK_INTERVAL_MS` has to serve two unrelated jobs: it is the snapshot
+rate — which must stay near 20 Hz, since the client sets balloon positions directly per snapshot
+with no interpolation, so anything slower visibly stutters — and it *was* also the protocol clock.
+At `TIME_SCALE = 60` that pinned the whole protocol to **1200× real time**, and none of the
+behavior this design exists to show was observable: the measured discovery arc crossed the planet
+in **2.4 real seconds** and belief expiry took **3**. Choices that look weighty in simulated
+minutes (does a bundle advance one hop per tick or one per duty cycle?) were a choice between
+0.7 s and 3.5 s on screen — i.e. between invisible and invisible.
+
+Separating the clocks makes the protocol's real-time pace tunable without touching physics
+smoothness. Retune **`COMMS_EVERY_N_TICKS` for pacing**; if the simulated-time durations then look
+implausible, adjust `TIME_SCALE`, which trades balloon drift speed for them. Do **not** reach for
+`BELIEF_MAX_AGE_ROUNDS` — it is pinned from below by measured convergence (below), not free.
+
+Starting constants:
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Beacon interval | ~5 sim min, jittered ±20% | Duty cycle. ~1.7 link rounds, so the comms and topology clocks stay decoupled; jitter avoids lockstep rebroadcast collisions. |
-| Belief max age | ~60 sim min (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~45 ticks to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §3. |
+| Comms round | 8 ticks (~8 sim min, 0.4 real s) | Pacing dial. Puts the discovery arc at ~20 real seconds and belief expiry at ~24 — slow enough to watch a wavefront spread and a stale belief die. |
+| Beacon interval | 5 rounds, jittered ±20% | Duty cycle. Decoupled from the link-recompute cadence so the comms and topology clocks don't beat against each other; jitter avoids lockstep rebroadcast collisions. |
+| Belief max age | 60 rounds (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~50 rounds to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §3. |
 | Bundle TTL / max hops | ~20 | Covers p95 depth at operational densities; deliberately truncates the critical-regime tails, where handing off to satellite is the correct policy anyway. |
 | Ack timeout → satellite | a few beacon intervals | Must exceed a plausible round trip (2× path traversal), or satellite will fire while the ack is still legitimately in flight. |
+
+One consequence worth noting: at 8 ticks per round, topology churn is no longer negligible over a
+belief's lifetime. `beacon_convergence.rs` now shows a persistent 0.4–1.1% stale fraction even in
+its nominally "frozen" zero-wind phase, where it used to read exactly 0.0%. That is the altitude
+random walk breaking links faster than beliefs expire — real behavior surfacing at a realistic
+clock, not a regression.
 
 ## 4. Tamper-evidence — real crypto, verified on demand
 
