@@ -1,0 +1,40 @@
+=== RELAY_QUEUE_CAPACITY = 1  (TOWER_CONTACT_BUNDLES=4) ===
+  4.12     6.09       98.8%        4159     4668        582     178793       37.2%       39.2%
+  slot budget per bundle: 30  |  held-bundle wake slots: 227894  |  stall rate 81.8%
+    moved   41495 (18.2%)   no belief    7076 ( 3.1%)   stale next hop     524 ( 0.2%)
+    tower gone    6 ( 0.0%)   blocked    178793 (78.5%)
+    tower-adjacent balloons 15.0  ->  delivery ceiling 12.00/round  |  originated 5.59/round  |  delivered 2.08/round  (17% of ceiling)
+OK: every bundle resolved, none leaked.
+
+=== RELAY_QUEUE_CAPACITY = 2  (TOWER_CONTACT_BUNDLES=4) ===
+  4.12     6.34       98.8%        8221     2334        433      54195       69.7%       72.3%
+  slot budget per bundle: 30  |  held-bundle wake slots: 120627  |  stall rate 48.8%
+    moved   61721 (51.2%)   no belief    4445 ( 3.7%)   stale next hop     252 ( 0.2%)
+    tower gone   14 ( 0.0%)   blocked     54195 (44.9%)
+    tower-adjacent balloons 24.6  ->  delivery ceiling 19.64/round  |  originated 5.90/round  |  delivered 4.11/round  (21% of ceiling)
+OK: every bundle resolved, none leaked.
+
+=== RELAY_QUEUE_CAPACITY = 4  (TOWER_CONTACT_BUNDLES=4) ===
+  4.12     6.20       97.7%        6809     3773        552      29808       57.4%       60.2%
+  slot budget per bundle: 30  |  held-bundle wake slots: 108431  |  stall rate 33.2%
+    moved   72439 (66.8%)   no belief    5873 ( 5.4%)   stale next hop     310 ( 0.3%)
+    tower gone    1 ( 0.0%)   blocked     29808 (27.5%)
+    tower-adjacent balloons 18.1  ->  delivery ceiling 14.50/round  |  originated 5.93/round  |  delivered 3.40/round  (23% of ceiling)
+OK: every bundle resolved, none leaked.
+
+=== RELAY_QUEUE_CAPACITY = 8  (TOWER_CONTACT_BUNDLES=4) ===
+  4.12     6.35       97.5%        9179     1942        415       6188       77.4%       80.2%
+  slot budget per bundle: 30  |  held-bundle wake slots: 78813  |  stall rate 16.1%
+    moved   66118 (83.9%)   no belief    6338 ( 8.0%)   stale next hop     160 ( 0.2%)
+    tower gone    9 ( 0.0%)   blocked      6188 ( 7.9%)
+    tower-adjacent balloons 25.8  ->  delivery ceiling 20.68/round  |  originated 5.93/round  |  delivered 4.59/round  (22% of ceiling)
+OK: every bundle resolved, none leaked.
+
+=== RELAY_QUEUE_CAPACITY = 16  (TOWER_CONTACT_BUNDLES=4) ===
+  4.12     6.29       98.8%        7291     3502        535       2325       61.4%       64.3%
+  slot budget per bundle: 30  |  held-bundle wake slots: 83640  |  stall rate 10.4%
+    moved   74968 (89.6%)   no belief    6140 ( 7.3%)   stale next hop     193 ( 0.2%)
+    tower gone   14 ( 0.0%)   blocked      2325 ( 2.8%)
+    tower-adjacent balloons 23.5  ->  delivery ceiling 18.81/round  |  originated 5.94/round  |  delivered 3.65/round  (19% of ceiling)
+OK: every bundle resolved, none leaked.
+

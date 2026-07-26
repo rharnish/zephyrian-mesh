@@ -1,0 +1,10 @@
+# ./target/release/bundle_delivery 1200 4000 4.12   (FRESHEST-first, shipped)
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+  4.12     6.00       99.2%       11062    10787        673      36019       46.6%       48.0%
+  slot budget per bundle: 30  |  held-bundle wake slots: 183925  |  stall rate 22.8%
+    moved  142070 (77.2%)   no belief 5370 (2.9%)   stale next hop 446 (0.2%)
+    tower gone 20 (0.0%)   blocked 36019 (19.6%)
+    mean believed depth 7.42 hops | delivered at 4.63 hops | expired after 6.56 hops
+  belief:    1:16855 2:46867 3:66383 4:85180 5:96129 6:101089 7:104527 8:97165 9:85459 10:67138 11:52734 12:40590 13:30726 14:22170 15:13792 16:9212 17:5949 18:3394 19:1834 20:789
+  delivered: 0:409 1:1099 2:1474 3:1589 4:1540 5:1271 6:1069 7:804 8:584 9:405 10:267 11:199 12:133 13:104 14:63 15:26 16:18 17:4 18:2 19:2
+  expired:   0:151 1:72 2:370 3:875 4:1299 5:1629 6:1460 7:1286 8:1031 9:820 10:625 11:471 12:290 13:201 14:95 15:49 16:35 17:16 18:9 19:3

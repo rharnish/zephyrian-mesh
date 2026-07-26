@@ -1,0 +1,132 @@
+=== BUNDLE_INTERVAL_ROUNDS = 50 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 50  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.03       98.6%        6297    30028       2798     120644       15.0%       16.1%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 262955  |  stall rate 49.2%
+    moved  133593 (50.8%)   no belief    8086 ( 3.1%)   stale next hop     625 ( 0.2%)
+    tower gone    7 ( 0.0%)   blocked    120644 (45.9%)
+    tower-adjacent balloons 19.0  ->  delivery ceiling 3.81/round  |  originated 20.97/round  |  delivered 3.15/round  (83% of ceiling)
+    mean believed depth 7.67 hops  |  delivered at 1.86 hops  |  expired after 3.36 hops
+    belief-depth histogram: 1:7585 2:29573 3:40189 4:44291 5:48505 6:45242 7:42768 8:33208 9:28231 10:25714 11:25940 12:26373 13:23130 14:17011 15:11389 16:8333 17:5263 18:3190 19:1655 20:815
+    delivered-hops histogram: 0:673 1:2145 2:1863 3:942 4:442 5:155 6:51 7:17 8:5 9:3 10:1
+    expired-hops histogram: 0:328 1:2199 2:6848 3:8310 4:6142 5:3482 6:1637 7:699 8:246 9:90 10:33 11:10 12:3 17:1
+
+
+--- removing every tower: every bundle must resolve ---
+
+=== BUNDLE_INTERVAL_ROUNDS = 100 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 100  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.60       98.9%        6185    14155       1498      52089       26.6%       28.4%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 163125  |  stall rate 36.0%
+    moved  104437 (64.0%)   no belief    6298 ( 3.9%)   stale next hop     290 ( 0.2%)
+    tower gone   11 ( 0.0%)   blocked     52089 (31.9%)
+    tower-adjacent balloons 23.8  ->  delivery ceiling 4.75/round  |  originated 11.63/round  |  delivered 3.09/round  (65% of ceiling)
+    mean believed depth 7.80 hops  |  delivered at 3.05 hops  |  expired after 4.90 hops
+    belief-depth histogram: 1:9430 2:26397 3:34419 4:32768 5:42931 6:50395 7:47739 8:44438 9:39450 10:30628 11:25447 12:21855 13:17034 14:13002 15:12221 16:9570 17:6101 18:3424 19:1800 20:831
+    delivered-hops histogram: 0:446 1:1189 2:1359 3:991 4:823 5:521 6:342 7:249 8:158 9:66 10:28 11:9 12:3 13:1
+    expired-hops histogram: 0:213 1:364 2:1275 3:2237 4:2655 5:2383 6:1869 7:1296 8:824 9:507 10:264 11:141 12:74 13:33 14:12 15:7 16:1
+
+
+--- removing every tower: every bundle must resolve ---
+
+=== BUNDLE_INTERVAL_ROUNDS = 200 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 200  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.17       98.2%        5669     4998        649      16053       47.7%       50.4%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 91491  |  stall rate 24.3%
+    moved   69235 (75.7%)   no belief    5945 ( 6.5%)   stale next hop     254 ( 0.3%)
+    tower gone    4 ( 0.0%)   blocked     16053 (17.5%)
+    tower-adjacent balloons 24.8  ->  delivery ceiling 4.96/round  |  originated 5.94/round  |  delivered 2.83/round  (57% of ceiling)
+    mean believed depth 7.98 hops  |  delivered at 4.08 hops  |  expired after 7.00 hops
+    belief-depth histogram: 1:9958 2:26060 3:47223 4:48896 5:44465 6:37608 7:37198 8:31112 9:28202 10:24709 11:20856 12:19499 13:18946 14:18157 15:15784 16:12549 17:9959 18:7568 19:5227 20:3301
+    delivered-hops histogram: 0:243 1:592 2:1051 3:1010 4:757 5:589 6:466 7:328 8:205 9:137 10:93 11:60 12:45 13:31 14:29 15:17 16:8 17:4 18:3 19:1
+    expired-hops histogram: 0:175 1:51 2:151 3:350 4:481 5:515 6:588 7:609 8:577 9:410 10:338 11:233 12:184 13:129 14:74 15:61 16:31 17:19 18:11 19:11
+
+
+--- removing every tower: every bundle must resolve ---
+
+=== BUNDLE_INTERVAL_ROUNDS = 400 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 400  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.09       99.2%        4716      874        211       4888       78.8%       81.7%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 43874  |  stall rate 14.8%
+    moved   37393 (85.2%)   no belief    1446 ( 3.3%)   stale next hop     144 ( 0.3%)
+    tower gone    3 ( 0.0%)   blocked      4888 (11.1%)
+    tower-adjacent balloons 28.6  ->  delivery ceiling 5.72/round  |  originated 2.99/round  |  delivered 2.36/round  (41% of ceiling)
+    mean believed depth 6.72 hops  |  delivered at 4.98 hops  |  expired after 8.20 hops
+    belief-depth histogram: 1:11405 2:36361 3:47001 4:57444 5:56079 6:54590 7:45202 8:37986 9:31067 10:23443 11:17311 12:13420 13:10489 14:8759 15:6407 16:5042 17:4198 18:3089 19:2245 20:1107
+    delivered-hops histogram: 0:143 1:434 2:545 3:649 4:640 5:573 6:445 7:367 8:276 9:194 10:141 11:92 12:64 13:54 14:40 15:25 16:17 17:11 18:3 19:3
+    expired-hops histogram: 0:46 1:6 2:23 3:45 4:54 5:67 6:90 7:74 8:78 9:76 10:72 11:45 12:40 13:38 14:29 15:39 16:20 17:20 18:8 19:4
+
+
+--- removing every tower: every bundle must resolve ---
+
+=== BUNDLE_INTERVAL_ROUNDS = 800 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 800  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.15       96.4%        2678      129         74        333       89.7%       91.9%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 24855  |  stall rate 10.6%
+    moved   22219 (89.4%)   no belief    2195 ( 8.8%)   stale next hop     108 ( 0.4%)
+    tower gone    0 ( 0.0%)   blocked       333 ( 1.3%)
+    tower-adjacent balloons 21.0  ->  delivery ceiling 4.19/round  |  originated 1.49/round  |  delivered 1.34/round  (32% of ceiling)
+    mean believed depth 7.79 hops  |  delivered at 6.45 hops  |  expired after 6.61 hops
+    belief-depth histogram: 1:8333 2:26975 3:43260 4:51280 5:49690 6:44046 7:42211 8:30741 9:23897 10:20184 11:19118 12:18253 13:16565 14:16605 15:13633 16:11396 17:8889 18:6782 19:5518 20:4318
+    delivered-hops histogram: 0:52 1:167 2:260 3:303 4:307 5:281 6:242 7:180 8:138 9:115 10:122 11:94 12:97 13:87 14:61 15:66 16:45 17:29 18:18 19:14
+    expired-hops histogram: 0:64 1:2 3:1 4:1 5:1 6:1 7:1 8:1 9:1 10:2 11:5 12:5 13:6 14:7 15:13 16:7 17:8 18:2 19:1
+
+
+--- removing every tower: every bundle must resolve ---
+
+=== BUNDLE_INTERVAL_ROUNDS = 1600 ===
+route selection: FRESHEST-first (shipped)
+n=1200  rounds=2000  queue=8  originate every 1600  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  4.12     6.21       98.4%        1374       48         27          0       91.6%       93.3%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 12542  |  stall rate 12.6%
+    moved   10967 (87.4%)   no belief    1537 (12.3%)   stale next hop      36 ( 0.3%)
+    tower gone    2 ( 0.0%)   blocked         0 ( 0.0%)
+    tower-adjacent balloons 23.1  ->  delivery ceiling 4.62/round  |  originated 0.75/round  |  delivered 0.69/round  (15% of ceiling)
+    mean believed depth 7.69 hops  |  delivered at 6.52 hops  |  expired after 1.06 hops
+    belief-depth histogram: 1:9205 2:30992 3:40686 4:41066 5:51153 6:41780 7:39264 8:34444 9:29262 10:30853 11:23973 12:17794 13:14289 14:10890 15:9110 16:7917 17:7146 18:7001 19:5653 20:4737
+    delivered-hops histogram: 0:28 1:99 2:126 3:134 4:163 5:128 6:117 7:96 8:90 9:73 10:72 11:54 12:44 13:31 14:23 15:32 16:19 17:17 18:16 19:12
+    expired-hops histogram: 0:41 1:1 2:1 6:1 9:2 11:1 13:1
+
+
+--- removing every tower: every bundle must resolve ---
+

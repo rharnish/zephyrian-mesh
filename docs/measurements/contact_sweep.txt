@@ -1,0 +1,28 @@
+=== TOWER_CONTACT_BUNDLES = 1 ===
+  4.12     6.05       97.0%        5769     4935        615      14696       48.6%       51.2%
+  slot budget per bundle: 30  |  held-bundle wake slots: 91552  |  stall rate 24.6%
+    tower-adjacent balloons 29.7  ->  delivery ceiling 5.95/round  |  originated 5.94/round  |  delivered 2.88/round  (49% of ceiling)
+    mean believed depth 7.80 hops  |  delivered at 4.27 hops  |  expired after 6.77 hops
+OK: every bundle resolved, none leaked.
+
+=== TOWER_CONTACT_BUNDLES = 2 ===
+  4.12     6.08       98.6%        6870     3896        563      14182       57.8%       60.7%
+  slot budget per bundle: 30  |  held-bundle wake slots: 89051  |  stall rate 24.6%
+    tower-adjacent balloons 18.6  ->  delivery ceiling 7.46/round  |  originated 5.94/round  |  delivered 3.44/round  (46% of ceiling)
+    mean believed depth 8.00 hops  |  delivered at 4.82 hops  |  expired after 6.28 hops
+OK: every bundle resolved, none leaked.
+
+=== TOWER_CONTACT_BUNDLES = 4 ===
+  4.12     5.98       98.4%        7642     3206        526      10541       64.4%       67.4%
+  slot budget per bundle: 30  |  held-bundle wake slots: 88411  |  stall rate 18.8%
+    tower-adjacent balloons 20.7  ->  delivery ceiling 16.59/round  |  originated 5.94/round  |  delivered 3.82/round  (23% of ceiling)
+    mean believed depth 7.69 hops  |  delivered at 5.04 hops  |  expired after 7.47 hops
+OK: every bundle resolved, none leaked.
+
+=== TOWER_CONTACT_BUNDLES = 8 ===
+  4.12     6.16       98.2%        7494     3364        530      10616       63.1%       66.0%
+  slot budget per bundle: 30  |  held-bundle wake slots: 89922  |  stall rate 20.2%
+    tower-adjacent balloons 22.1  ->  delivery ceiling 35.40/round  |  originated 5.94/round  |  delivered 3.75/round  (11% of ceiling)
+    mean believed depth 7.90 hops  |  delivered at 5.19 hops  |  expired after 6.96 hops
+OK: every bundle resolved, none leaked.
+

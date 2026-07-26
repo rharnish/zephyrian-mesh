@@ -308,6 +308,67 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   hundred bytes, and the platform's real energy constraint limits *transmitting*, not *holding*,
   which is already modelled as the duty cycle.
 
+  **Closed: the limit is the last hop, not the mesh.** Full write-up with plots in
+  `BUNDLE_DELIVERY_REPORT.html`; raw output in `docs/measurements/`. Instrumenting every
+  held-bundle wake slot by stall cause, and every bundle by hop count, ruled out the remaining
+  mesh-side explanations and found the real one:
+
+  - *Censoring* is real but small. `delivered/originated` counts in-flight bundles as failures;
+    measuring against resolved bundles adds only 1.4–3.0 points. Both are now reported.
+  - *Path inflation is not happening.* The suspicion that freshness-first `should_adopt` sends
+    bundles the long way round is wrong — believed depth tracks `bin/mesh_depth`'s omniscient
+    median within a hop. An ablation routing on hop count first (`ablation::prefer_nearer`)
+    helps *below* percolation (32.1% → 39.3%) and **hurts above it** (56.0% → 50.5%), which is
+    where the mesh ships. Not a fix.
+  - *Stale next hops are almost never exercised* — under 0.3% of slots at any density. Links
+    outlive beliefs comfortably.
+  - **The ground link is saturated.** A tower at 30 m has a 23 km horizon, so the tower–balloon
+    link reaches ~490 km against 940 km balloon-to-balloon. Only **~23 of 1200 balloons** can hear
+    a tower at any moment, and each passes one bundle per duty-cycle slot — a ceiling of ~4.7
+    deliveries/round. Sweeping `BUNDLE_INTERVAL_ROUNDS` from 50 to 1600 moves offered load 28×
+    while **delivery stays pinned near 3.1/round**; completion moves 16% → 93% purely because the
+    denominator changes. Delivery throughput is flat against load, which is why three rounds of
+    tuning queues, TTLs and route selection changed nothing.
+
+  Below the percolation threshold this inverts: the mesh delivers only 27% of its last-hop ceiling
+  because balloons hold no route at all. The crossover *is* the percolation threshold — below it
+  the mesh is the constraint, above it the ground link is.
+
+  **Consequences.** The levers that matter all act on the last hop: more towers, taller antennas
+  (horizon goes as √height, and 30 m is the small term), and — highest leverage, zero physical
+  cost — letting a balloon in tower range drain its queue rather than dribble one bundle per duty
+  cycle. Satellite fallback now has a measured justification too: it is not a nicety for stranded
+  bundles, it is the release valve for a structurally saturated ground link.
+
+- **Tower contacts drain a window; balloon-to-balloon handoffs do not.** `TOWER_CONTACT_BUNDLES`
+  (= 4) is the acted-on consequence of the above. One transmission per wake slot is the right rule
+  for a *beacon* — a broadcast to nobody in particular, rationed by the duty cycle — but a tower
+  contact is a point-to-point link to a mains-powered station with a real antenna, and spending a
+  whole wake's airtime on it is both physically reasonable and the only lever that touches the
+  measured bottleneck. Setting the constant to 1 reproduces the old behaviour exactly, which is how
+  the comparison was made:
+
+  | bundles per tower contact | 1 (old) | 2 | **4** | 8 |
+  |---|---|---|---|---|
+  | completion | 51.2% | 60.7% | **67.4%** | 66.0% |
+  | delivered/round | 2.88 | 3.44 | 3.82 | 3.75 |
+
+  Re-running the `RELAY_QUEUE_CAPACITY` sweep under this rule confirms 8 is still reasonable, but
+  for a narrower reason than before: blocked handoffs fall monotonically (78.5% → 44.9% → 27.5% →
+  7.9% → 2.8% of slots for 1/2/4/8/16), while *completion* comes out non-monotone because it is
+  dominated by how many balloons happened to be in tower range each run — that count ranged 15.0
+  to 25.8 and correlates with delivered/round at **r = 0.94**. At single-seed this sweep can
+  resolve "1 is too small" and nothing finer. A note for future sweeps: **normalise by the
+  tower-adjacent population, or the last hop's variance will masquerade as whatever is being
+  tuned.**
+
+  **+16 points, then saturation — and the saturation is the informative part.** Past a window of 4
+  the last-hop ceiling (16.6/round) overtakes offered load (5.9/round), so the last hop stops being
+  the binding constraint and the limit moves back into the mesh, to bundles expiring before they
+  ever reach a tower-adjacent balloon. 8 buys nothing measurable and claims more airtime, so 4
+  ships. **The remaining loss is now a different problem from the one investigated here**, and it
+  is the one satellite fallback addresses.
+
 - **A stale next-hop holds, it does not drop.** The believed `next_hop` will frequently no longer
   be a neighbour. The bundle waits in the balloon's buffer until its belief refreshes or the TTL
   expires. This is what makes the network delay-tolerant rather than merely lossy, and holding is

@@ -1,0 +1,9 @@
+=== coeff 3.00 ===
+  3.00     3.35       17.2%        1516     9570        785        546       12.8%       13.7%
+    tower-adjacent balloons 14.1  ->  delivery ceiling 2.83/round  |  originated 5.94/round  |  delivered 0.76/round  (27% of ceiling)
+=== coeff 3.57 ===
+  3.57     4.74       80.9%        2620     8175        794      12842       22.1%       23.7%
+    tower-adjacent balloons 10.1  ->  delivery ceiling 2.01/round  |  originated 5.94/round  |  delivered 1.31/round  (65% of ceiling)
+=== coeff 5.00 ===
+  5.00     8.76       99.9%        7179     3570        594      19366       60.5%       63.6%
+    tower-adjacent balloons 30.0  ->  delivery ceiling 6.00/round  |  originated 5.94/round  |  delivered 3.59/round  (60% of ceiling)

@@ -1,0 +1,80 @@
+route selection: NEAREST-first (ablation)
+n=1200  rounds=2000  queue=8  originate every 200  1 hop = 5 rounds (2.0 real s, 10 sim min)
+
+--- delivery vs. mesh density ---
+
+ coeff   degree   grounded%   delivered  expired  in-flight    blocked  deliv/orig  completion
+------------------------------------------------------------------------------------------------
+  2.50     2.20        5.6%         656    10354        876          0        5.5%        6.0%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 321425  |  stall rate 99.3%
+    moved    2244 ( 0.7%)   no belief  319037 (99.3%)   stale next hop     109 ( 0.0%)
+    tower gone   35 ( 0.0%)   blocked         0 ( 0.0%)
+    mean believed depth 3.21 hops  |  delivered at 2.27 hops  |  expired after 0.01 hops
+    belief-depth histogram: 1:3613 2:5512 3:7405 4:4738 5:2202 6:1218 7:578 8:259 9:283 10:5
+    delivered-hops histogram: 0:88 1:137 2:186 3:120 4:59 5:32 6:21 7:6 8:7
+    expired-hops histogram: 0:10323 1:7 2:5 3:12 4:4 6:3
+
+  3.00     3.20       11.0%        1169     9855        825        576        9.9%       10.6%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 307712  |  stall rate 97.5%
+    moved    7658 ( 2.5%)   no belief  299181 (97.2%)   stale next hop     286 ( 0.1%)
+    tower gone   11 ( 0.0%)   blocked       576 ( 0.2%)
+    mean believed depth 5.50 hops  |  delivered at 4.22 hops  |  expired after 0.14 hops
+    belief-depth histogram: 1:2068 2:5053 3:9646 4:6160 5:7578 6:4390 7:4059 8:2761 9:2979 10:1529 11:1366 12:995 13:701 14:289 15:130 16:136 17:199 18:181 19:108 20:89
+    delivered-hops histogram: 0:50 1:121 2:233 3:148 4:184 5:105 6:91 7:65 8:61 9:33 10:33 11:25 12:13 13:6 14:1
+    expired-hops histogram: 0:9553 1:30 2:50 3:39 4:56 5:36 6:31 7:17 8:10 9:8 10:4 11:8 12:6 13:1 14:1 15:2 16:2 17:1
+
+  3.57     4.71       92.2%        4379     6524        753      11881       36.9%       39.3%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 126855  |  stall rate 45.9%
+    moved   68610 (54.1%)   no belief   45183 (35.6%)   stale next hop    1140 ( 0.9%)
+    tower gone   41 ( 0.0%)   blocked     11881 ( 9.4%)
+    mean believed depth 9.17 hops  |  delivered at 4.54 hops  |  expired after 6.17 hops
+    belief-depth histogram: 1:7395 2:21694 3:23437 4:27999 5:32609 6:30016 7:28867 8:28830 9:28100 10:24354 11:20565 12:19867 13:19087 14:17058 15:16095 16:16228 17:13425 18:12617 19:8316 20:6127
+    delivered-hops histogram: 0:182 1:526 2:533 3:596 4:609 5:464 6:400 7:331 8:293 9:174 10:105 11:57 12:45 13:21 14:27 15:10 16:4 18:2
+    expired-hops histogram: 0:1343 1:26 2:96 3:239 4:351 5:518 6:613 7:656 8:638 9:605 10:517 11:344 12:256 13:145 14:111 15:43 16:13 17:5 18:4 19:1
+
+  4.12     6.41       97.5%        5637     5396        688      18042       47.5%       50.5%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 95046  |  stall rate 34.1%
+    moved   62601 (65.9%)   no belief   12861 (13.5%)   stale next hop    1485 ( 1.6%)
+    tower gone   57 ( 0.1%)   blocked     18042 (19.0%)
+    mean believed depth 7.01 hops  |  delivered at 3.97 hops  |  expired after 5.80 hops
+    belief-depth histogram: 1:8886 2:38157 3:45432 4:46318 5:47344 6:43301 7:44132 8:36200 9:33026 10:27316 11:23718 12:17751 13:13814 14:10243 15:5320 16:4442 17:4278 18:3272 19:1148 20:622
+    delivered-hops histogram: 0:214 1:878 2:923 3:795 4:762 5:617 6:521 7:291 8:210 9:186 10:126 11:58 12:40 13:10 14:5 18:1
+    expired-hops histogram: 0:360 1:141 2:291 3:440 4:590 5:685 6:697 7:678 8:489 9:388 10:261 11:173 12:105 13:38 14:29 15:22 16:5 17:2 18:2
+
+  5.00     9.20       99.9%        8232     3097        520      20014       69.3%       72.5%
+
+  slot budget per bundle: 30  |  held-bundle wake slots: 72425  |  stall rate 30.4%
+    moved   50444 (69.6%)   no belief     530 ( 0.7%)   stale next hop    1251 ( 1.7%)
+    tower gone  186 ( 0.3%)   blocked     20014 (27.6%)
+    mean believed depth 4.82 hops  |  delivered at 3.34 hops  |  expired after 4.29 hops
+    belief-depth histogram: 1:12698 2:54711 3:82008 4:87900 5:76108 6:61705 7:41168 8:26862 9:18964 10:10945 11:4258 12:77
+    delivered-hops histogram: 0:305 1:1263 2:1711 3:1565 4:1325 5:842 6:536 7:303 8:219 9:110 10:50 11:3
+    expired-hops histogram: 0:35 1:118 2:392 3:620 4:663 5:488 6:346 7:219 8:130 9:78 10:8
+
+
+--- removing every tower: every bundle must resolve ---
+
+at tower removal: 659 in flight
+
+  round   in-flight    stranded   resolved
+     50         496          15      11369
+    100         275         275      11590
+    150           0           0      11865
+    200           0           0      11865
+    250           0           0      11865
+    300           0           0      11865
+    350           0           0      11865
+    400           0           0      11865
+
+Originated 11865 -> resolved 11865 (delivered 5694, loop 73, ttl 0, expired 6098)
+Blocked handoffs (retried, not lost): 18860
+Delivered while towers existed: 5694 (none may be added after removal: 0)
+
+Conservation check: originated - resolved - in_flight = 0 (must be 0)
+Bundles still in flight with no towers left: 0 (must be 0)
+
+OK: every bundle resolved, none leaked.

@@ -1,0 +1,885 @@
+<title>The last hop: why bundle delivery caps where it does</title>
+<style>
+  :root {
+    --paper: #F6F4F8;
+    --raised: #FFFFFF;
+    --ink: #191526;
+    --mid: #6E6880;
+    --hair: #DCD7E4;
+    --a: #5B4B9E;
+    --a-soft: #E4DFF1;
+    --b: #1D8A8A;
+    --loss: #A8452F;
+    --warn: #9A6F16;
+    --ok: #3F7A42;
+
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --measure: 68ch;
+    --wide: 1000px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #131020; --raised: #1C1830; --ink: #E8E4F2; --mid: #9C95B0;
+      --hair: #332C48; --a: #AB9CE9; --a-soft: #2C2550; --b: #4FC7C0;
+      --loss: #E0806A; --warn: #DCB558; --ok: #7FB584;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #131020; --raised: #1C1830; --ink: #E8E4F2; --mid: #9C95B0;
+    --hair: #332C48; --a: #AB9CE9; --a-soft: #2C2550; --b: #4FC7C0;
+    --loss: #E0806A; --warn: #DCB558; --ok: #7FB584;
+  }
+  :root[data-theme="light"] {
+    --paper: #F6F4F8; --raised: #FFFFFF; --ink: #191526; --mid: #6E6880;
+    --hair: #DCD7E4; --a: #5B4B9E; --a-soft: #E4DFF1; --b: #1D8A8A;
+    --loss: #A8452F; --warn: #9A6F16; --ok: #3F7A42;
+  }
+
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--sans);
+    font-size: 17px; line-height: 1.65; padding: 0 20px 110px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .col { max-width: var(--measure); margin-inline: auto; }
+
+  header.masthead {
+    max-width: var(--wide); margin: 0 auto; padding: 66px 0 26px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--mid);
+  }
+  h1 {
+    font-family: var(--serif); font-size: clamp(2rem, 5vw, 3rem); line-height: 1.08;
+    font-weight: 600; letter-spacing: -0.015em; text-wrap: balance; margin: 14px 0 0;
+  }
+  .standfirst {
+    max-width: 60ch; margin-top: 18px; font-size: 1.08rem; color: var(--mid);
+    text-wrap: pretty;
+  }
+  .runmeta {
+    display: flex; flex-wrap: wrap; gap: 6px 26px; margin-top: 24px;
+    font-family: var(--mono); font-size: 12px; color: var(--mid);
+    font-variant-numeric: tabular-nums;
+  }
+  .runmeta b { color: var(--ink); font-weight: 600; }
+
+  .verdicts {
+    max-width: var(--wide); margin: 32px auto 0; display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+    gap: 1px; background: var(--hair); border: 1px solid var(--hair);
+  }
+  .verdict { background: var(--raised); padding: 20px 22px 22px; }
+  .verdict .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; display: inline-block; padding: 3px 7px; border-radius: 2px;
+    font-weight: 600;
+  }
+  .tag.wrong { background: var(--loss); color: #fff; }
+  .tag.right { background: var(--a); color: #fff; }
+  .tag.part  { background: var(--warn); color: #fff; }
+  .tag.fixed { background: var(--ok); color: #fff; }
+  .verdict h3 {
+    font-family: var(--serif); font-size: 1.14rem; font-weight: 600;
+    margin: 12px 0 6px; line-height: 1.28;
+  }
+  .verdict p { font-size: 0.92rem; color: var(--mid); margin: 0; }
+
+  section { margin-top: 66px; }
+  .secnum {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    color: var(--a); text-transform: uppercase; display: block; margin-bottom: 10px;
+  }
+  h2 {
+    font-family: var(--serif); font-size: 1.8rem; font-weight: 600;
+    letter-spacing: -0.01em; margin: 0 0 14px; text-wrap: balance;
+  }
+  h3.sub { font-size: 1rem; font-weight: 650; margin: 32px 0 8px; }
+  p { text-wrap: pretty; margin: 1em 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--a-soft);
+    padding: 1px 5px; border-radius: 3px;
+  }
+  a { color: var(--a); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--a); outline-offset: 3px; }
+
+  figure { margin: 38px auto; max-width: var(--wide); }
+  .figframe {
+    background: var(--raised); border: 1px solid var(--hair);
+    padding: 20px 22px 12px; overflow-x: auto;
+  }
+  figcaption {
+    font-size: 0.88rem; color: var(--mid); margin-top: 12px; max-width: 78ch;
+  }
+  figcaption b { color: var(--ink); font-weight: 650; }
+  .figtitle {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--mid); margin-bottom: 14px;
+  }
+  svg { display: block; max-width: 100%; height: auto; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--mono);
+    font-size: 11.5px; color: var(--mid); margin-top: 12px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+
+  .tablewrap { overflow-x: auto; margin: 26px auto; max-width: var(--wide); }
+  table {
+    border-collapse: collapse; font-family: var(--mono); font-size: 12.5px;
+    font-variant-numeric: tabular-nums; width: 100%; min-width: 580px;
+  }
+  th, td { padding: 7px 13px; text-align: right; border-bottom: 1px solid var(--hair); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th {
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--mid); border-bottom: 1.5px solid var(--ink); font-weight: 600;
+  }
+  tbody tr.hilite td { background: var(--a-soft); font-weight: 600; }
+  caption {
+    caption-side: bottom; text-align: left; font-family: var(--sans);
+    font-size: 0.86rem; color: var(--mid); padding-top: 10px;
+  }
+
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    background: var(--raised); border: 1px solid var(--hair);
+    border-left: 3px solid var(--a); padding: 14px 16px; overflow-x: auto;
+    max-width: var(--wide); margin: 24px auto;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .callout {
+    border-left: 3px solid var(--warn); background: var(--raised);
+    padding: 15px 20px; margin: 28px auto; max-width: var(--measure);
+  }
+  .callout p { margin: 0; font-size: 0.95rem; }
+  .callout .lbl {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 6px;
+    font-weight: 600;
+  }
+  ul.tight { padding-left: 1.15em; }
+  ul.tight li { margin: 0.5em 0; }
+
+  footer {
+    max-width: var(--wide); margin: 86px auto 0; padding-top: 20px;
+    border-top: 1px solid var(--hair); font-family: var(--mono);
+    font-size: 11.5px; color: var(--mid); line-height: 1.8;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    figure { animation: rise 0.45s ease-out both; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+
+<header class="masthead">
+  <div class="eyebrow">cesium-dirigible &middot; mesh comms &middot; C2 investigation</div>
+  <h1>The last hop</h1>
+  <p class="standfirst">
+    Telemetry delivery sat stubbornly near 40&ndash;50% in a mesh where almost every balloon
+    held a genuine route to the ground. Two plausible explanations turned out to be wrong.
+    The real limit is about two dozen balloons &mdash; and widening what they do in a single
+    tower contact recovers 16 points.
+  </p>
+  <div class="runmeta">
+    <span><b>1200</b> balloons</span>
+    <span><b>12</b> ground towers</span>
+    <span><b>2000&ndash;4000</b> comms rounds/run</span>
+    <span>duty cycle <b>5</b> rounds</span>
+    <span>bundle TTL <b>150</b> rounds</span>
+    <span>queue <b>8</b></span>
+  </div>
+</header>
+
+<div class="verdicts">
+  <div class="verdict">
+    <span class="tag part">Partly wrong</span>
+    <h3>Censoring the in-flight bundles</h3>
+    <p>Real, but worth only 1&ndash;3 points. <code>delivered/originated</code> understates delivery; it is not why delivery is low.</p>
+  </div>
+  <div class="verdict">
+    <span class="tag wrong">Wrong</span>
+    <h3>Routing inflates path length</h3>
+    <p>Believed depth tracks true mesh depth within a hop. Bundles are not wandering, and the ablation that fixes &ldquo;inflation&rdquo; makes things worse.</p>
+  </div>
+  <div class="verdict">
+    <span class="tag right">Confirmed</span>
+    <h3>The last hop is saturated</h3>
+    <p>Only ~23 balloons can reach a tower, each passing one bundle per duty cycle. Throughput plateaus at <b>~3.1 deliveries/round</b> no matter how much traffic is offered.</p>
+  </div>
+  <div class="verdict">
+    <span class="tag fixed">Acted on</span>
+    <h3>Widen the tower contact</h3>
+    <p>Draining 4 bundles per tower contact instead of 1 lifts completion <b>51.2% &rarr; 67.4%</b> &mdash; then saturates, because the constraint moves back into the mesh.</p>
+  </div>
+</div>
+
+<section>
+  <div class="col">
+    <span class="secnum">01 &mdash; the question</span>
+    <h2>A mesh that knows the way, and still can&rsquo;t deliver</h2>
+    <p>
+      At the default configuration, 96&ndash;99% of balloons hold a live route belief and the
+      mesh sits comfortably above the percolation threshold. Yet only about half of all
+      telemetry bundles reach a tower. The obvious suspects &mdash; congestion, stale routes,
+      bad paths &mdash; had each been proposed and, in two earlier passes, wrongly confirmed.
+    </p>
+    <p>
+      So this round started with instrumentation rather than a hypothesis: every wake slot
+      where a balloon held a bundle was classified by <em>why</em> it did or didn&rsquo;t move, and
+      every bundle&rsquo;s hop count was recorded at delivery and at expiry.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum">02 &mdash; first correction</span>
+    <h2>The metric was biased, but only slightly</h2>
+    <p>
+      <code>delivered / originated</code> counts every bundle still legitimately in flight at
+      the cutoff as a failure. Measuring against bundles that actually <em>resolved</em> removes
+      that bias &mdash; and the correction is small: <strong>1.4 points</strong> over 4000 rounds,
+      3.0 points over 2000. Worth fixing, but it is not the story.
+    </p>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <caption>Both figures now reported side by side, so the censoring stays visible rather than being silently corrected away.</caption>
+      <thead><tr><th>Run</th><th>Delivered</th><th>Expired</th><th>In flight</th><th>deliv/orig</th><th>Completion</th></tr></thead>
+      <tbody>
+        <tr><td>2000 rounds</td><td>6,295</td><td>4,558</td><td>621</td><td>53.0%</td><td>56.0%</td></tr>
+        <tr><td>4000 rounds</td><td>11,062</td><td>10,787</td><td>673</td><td>46.6%</td><td>48.0%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="col">
+    <p>
+      The two runs also differ from each other by 8 points, which is worth stating plainly:
+      this harness is single-seed, and completion at the default density moves around in a
+      <strong>48&ndash;56%</strong> band between runs. No conclusion below rests on a difference
+      smaller than that.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum">03 &mdash; where the losses go</span>
+    <h2>Essentially every lost bundle expires</h2>
+    <p>
+      Loop drops and hop-budget drops are rounding errors &mdash; 166 and 4 respectively against
+      ~11,000 deliveries. Bundles are not being destroyed by the protocol. They are running out
+      of time while someone holds them. That reframes the question: not <em>why are bundles
+      lost</em>, but <em>why are they slow</em>.
+    </p>
+  </div>
+  <div id="fig-slots"></div>
+  <div class="col">
+    <p>
+      A bundle&rsquo;s entire life is <code>BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS</code> =
+      <strong>30 wake slots</strong>. Above the percolation threshold the stall rate is only
+      24&ndash;27%, leaving ~22 usable hops against a true median depth of 6.5. On the slot
+      budget alone, these bundles should arrive comfortably. They don&rsquo;t &mdash; so the budget
+      is not what binds.
+    </p>
+    <p>
+      Note also what is <em>absent</em>: <code>stale next hop</code> never exceeds 0.3% in the
+      shipped protocol. The hold-don&rsquo;t-drop path &mdash; the mechanism that makes this
+      delay-tolerant rather than merely lossy &mdash; is almost never exercised at these
+      densities. Links outlive beliefs by a wide margin.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum">04 &mdash; hypothesis killed</span>
+    <h2>Beliefs are not inflated</h2>
+    <p>
+      The leading structural suspect was <code>should_adopt</code>: a fresher beacon wave wins
+      regardless of hop count, so a balloon three hops from Nairobi can adopt a fifteen-hop
+      belief from Svalbard purely because that wave is newer. With twelve towers beaconing
+      independently, that should inflate effective path length badly.
+    </p>
+    <p>
+      It doesn&rsquo;t. Believed depth tracks the omniscient shortest-path depth from
+      <code>bin/mesh_depth</code> within about a hop &mdash; and at coefficient 3.57 the balloons
+      believe they are <em>closer</em> than the true median, not further.
+    </p>
+  </div>
+  <div id="fig-depth"></div>
+  <div class="col">
+    <p>
+      The ablation confirms it from the other side. Routing on hop count first, with freshness
+      only as a tie-break, helps near the percolation threshold &mdash; where it raises the
+      grounded fraction from 85.5% to 92.2% &mdash; but <strong>hurts above it</strong>, dropping
+      completion from 56.0% to 50.5% at the default density. Freshness-first is not the bug.
+    </p>
+  </div>
+  <div id="fig-ablation"></div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum">05 &mdash; the answer</span>
+    <h2>About two dozen balloons</h2>
+    <p>
+      A tower at 30 m has a 23 km radio horizon. A balloon at 13 km has roughly 470 km. So the
+      tower&ndash;balloon link reaches about 490 km &mdash; against 940 km for balloon-to-balloon.
+      The ground stations are, in radio terms, nearly invisible.
+    </p>
+    <p>
+      Measured directly rather than inferred from that geometry: at any moment an average of
+      <strong>23 balloons</strong> out of 1200 can hear a tower. Each can pass exactly one bundle
+      per duty-cycle slot. That is the entire delivery capacity of the planet:
+    </p>
+  </div>
+  <pre><code>~23 tower-adjacent balloons / 5 rounds per duty cycle &asymp; <strong>4.7 deliveries per round</strong></code></pre>
+  <div class="col">
+    <p>
+      Observed throughput plateaus a little below that, at <strong>~3.1/round</strong> &mdash; the
+      gap being the slots where a tower-adjacent balloon is awake but happens to be holding
+      nothing. The decisive observation is not the exact figure but its <em>flatness</em>:
+      raising origination 7&times; leaves delivery at 3.1/round and simply grows the denominator,
+      while lowering it below the ceiling pushes completion to <strong>93%</strong> with no
+      protocol change whatsoever.
+    </p>
+  </div>
+  <div id="fig-demand"></div>
+  <div class="col">
+    <p>
+      Nothing about queue depth, belief lifetime, or route selection can move a flat line &mdash;
+      which is exactly why three rounds of tuning those parameters produced nothing.
+    </p>
+    <p>
+      The same relationship holds across mesh density, with one instructive exception. Delivery
+      rises with density mostly because a longer radio horizon puts more balloons in tower range.
+      But <em>below</em> the percolation threshold the mesh delivers only 27% of its last-hop
+      ceiling &mdash; there the bottleneck really is upstream, in balloons that hold no route at
+      all. The crossover is the percolation threshold itself: below it the mesh is the constraint,
+      above it the ground link is.
+    </p>
+  </div>
+  <div id="fig-ceiling"></div>
+  <div class="tablewrap">
+    <table>
+      <caption>
+        Demand sweep at the default density, 2000 rounds each. Only
+        <code>BUNDLE_INTERVAL_ROUNDS</code> changes between rows &mdash; routing, queues and
+        belief lifetime are identical throughout.
+      </caption>
+      <thead>
+        <tr>
+          <th>Originate every</th><th>In tower range</th><th>Ceiling /rd</th>
+          <th>Offered /rd</th><th>Delivered /rd</th><th>Completion</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>50 rounds</td><td>19.0</td><td>3.81</td><td>20.97</td><td>3.15</td><td>16.1%</td></tr>
+        <tr><td>100 rounds</td><td>23.8</td><td>4.75</td><td>11.63</td><td>3.09</td><td>28.4%</td></tr>
+        <tr class="hilite"><td>200 rounds (shipped)</td><td>24.8</td><td>4.96</td><td>5.94</td><td>2.83</td><td>50.4%</td></tr>
+        <tr><td>400 rounds</td><td>28.6</td><td>5.72</td><td>2.99</td><td>2.36</td><td>81.7%</td></tr>
+        <tr><td>800 rounds</td><td>21.0</td><td>4.19</td><td>1.49</td><td>1.34</td><td>91.9%</td></tr>
+        <tr><td>1600 rounds</td><td>23.1</td><td>4.62</td><td>0.75</td><td>0.69</td><td>93.3%</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum">06 &mdash; what it means</span>
+    <h2>This is a finding, not a defect</h2>
+    <p>
+      Nothing here is behaving incorrectly. A constellation with twelve ground stations, radios
+      that wake once per ten simulated minutes, and antennas 30 m above the ground genuinely
+      cannot land more than a few bundles per round. The simulation is reporting a real
+      property of the architecture it was given.
+    </p>
+    <p>That reframes the levers. The ones that matter all act on the last hop:</p>
+    <ul class="tight">
+      <li><strong>More towers.</strong> Delivery capacity is linear in tower-adjacent population. This is the blunt fix.</li>
+      <li><strong>Taller antennas.</strong> Horizon goes as &radic;height, and the tower&rsquo;s 30 m is the small term in a 490 km link. Cheap to test.</li>
+      <li><strong>Multi-bundle contact windows.</strong> The one-transmission-per-slot rule is right for a beacon and wrong for a tower contact: a balloon in tower range should drain its queue, not dribble one bundle per ten minutes. Highest leverage, costs nothing physically &mdash; <a href="#implemented">implemented and measured below</a>.</li>
+      <li><strong>Satellite fallback</strong> &mdash; already scheduled as C2 slice 2. It now has a measured justification: it is not a nicety for stranded bundles, it is the release valve for a structurally saturated ground link.</li>
+    </ul>
+  </div>
+  <div class="callout">
+    <span class="lbl">Worth recording</span>
+    <p>
+      The bottleneck was invisible for three rounds of investigation because every metric being
+      watched described the <em>mesh</em> &mdash; degree, grounded fraction, stall rate, queue
+      occupancy &mdash; and the mesh was healthy. The scarce resource was never in the frame.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="secnum" id="implemented">07 &mdash; acting on it</span>
+    <h2>The contact window, tested</h2>
+    <p>
+      The cheapest of those levers was implemented and measured: a balloon in tower range now
+      drains up to <code>TOWER_CONTACT_BUNDLES</code> in one contact instead of passing a single
+      bundle per duty cycle. Setting that constant to 1 reproduces the old rule exactly, so the
+      comparison is clean &mdash; nothing else changed.
+    </p>
+  </div>
+  <div id="fig-contact"></div>
+  <div class="col">
+    <p>
+      <strong>Completion goes 51.2% &rarr; 67.4%</strong>, a gain of 16 points against a
+      run-to-run noise band of about 8, with a monotone trend across three steps. The rule
+      applies only to tower contacts; balloon-to-balloon handoffs still move one bundle per slot,
+      because there the sender&rsquo;s duty cycle is genuinely what rations the transmission.
+    </p>
+    <h3 class="sub">And then it stops</h3>
+    <p>
+      Past a window of 4 the gain vanishes &mdash; 8 measures no better than 4. That is the
+      expected shape, and it is the useful part of the result: once the window reaches 4 the
+      last-hop ceiling rises to 16.6/round against 5.9/round offered, so <em>the last hop is no
+      longer the binding constraint</em>. The limit moves back into the mesh, to bundles expiring
+      before they ever reach a balloon that can see a tower.
+    </p>
+    <p>
+      So the value ships at <strong>4</strong>, not 8: beyond it there is nothing to buy, and a
+      shorter burst is a weaker claim on airtime. The next constraint is now a different problem
+      from the one this report was about &mdash; and satellite fallback, already scheduled as C2
+      slice 2, is aimed squarely at it.
+    </p>
+  </div>
+</section>
+
+<footer>
+  Generated from <code>sim-server/src/bin/bundle_delivery.rs</code> and <code>bin/mesh_depth.rs</code>.
+  All figures render from the measured values embedded in this page.<br>
+  Single-seed runs. Completion at default density varies 48&ndash;56% between runs, and the
+  tower-adjacent count varies 19&ndash;29 at identical configuration &mdash; the flatness of
+  throughput against load is the robust result, not any individual figure.
+  True-depth figures come from a static uniform-sphere snapshot with independent seeds.
+</footer>
+
+<script>
+/* ------------------------------------------------------------------ *
+ * Measured data. Everything drawn below comes from these arrays, so
+ * the prose and the plots cannot drift apart.
+ * ------------------------------------------------------------------ */
+const ROUNDS = 2000;
+
+/* Density sweep, shipped protocol (freshest-first route selection). */
+const DENSITY = [
+  { coeff: 2.50, degree: 2.29, grounded: 5.2,  delivered: 393,  completion: 3.6,  stall: 99.6, noBelief: 99.6, stale: 0.0, blocked: 0.0,  moved: 0.4,  belief: 3.28 },
+  { coeff: 3.00, degree: 3.33, grounded: 29.2, delivered: 2838, completion: 25.6, stall: 89.3, noBelief: 88.5, stale: 0.1, blocked: 0.7,  moved: 10.7, belief: 7.68 },
+  { coeff: 3.57, degree: 4.71, grounded: 85.5, delivered: 3565, completion: 32.1, stall: 59.3, noBelief: 51.0, stale: 0.2, blocked: 8.1,  moved: 40.7, belief: 9.05 },
+  { coeff: 4.12, degree: 6.09, grounded: 96.8, delivered: 6295, completion: 56.0, stall: 27.2, noBelief: 6.0,  stale: 0.3, blocked: 20.8, moved: 72.8, belief: 6.91 },
+  { coeff: 5.00, degree: 8.84, grounded: 99.8, delivered: 7818, completion: 69.0, stall: 24.4, noBelief: 0.7,  stale: 0.1, blocked: 23.6, moved: 75.6, belief: 5.56 },
+];
+
+/* Same sweep with the nearest-first ablation (ablation::prefer_nearer). */
+const NEAREST = [
+  { coeff: 2.50, degree: 2.20, grounded: 5.6,  completion: 6.0,  belief: 3.21 },
+  { coeff: 3.00, degree: 3.20, grounded: 11.0, completion: 10.6, belief: 5.50 },
+  { coeff: 3.57, degree: 4.71, grounded: 92.2, completion: 39.3, belief: 9.17 },
+  { coeff: 4.12, degree: 6.41, grounded: 97.5, completion: 50.5, belief: 7.01 },
+  { coeff: 5.00, degree: 9.20, grounded: 99.9, completion: 72.5, belief: 4.82 },
+];
+
+/* Omniscient shortest-path depth, bin/mesh_depth, n=1200. Median hops. */
+const TRUE_DEPTH = { 3.00: 7.0, 3.57: 9.8, 4.12: 6.5 };
+
+/* Hop histograms at the default density, 4000-round run. */
+const HOPS = {
+  delivered: [409,1099,1474,1589,1540,1271,1069,804,584,405,267,199,133,104,63,26,18,4,2,2],
+  expired:   [151,72,370,875,1299,1629,1460,1286,1031,820,625,471,290,201,95,49,35,16,9,3],
+  deliveredMean: 4.63,
+  expiredMean: 6.56,
+};
+
+/* Demand sweep at coeff 4.12 — runs/demand_sweep.txt. */
+const DEMAND = [
+  { interval: 50,   completion: 16.1, originated: 20.97, delivered: 3.15, adjacent: 19.0, ceiling: 3.81 },
+  { interval: 100,  completion: 28.4, originated: 11.63, delivered: 3.09, adjacent: 23.8, ceiling: 4.75 },
+  { interval: 200,  completion: 50.4, originated:  5.94, delivered: 2.83, adjacent: 24.8, ceiling: 4.96 },
+  { interval: 400,  completion: 81.7, originated:  2.99, delivered: 2.36, adjacent: 28.6, ceiling: 5.72 },
+  { interval: 800,  completion: 91.9, originated:  1.49, delivered: 1.34, adjacent: 21.0, ceiling: 4.19 },
+  { interval: 1600, completion: 93.3, originated:  0.75, delivered: 0.69, adjacent: 23.1, ceiling: 4.62 },
+];
+/* Mean ceiling across those six runs at identical configuration. The spread
+   (3.81–5.72) is the run-to-run noise on a count of ~20 out of 1200 balloons. */
+const CEILING_MEAN = 4.68;
+
+/* Tower contact window sweep — runs/contact_sweep.txt. Window 1 is exactly the
+   old one-bundle-per-duty-cycle rule, so it is the "before" row. */
+const CONTACT = [
+  { window: 1, completion: 51.2, delivered: 2.88, blocked: 14696, ceiling: 5.95 },
+  { window: 2, completion: 60.7, delivered: 3.44, blocked: 14182, ceiling: 7.46 },
+  { window: 4, completion: 67.4, delivered: 3.82, blocked: 10541, ceiling: 16.59 },
+  { window: 8, completion: 66.0, delivered: 3.75, blocked: 10616, ceiling: 35.40 },
+];
+
+/* Delivery ceiling measured across densities at the shipped origination rate
+   — runs/ceiling_by_density.txt plus the interval-200 row above. */
+const CEILING = [
+  { degree: 3.35, adjacent: 14.1, ceiling: 2.83, delivered: 0.76, grounded: 17.2 },
+  { degree: 4.74, adjacent: 10.1, ceiling: 2.01, delivered: 1.31, grounded: 80.9 },
+  { degree: 6.17, adjacent: 24.8, ceiling: 4.96, delivered: 2.83, grounded: 98.2 },
+  { degree: 8.76, adjacent: 30.0, ceiling: 6.00, delivered: 3.59, grounded: 99.9 },
+];
+
+/* ------------------------------------------------------------------ *
+ * Chart primitives
+ * ------------------------------------------------------------------ */
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, attrs = {}, txt) => {
+  const e = document.createElementNS(NS, n);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (txt != null) e.textContent = txt;
+  return e;
+};
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const frame = (w, h) => el("svg", { viewBox: `0 0 ${w} ${h}`, width: w, height: h, role: "img" });
+
+function label(svg, x, y, text, o = {}) {
+  svg.append(el("text", {
+    x, y, "font-family": "var(--mono)", "font-size": o.size || 11,
+    fill: o.fill || "currentColor", "fill-opacity": o.op ?? 0.62,
+    "text-anchor": o.anchor || "middle", "font-variant-numeric": "tabular-nums",
+    ...(o.weight ? { "font-weight": o.weight } : {}),
+  }, text));
+}
+function grid(svg, pad, w, h, yMax, fmt, steps = 4) {
+  for (let i = 0; i <= steps; i++) {
+    const y = h - pad.b - ((h - pad.t - pad.b) * i) / steps;
+    if (i > 0) svg.append(el("line", {
+      x1: pad.l, y1: y, x2: w - pad.r, y2: y, stroke: "currentColor", "stroke-opacity": 0.09,
+    }));
+    label(svg, pad.l - 9, y + 4, fmt((yMax * i) / steps), { anchor: "end", size: 10.5 });
+  }
+  svg.append(el("line", { x1: pad.l, y1: h - pad.b, x2: w - pad.r, y2: h - pad.b, stroke: "currentColor", "stroke-opacity": 0.35 }));
+  svg.append(el("line", { x1: pad.l, y1: pad.t, x2: pad.l, y2: h - pad.b, stroke: "currentColor", "stroke-opacity": 0.35 }));
+}
+function xTitle(svg, w, h, pad, text) {
+  label(svg, (pad.l + w - pad.r) / 2, h - 7, text, { size: 11, op: 0.78 });
+}
+function legend(node, items) {
+  const d = document.createElement("div");
+  d.className = "legend";
+  d.innerHTML = items.map((i) =>
+    `<span><i class="swatch" style="background:var(${i.c})"></i>${i.t}</span>`).join("");
+  node.append(d);
+}
+function figure(hostId, { title, caption, build }) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const fig = document.createElement("figure");
+  const fr = document.createElement("div");
+  fr.className = "figframe";
+  if (title) {
+    const t = document.createElement("div");
+    t.className = "figtitle";
+    t.textContent = title;
+    fr.append(t);
+  }
+  build(fr);
+  fig.append(fr);
+  if (caption) {
+    const c = document.createElement("figcaption");
+    c.innerHTML = caption;
+    fig.append(c);
+  }
+  host.append(fig);
+}
+
+/* ------------------------------------------------------------------ *
+ * Figures
+ * ------------------------------------------------------------------ */
+
+/* Stacked slot budget across density. */
+figure("fig-slots", {
+  title: "Where every held-bundle wake slot went",
+  caption: "Below the percolation threshold (degree ~4.5) bundles stall because their holder has <b>no route belief at all</b> — the designed behaviour, not a fault. Above it that cause vanishes and <b>blocked handoffs</b> take over, which looks like congestion. <b>Stale next hop stays under 0.3% throughout.</b>",
+  build(node) {
+    const cats = [
+      { key: "moved",    c: "--a",    t: "moved", onDark: true },
+      { key: "noBelief", c: "--mid",  t: "no belief", onDark: true },
+      { key: "blocked",  c: "--warn", t: "blocked (retried)", onDark: true },
+      { key: "stale",    c: "--loss", t: "stale next hop", onDark: true },
+    ];
+    const w = 940, h = 380, pad = { l: 58, r: 20, t: 14, b: 64 };
+    const svg = frame(w, h);
+    grid(svg, pad, w, h, 100, (v) => v.toFixed(0) + "%");
+    const bw = 84;
+    DENSITY.forEach((row, i) => {
+      const cx = pad.l + ((i + 0.5) * (w - pad.l - pad.r)) / DENSITY.length;
+      let acc = 0;
+      for (const c of cats) {
+        const v = row[c.key] || 0;
+        if (v <= 0.05) continue;
+        const y0 = h - pad.b - ((acc + v) / 100) * (h - pad.t - pad.b);
+        const y1 = h - pad.b - (acc / 100) * (h - pad.t - pad.b);
+        svg.append(el("rect", { x: cx - bw / 2, y: y0, width: bw, height: Math.max(0.8, y1 - y0), fill: css(c.c) }));
+        if (v >= 8) label(svg, cx, (y0 + y1) / 2 + 4, v.toFixed(0) + "%", { size: 10.5, op: 1, fill: css("--raised"), weight: 600 });
+        acc += v;
+      }
+      label(svg, cx, h - pad.b + 18, "deg " + row.degree.toFixed(2), { size: 10.5, op: 0.9 });
+      label(svg, cx, h - pad.b + 33, row.grounded.toFixed(0) + "% grounded", { size: 10, op: 0.5 });
+    });
+    /* percolation marker between the 3.57 and 4.12 columns */
+    const px = pad.l + (3 * (w - pad.l - pad.r)) / DENSITY.length;
+    svg.append(el("line", { x1: px, y1: pad.t, x2: px, y2: h - pad.b, stroke: "currentColor", "stroke-opacity": 0.45, "stroke-dasharray": "3 4" }));
+    label(svg, px - 8, pad.t + 12, "percolation threshold", { anchor: "end", size: 10.5, op: 0.6 });
+    xTitle(svg, w, h, pad, "mesh density");
+    node.append(svg);
+    legend(node, cats.map((c) => ({ c: c.c, t: c.t })));
+  },
+});
+
+/* Believed vs true depth. */
+figure("fig-depth", {
+  title: "Believed distance to ground vs. omniscient shortest path",
+  caption: "If freshness-first routing were inflating paths, the purple bars would sit well above the grey. They don't — at every density the balloons' <b>believed</b> depth is within about a hop of the true median, and at degree 4.71 it is <i>below</i> it. The routing is not sending bundles the long way round.",
+  build(node) {
+    const rows = DENSITY.filter((r) => TRUE_DEPTH[r.coeff.toFixed(2)] || TRUE_DEPTH[r.coeff]);
+    const w = 940, h = 330, pad = { l: 58, r: 20, t: 14, b: 62 };
+    const svg = frame(w, h);
+    const yMax = 12;
+    grid(svg, pad, w, h, yMax, (v) => v.toFixed(0));
+    const bw = 62;
+    rows.forEach((row, i) => {
+      const cx = pad.l + ((i + 0.5) * (w - pad.l - pad.r)) / rows.length;
+      const pairs = [
+        { v: row.belief, c: "--a", off: -bw / 2 - 3 },
+        { v: TRUE_DEPTH[row.coeff], c: "--mid", off: bw / 2 + 3 },
+      ];
+      for (const p of pairs) {
+        const bh = (p.v / yMax) * (h - pad.t - pad.b);
+        svg.append(el("rect", { x: cx + p.off - bw / 2, y: h - pad.b - bh, width: bw, height: bh, fill: css(p.c) }));
+        label(svg, cx + p.off, h - pad.b - bh - 7, p.v.toFixed(2), { size: 11, op: 1, fill: css(p.c), weight: 600 });
+      }
+      label(svg, cx, h - pad.b + 18, "degree " + row.degree.toFixed(2), { size: 10.5, op: 0.9 });
+    });
+    xTitle(svg, w, h, pad, "hops to the nearest tower");
+    node.append(svg);
+    legend(node, [
+      { c: "--a", t: "believed depth (what balloons think)" },
+      { c: "--mid", t: "true median depth (bin/mesh_depth)" },
+    ]);
+  },
+});
+
+/* Ablation comparison. */
+figure("fig-ablation", {
+  title: "Completion rate: shipped protocol vs. nearest-first ablation",
+  caption: "Nearest-first routing helps below the percolation threshold and hurts above it. Since the mesh ships above the threshold, adopting it would <b>cost</b> about 5 points at the default density — so the suspected routing flaw is not worth fixing, because it isn't one.",
+  build(node) {
+    const w = 940, h = 370, pad = { l: 58, r: 20, t: 16, b: 56 };
+    const svg = frame(w, h);
+    const yMax = 80;
+    grid(svg, pad, w, h, yMax, (v) => v.toFixed(0) + "%");
+    const xs = [2.0, 9.5];
+    const px = (x) => pad.l + ((x - xs[0]) / (xs[1] - xs[0])) * (w - pad.l - pad.r);
+    const py = (y) => h - pad.b - (y / yMax) * (h - pad.t - pad.b);
+    svg.append(el("line", { x1: px(4.5), y1: pad.t, x2: px(4.5), y2: h - pad.b, stroke: "currentColor", "stroke-opacity": 0.45, "stroke-dasharray": "3 4" }));
+    label(svg, px(4.5) + 6, pad.t + 12, "percolation threshold (degree 4.5)", { anchor: "start", size: 10.5, op: 0.6 });
+    for (const s of [
+      { data: DENSITY, c: "--a", key: "completion" },
+      { data: NEAREST, c: "--b", key: "completion" },
+    ]) {
+      const colour = css(s.c);
+      svg.append(el("polyline", {
+        points: s.data.map((r) => `${px(r.degree)},${py(r[s.key])}`).join(" "),
+        fill: "none", stroke: colour, "stroke-width": 2.25, "stroke-linejoin": "round",
+      }));
+      for (const r of s.data) {
+        svg.append(el("circle", { cx: px(r.degree), cy: py(r[s.key]), r: 4, fill: colour }));
+        label(svg, px(r.degree), py(r[s.key]) - 12, r[s.key].toFixed(1) + "%", { size: 10.5, op: 1, fill: colour, weight: 600 });
+      }
+    }
+    for (const r of DENSITY) label(svg, px(r.degree), h - pad.b + 18, r.degree.toFixed(2), { size: 10.5 });
+    xTitle(svg, w, h, pad, "mean node degree");
+    node.append(svg);
+    legend(node, [
+      { c: "--a", t: "shipped — freshest wave wins" },
+      { c: "--b", t: "ablation — nearest wins, freshness breaks ties" },
+    ]);
+  },
+});
+
+/* Demand sweep — the decisive figure. */
+figure("fig-demand", {
+  title: "Delivery throughput against offered load",
+  caption: "Offered load varies 28× across this sweep; delivered throughput does not follow it. Once offered load passes the last-hop ceiling, <b>throughput pins at ~3.1/round</b> and every additional bundle simply expires — completion falls purely because the denominator grew. Below the ceiling, nearly everything offered arrives (93% at the far right). This is the textbook signature of a saturated resource, and no routing or buffering parameter can move a flat line.",
+  build(node) {
+    if (DEMAND.length < 2) {
+      const p = document.createElement("p");
+      p.style.cssText = "font-family:var(--mono);font-size:12px;color:var(--mid);margin:0 0 12px";
+      p.textContent = "sweep in progress — " + DEMAND.length + " of 6 points measured";
+      node.append(p);
+    }
+    const w = 940, h = 370, pad = { l: 62, r: 20, t: 18, b: 62 };
+    const svg = frame(w, h);
+    const yMax = Math.max(6, ...DEMAND.map((d) => d.originated)) * 1.1;
+    grid(svg, pad, w, h, yMax, (v) => v.toFixed(0));
+    const slot = (w - pad.l - pad.r) / DEMAND.length;
+    const py = (v) => h - pad.b - (v / yMax) * (h - pad.t - pad.b);
+    /* Band showing the measured spread of the ceiling across these six runs,
+       with the mean drawn through it — the ceiling is a noisy count of ~20
+       balloons, not a precise constant. */
+    const lo = Math.min(...DEMAND.map((d) => d.ceiling));
+    const hi = Math.max(...DEMAND.map((d) => d.ceiling));
+    svg.append(el("rect", {
+      x: pad.l, y: py(hi), width: w - pad.l - pad.r, height: py(lo) - py(hi),
+      fill: css("--loss"), "fill-opacity": 0.1,
+    }));
+    svg.append(el("line", {
+      x1: pad.l, y1: py(CEILING_MEAN), x2: w - pad.r, y2: py(CEILING_MEAN),
+      stroke: css("--loss"), "stroke-width": 1.75, "stroke-dasharray": "6 4",
+    }));
+    label(svg, w - pad.r - 6, py(hi) - 7, `last-hop ceiling ~${CEILING_MEAN.toFixed(1)}/round`, {
+      anchor: "end", size: 11, op: 1, fill: css("--loss"), weight: 600,
+    });
+    /* Offered load is labelled above its points, throughput below, so the two
+       stay legible where the lines converge at low load. */
+    for (const s of [
+      { key: "originated", c: "--mid", dash: true, dy: -11 },
+      { key: "delivered", c: "--a", dy: 18 },
+    ]) {
+      const colour = css(s.c);
+      svg.append(el("polyline", {
+        points: DEMAND.map((d, i) => `${pad.l + (i + 0.5) * slot},${py(d[s.key])}`).join(" "),
+        fill: "none", stroke: colour, "stroke-width": 2.25,
+        ...(s.dash ? { "stroke-dasharray": "5 4" } : {}),
+      }));
+      DEMAND.forEach((d, i) => {
+        const cx = pad.l + (i + 0.5) * slot;
+        svg.append(el("circle", { cx, cy: py(d[s.key]), r: 4, fill: colour }));
+        label(svg, cx, py(d[s.key]) + s.dy, d[s.key].toFixed(2), { size: 10.5, op: 1, fill: colour, weight: 600 });
+      });
+    }
+    DEMAND.forEach((d, i) => {
+      const cx = pad.l + (i + 0.5) * slot;
+      label(svg, cx, h - pad.b + 18, "every " + d.interval, { size: 10.5, op: 0.9 });
+      label(svg, cx, h - pad.b + 33, d.completion.toFixed(1) + "% complete", { size: 10, op: 0.55 });
+    });
+    xTitle(svg, w, h, pad, "origination interval (rounds)  —  bundles per round");
+    node.append(svg);
+    legend(node, [
+      { c: "--mid", t: "originated / round (offered load)" },
+      { c: "--a", t: "delivered / round (throughput)" },
+      { c: "--loss", t: "last-hop ceiling" },
+    ]);
+  },
+});
+
+/* The fix: completion against tower contact window. */
+figure("fig-contact", {
+  title: "Completion rate vs. bundles per tower contact",
+  caption: "Window 1 is the old rule. Letting a tower contact drain up to 4 bundles lifts completion <b>51.2% → 67.4%</b>. The gain then stops: at 4 the last-hop ceiling (16.6/round) has overtaken offered load (5.9/round), so the constraint moves back into the mesh and a wider window buys nothing. <b>4 ships.</b>",
+  build(node) {
+    const w = 940, h = 360, pad = { l: 62, r: 62, t: 22, b: 60 };
+    const svg = frame(w, h);
+    const yMax = 80;
+    grid(svg, pad, w, h, yMax, (v) => v.toFixed(0) + "%");
+    const slot = (w - pad.l - pad.r) / CONTACT.length;
+    const py = (v) => h - pad.b - (v / yMax) * (h - pad.t - pad.b);
+    const bw = Math.min(slot * 0.42, 78);
+
+    /* Bars: completion. The shipped choice is the one drawn in the accent. */
+    CONTACT.forEach((c, i) => {
+      const cx = pad.l + (i + 0.5) * slot;
+      const chosen = c.window === 4;
+      const bh = (c.completion / yMax) * (h - pad.t - pad.b);
+      svg.append(el("rect", {
+        x: cx - bw / 2, y: py(c.completion), width: bw, height: bh,
+        fill: css(chosen ? "--a" : "--mid"),
+      }));
+      /* Inside the bar, so the ceiling series above can't collide with it. */
+      label(svg, cx, py(c.completion) + 22, c.completion.toFixed(1) + "%", {
+        size: 12.5, op: 1, fill: css("--raised"), weight: 600,
+      });
+      label(svg, cx, h - pad.b + 18, c.window === 1 ? "1  (old rule)" : String(c.window), {
+        size: 11, op: 0.9, weight: chosen ? 600 : 400,
+      });
+      if (chosen) label(svg, cx, h - pad.b + 33, "ships", { size: 10, op: 0.7, fill: css("--a") });
+    });
+
+    /* Offered load, for the saturation argument: once the ceiling passes it the
+       last hop stops binding. Drawn on its own right-hand scale. */
+    const cMax = Math.max(...CONTACT.map((c) => c.ceiling)) * 1.1;
+    const pyC = (v) => h - pad.b - (v / cMax) * (h - pad.t - pad.b);
+    svg.append(el("polyline", {
+      points: CONTACT.map((c, i) => `${pad.l + (i + 0.5) * slot},${pyC(c.ceiling)}`).join(" "),
+      fill: "none", stroke: css("--loss"), "stroke-width": 2, "stroke-dasharray": "5 4",
+    }));
+    svg.append(el("line", {
+      x1: pad.l, y1: pyC(5.94), x2: w - pad.r, y2: pyC(5.94),
+      stroke: css("--b"), "stroke-width": 1.5,
+    }));
+    label(svg, w - pad.r - 6, pyC(5.94) - 7, "offered load 5.94/round", {
+      anchor: "end", size: 10.5, op: 1, fill: css("--b"), weight: 600,
+    });
+    CONTACT.forEach((c, i) => {
+      const cx = pad.l + (i + 0.5) * slot;
+      svg.append(el("circle", { cx, cy: pyC(c.ceiling), r: 3.5, fill: css("--loss") }));
+    });
+    label(svg, w - pad.r + 8, pyC(CONTACT[3].ceiling) + 4, "35/rd", {
+      anchor: "start", size: 10, op: 0.8, fill: css("--loss"),
+    });
+    xTitle(svg, w, h, pad, "bundles handed over per tower contact");
+    node.append(svg);
+    legend(node, [
+      { c: "--a", t: "completion rate" },
+      { c: "--loss", t: "last-hop ceiling (own scale, 0–39/round)" },
+      { c: "--b", t: "offered load — where the ceiling stops binding" },
+    ]);
+  },
+});
+
+/* Ceiling across densities. */
+figure("fig-ceiling", {
+  title: "Delivery tracks the tower-adjacent population, not the mesh",
+  caption: "Measured delivery against the last-hop ceiling at each density. Delivery rises with mesh density largely because a longer radio horizon puts <b>more balloons in range of a tower</b> — not because the mesh routes better. The degree-4.74 column is out of order (10.1 balloons in range, below the sparser mesh's 14.1): with only ~10–30 of 1200 balloons in tower range at any moment, this count carries heavy run-to-run noise, and single-seed runs cannot resolve it finely.",
+  build(node) {
+    if (!CEILING.length) {
+      const p = document.createElement("p");
+      p.style.cssText = "font-family:var(--mono);font-size:12px;color:var(--mid);margin:0";
+      p.textContent = "measurement in progress";
+      node.append(p);
+      return;
+    }
+    const w = 940, h = 350, pad = { l: 62, r: 20, t: 18, b: 60 };
+    const svg = frame(w, h);
+    const yMax = Math.max(...CEILING.map((c) => c.ceiling)) * 1.2;
+    grid(svg, pad, w, h, yMax, (v) => v.toFixed(1));
+    const slot = (w - pad.l - pad.r) / CEILING.length;
+    const py = (v) => h - pad.b - (v / yMax) * (h - pad.t - pad.b);
+    const bw = Math.min(slot * 0.34, 60);
+    CEILING.forEach((c, i) => {
+      const cx = pad.l + (i + 0.5) * slot;
+      [
+        { v: c.ceiling, col: "--mid", off: -bw / 2 - 3 },
+        { v: c.delivered, col: "--a", off: bw / 2 + 3 },
+      ].forEach((p) => {
+        const bh = (p.v / yMax) * (h - pad.t - pad.b);
+        svg.append(el("rect", { x: cx + p.off - bw / 2, y: py(p.v), width: bw, height: bh, fill: css(p.col) }));
+        label(svg, cx + p.off, py(p.v) - 7, p.v.toFixed(2), { size: 10.5, op: 1, fill: css(p.col), weight: 600 });
+      });
+      label(svg, cx, h - pad.b + 18, "degree " + c.degree.toFixed(2), { size: 10.5, op: 0.9 });
+      label(svg, cx, h - pad.b + 33, c.adjacent.toFixed(1) + " in tower range", { size: 10, op: 0.55 });
+    });
+    xTitle(svg, w, h, pad, "bundles per round");
+    node.append(svg);
+    legend(node, [
+      { c: "--mid", t: "last-hop ceiling" },
+      { c: "--a", t: "delivered" },
+    ]);
+  },
+});
+</script>
