@@ -108,7 +108,7 @@ pub const BEACON_MAX_HOPS: u32 = 20;
 /// ~5.9/round this constant offers, so the demand sweep above would come out
 /// differently today and should be re-run before being quoted. 200 is kept
 /// because it puts the mesh visibly under load without being hopeless.
-/// See BUNDLE_DELIVERY_REPORT.html §5–§7 and MESH_COMMS_DESIGN.md §4.
+/// See docs/bundle-delivery-report.html §5–§7 and MESH_COMMS_DESIGN.md §4.
 pub const BUNDLE_INTERVAL_ROUNDS: u64 = 200;
 /// How long a bundle may go unresolved before it is given up on. Must exceed a
 /// deep-path traversal (14 hops x BEACON_INTERVAL_ROUNDS = 70 rounds) or bundles
@@ -168,7 +168,7 @@ pub const RELAY_QUEUE_CAPACITY: usize = 8;
 /// the measured bottleneck.
 ///
 /// Set to 1 this reproduces the old one-bundle-per-slot behaviour exactly, which
-/// is how the two were compared (see BUNDLE_DELIVERY_REPORT.html §5): delivery
+/// is how the two were compared (see docs/bundle-delivery-report.html §5): delivery
 /// is capped by the ~23 balloons that can hear a tower, so the last hop is the
 /// only place throughput can come from.
 ///

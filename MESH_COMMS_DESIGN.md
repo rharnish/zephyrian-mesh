@@ -309,7 +309,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   which is already modelled as the duty cycle.
 
   **Closed: the limit is the last hop, not the mesh.** Full write-up with plots in
-  `BUNDLE_DELIVERY_REPORT.html`; raw output in `docs/measurements/`. Instrumenting every
+  `docs/bundle-delivery-report.html`; raw output in `docs/measurements/`. Instrumenting every
   held-bundle wake slot by stall cause, and every bundle by hop count, ruled out the remaining
   mesh-side explanations and found the real one:
 

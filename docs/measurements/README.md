@@ -1,6 +1,6 @@
 # Raw measurements — C2 bundle delivery investigation
 
-Console output backing `../../BUNDLE_DELIVERY_REPORT.html`. Every figure in that
+Console output backing `../bundle-delivery-report.html`. Every figure in that
 report is rendered from numbers transcribed out of these files.
 
 | File | What it is |
