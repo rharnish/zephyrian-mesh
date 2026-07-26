@@ -159,11 +159,12 @@ impl BundleStats {
     }
 
     /// Ceiling on deliveries per round, from the last hop alone: each
-    /// tower-adjacent balloon can pass one bundle per BEACON_INTERVAL_ROUNDS.
-    /// Nothing about mesh depth, queue depth, or routing quality can raise it —
-    /// only the tower-adjacent population.
+    /// tower-adjacent balloon can pass TOWER_CONTACT_BUNDLES per
+    /// BEACON_INTERVAL_ROUNDS. Nothing about mesh depth, queue depth, or routing
+    /// quality can raise it — only the tower-adjacent population or the size of
+    /// a contact.
     pub fn delivery_capacity_per_round(&self) -> f64 {
-        self.mean_tower_adjacent() / BEACON_INTERVAL_ROUNDS as f64
+        self.mean_tower_adjacent() * TOWER_CONTACT_BUNDLES as f64 / BEACON_INTERVAL_ROUNDS as f64
     }
 
     /// Delivery among bundles that actually finished. `delivered / originated`
@@ -242,9 +243,17 @@ pub fn step(
             // still live — belief can be stale, the radio cannot lie.
             None => {
                 if adj.tower_in_range(i).is_some() {
-                    let bd = balloons[i].queue.pop_front().expect("checked non-empty");
-                    bump(&mut stats.delivered_hops, bd.hops());
-                    stats.delivered += 1;
+                    // A tower contact drains up to TOWER_CONTACT_BUNDLES, not
+                    // one. The one-per-slot rule rations *beacon* airtime; a
+                    // point-to-point link to a ground station is a different
+                    // event, and this is the only lever that acts on the last
+                    // hop, which is where the throughput limit actually lives.
+                    let n = TOWER_CONTACT_BUNDLES.min(balloons[i].queue.len());
+                    for _ in 0..n {
+                        let bd = balloons[i].queue.pop_front().expect("checked non-empty");
+                        bump(&mut stats.delivered_hops, bd.hops());
+                        stats.delivered += 1;
+                    }
                 } else {
                     // Otherwise hold: the belief will expire or refresh.
                     stats.stall_tower_gone += 1;
@@ -520,6 +529,54 @@ mod tests {
         }
         assert_eq!(stats.originated, 1, "stats: {stats:?}");
         assert_eq!(balloons[0].queue.len(), 1);
+    }
+
+    /// A tower contact drains the queue rather than dribbling one bundle per
+    /// duty cycle — the last hop is the throughput limit, so this is the one
+    /// place a burst is worth spending airtime on.
+    #[test]
+    fn a_tower_contact_drains_up_to_a_full_contact_window() {
+        let (mut balloons, _t, adj) = line(2);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        // b0 hears the tower directly and is holding a full queue.
+        for k in 0..RELAY_QUEUE_CAPACITY {
+            balloons[0].queue.push_back(Bundle {
+                origin_id: 1, seq: k as u64, created_at_round: 0, path: vec![1, 0],
+            });
+        }
+
+        step(&mut balloons, &adj, &[0], 1, &mut stats);
+
+        let expected = TOWER_CONTACT_BUNDLES.min(RELAY_QUEUE_CAPACITY);
+        assert_eq!(stats.delivered, expected as u64, "stats: {stats:?}");
+        assert_eq!(balloons[0].queue.len(), RELAY_QUEUE_CAPACITY - expected);
+    }
+
+    /// The contact window applies only to towers. A relay handing off to another
+    /// balloon still moves exactly one bundle per slot, because that transmission
+    /// is rationed by the sender's duty cycle in the ordinary way.
+    #[test]
+    fn a_balloon_to_balloon_handoff_still_moves_only_one_bundle() {
+        let (mut balloons, _t, adj) = line(3);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        for k in 0..4 {
+            balloons[2].queue.push_back(Bundle {
+                origin_id: 2, seq: k, created_at_round: 0, path: vec![2],
+            });
+        }
+
+        step(&mut balloons, &adj, &[2], 1, &mut stats);
+
+        assert_eq!(balloons[1].queue.len(), 1, "only one bundle should have crossed");
+        assert_eq!(balloons[2].queue.len(), 3, "the rest stay with the sender");
     }
 
     #[test]
