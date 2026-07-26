@@ -4,7 +4,7 @@
 pub const BALLOON_MIN_ALT: f64 = 1000.0; // meters
 pub const BALLOON_MAX_ALT: f64 = 25000.0; // meters
 pub const TICK_DT_SECONDS: f64 = 1.0; // simulated seconds per tick
-pub const TIME_SCALE: f64 = 60.0; // 1 real second = 60 sim seconds
+pub const TIME_SCALE: f64 = 15.0; // 1 real second = 15 sim seconds
 
 pub const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
@@ -13,7 +13,19 @@ pub const WIND_API_URL: &str = "http://127.0.0.1:8000/api/wind-levels";
 // Buoyancy/ballast controller (simple target-altitude thermostat).
 pub const MAX_VERTICAL_RATE: f64 = 3.0; // m/s
 pub const VERTICAL_GAIN: f64 = 0.0005;
-pub const TARGET_DRIFT_CHANCE_PER_TICK: f64 = 0.002;
+/// Rate at which a balloon picks a new target altitude, per *simulated* hour.
+///
+/// Deliberately not per-tick. A tick is TICK_DT_SECONDS * TIME_SCALE simulated
+/// seconds, so a per-tick probability silently rescales this whenever TIME_SCALE
+/// moves: lowering TIME_SCALE from 60 to 15 would have quadrupled how often
+/// balloons retarget per simulated hour, and since altitude churn is what breaks
+/// radio links, that would have shown up as a mysteriously higher stale-belief
+/// fraction. Expressed as a rate, retargeting means the same thing physically at
+/// any TIME_SCALE.
+///
+/// 0.12/h ≈ one retarget every ~8 simulated hours, matching the original
+/// 0.002-per-tick behaviour at TIME_SCALE = 60.
+pub const TARGET_DRIFT_CHANCE_PER_SIM_HOUR: f64 = 0.12;
 pub const TARGET_DRIFT_RANGE: f64 = 4000.0; // meters
 
 // Link detection throttling: recompute/broadcast edges every N ticks.
@@ -27,7 +39,7 @@ pub const LINK_UPDATE_EVERY_N_TICKS: u32 = 3;
 // client sets balloon positions directly per snapshot, with no interpolation,
 // so anything much below 20 Hz visibly stutters) *and* it was the protocol
 // clock. Denominating comms in ticks therefore locked the whole protocol to
-// 1200x real time: the measured discovery arc of ~47 ticks crossed the planet
+// 1200x real time: the measured discovery arc crossed the planet
 // in 2.4 real seconds, and belief expiry in 3. Nothing was observable.
 //
 // With comms on its own clock the protocol's real-time pace is tunable without
@@ -59,7 +71,7 @@ pub const BEACON_JITTER_ROUNDS: u64 = 1;
 /// This is OSPF's LSA MaxAge idea. The floor on it is propagation time: a
 /// belief has to survive long enough to reach the far end of the mesh, or deep
 /// balloons expire it on arrival and can never hold a route. Measured
-/// convergence is ~47 rounds to reach 99% of a 1200-balloon field, so this must
+/// convergence is ~38 rounds to reach 99% of a 1200-balloon field, so this must
 /// sit above that — it is ~12 beacon intervals, not the 3-4 a contact-recency
 /// timeout would want. **Not a pacing dial**: lower it toward the convergence
 /// figure and deep balloons expire beliefs on arrival. Retune the comms clock

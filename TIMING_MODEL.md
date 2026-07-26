@@ -17,18 +17,18 @@ with this document, it is right and this document needs updating.**
 ## Three clocks
 
 ```
-1 tick        = 50 ms real          = 60 s simulated      ← the heartbeat
-1 link round  = 3 ticks   = 0.15 s real  = 3 sim min
-1 comms round = 8 ticks   = 0.40 s real  = 8 sim min
+1 tick        = 50 ms real          = 15 s simulated     ← the heartbeat
+1 link round  = 3 ticks   = 0.15 s real  = 45 sim sec
+1 comms round = 8 ticks   = 0.40 s real  = 2 sim min
 ```
 
-Everything follows from the first line: the simulation runs at **1200× real time**.
+Everything follows from the first line: the simulation runs at **300× real time**.
 
-- 1 real second = 20 ticks = **20 simulated minutes**
-- 1 real minute = **20 simulated hours**
+- 1 real second = 20 ticks = **5 simulated minutes**
+- 1 real minute = **5 simulated hours**
 
 The three clocks exist because they answer different questions. **Real time** is what you watch.
-**Simulated time** is what the physics believes, and the only clock in which "a 40-minute radio
+**Simulated time** is what the physics believes, and the only clock in which "a 10-minute radio
 duty cycle" is a meaningful claim. **Comms rounds** are what the protocol counts, and exist so the
 protocol's pace can be tuned without disturbing either of the other two — see §1.2 of
 `MESH_COMMS_DESIGN.md` for why that separation was necessary.
@@ -37,16 +37,17 @@ protocol's pace can be tuned without disturbing either of the other two — see 
 
 | Parameter | Config constant | **Real seconds** | Simulated time |
 |---|---|---|---|
-| Snapshot / frame | `TICK_INTERVAL_MS = 50` | 0.05 s | 1 min |
-| Link recompute | `LINK_UPDATE_EVERY_N_TICKS = 3` | 0.15 s | 3 min |
-| Comms round | `COMMS_EVERY_N_TICKS = 8` | 0.40 s | 8 min |
-| Beacon transmission | `BEACON_INTERVAL_ROUNDS = 5` | **2.0 s** | 40 min |
-| Beacon jitter | `BEACON_JITTER_ROUNDS = 1` | ±0.4 s | ±8 min |
-| Belief expiry | `BELIEF_MAX_AGE_ROUNDS = 60` | **24 s** | 8 hours |
-| Full discovery (measured, 1200 balloons) | ~50 rounds | **20 s** | ~6.7 hours |
+| Snapshot / frame | `TICK_INTERVAL_MS = 50` | 0.05 s | 15 s |
+| Link recompute | `LINK_UPDATE_EVERY_N_TICKS = 3` | 0.15 s | 45 s |
+| Comms round | `COMMS_EVERY_N_TICKS = 8` | 0.40 s | 2 min |
+| Beacon transmission | `BEACON_INTERVAL_ROUNDS = 5` | **2.0 s** | 10 min |
+| Beacon jitter | `BEACON_JITTER_ROUNDS = 1` | ±0.4 s | ±2 min |
+| Belief expiry | `BELIEF_MAX_AGE_ROUNDS = 60` | **24 s** | 2 hours |
+| Full discovery (measured, 1200 balloons) | ~38 rounds | **15 s** | ~76 min |
 
 In plain terms: **a balloon speaks every 2 seconds; a belief it cannot refresh dies after 24
-seconds; a beacon takes about 20 seconds to cross the planet.**
+seconds; a beacon takes about 15 seconds to cross the planet.** In simulated terms: a 10-minute
+radio duty cycle, a 2-hour route-belief lifetime.
 
 `BEACON_MAX_HOPS = 20` is deliberately absent — it is a hop budget, not a duration.
 
@@ -56,7 +57,7 @@ Two rules cover nearly every question:
 
 ```
 real seconds   = rounds × 0.4
-simulated mins = rounds × 8
+simulated mins = rounds × 2
 ```
 
 The general forms, if `COMMS_EVERY_N_TICKS` changes:
@@ -77,8 +78,9 @@ They are not interchangeable, and each has a distinct cost.
 | `TICK_INTERVAL_MS` | scales only | — | breaks render smoothness |
 
 **`COMMS_EVERY_N_TICKS` is the pacing dial.** It moves real and simulated time together, which is
-why raising it to 8 bought watchable pacing but pushed belief expiry out to a somewhat implausible
-8 simulated hours.
+why raising it to 8 bought watchable pacing but initially pushed belief expiry out to an
+implausible 8 simulated hours — fixed by lowering `TIME_SCALE` from 60 to 15, which bought the
+simulated durations back without touching the real-time pacing at all.
 
 **To slow the protocol on screen while holding simulated durations fixed**, raise
 `COMMS_EVERY_N_TICKS` and lower `TIME_SCALE` by the same factor. The price is balloons drifting
@@ -94,16 +96,16 @@ arrival and can never hold a route. See §1.2 of `MESH_COMMS_DESIGN.md`.
 
 ## Tuning reference
 
-| `COMMS_EVERY_N_TICKS` | Beacon every | Belief dies after | Full discovery |
-|---|---|---|---|
-| 4 | 1.0 s | 12 s | 10 s |
-| **8** (current) | 2.0 s | 24 s | **20 s** |
-| 12 | 3.0 s | 36 s | 30 s |
-| 16 | 4.0 s | 48 s | 40 s |
+| `COMMS_EVERY_N_TICKS` | Beacon every | Belief dies after | Full discovery | Belief age (sim) |
+|---|---|---|---|---|
+| 4 | 1.0 s | 12 s | 7.6 s | 60 min |
+| **8** (current) | 2.0 s | 24 s | **15 s** | **2 h** |
+| 12 | 3.0 s | 36 s | 23 s | 3 h |
+| 16 | 4.0 s | 48 s | 30 s | 4 h |
 
 `cargo run --release --bin timing` prints this table with a wider range of candidates, plus a
 **simulated** belief-age column — the plausibility check. A duty-cycled HAB radio trusting a route
-belief for 8 simulated hours is already generous; at `COMMS_EVERY_N_TICKS = 24` it is a full day.
+belief for 2 simulated hours is already generous; at `COMMS_EVERY_N_TICKS = 24` it is 6 hours.
 When real-time pacing and simulated plausibility pull apart, that is the signal to lower
 `TIME_SCALE` rather than push the comms clock further.
 
@@ -118,6 +120,11 @@ open C2 question is the standing example: does a telemetry bundle advance one ho
 (0.05 s) or one hop per **duty-cycle slot** (2 s)? Across a 14-hop path that is **0.7 seconds
 versus 28** — a decision worth making deliberately, and one that was not answerable at all before
 the comms clock was separated out, when the two options were 0.7 s and 3.5 s.
+
+The same trap has now bitten twice in the physics, both times exposed by moving `TIME_SCALE`:
+a retarget probability expressed *per tick* rather than per simulated hour, and a harness that
+hardcoded `world.tick(60.0)` instead of `TICK_DT_SECONDS * TIME_SCALE`. Anything scheduled per
+tick silently changes meaning when a tick's duration changes. Express rates per simulated time.
 
 Before arguing about a timing constant, convert it to seconds and ask whether the difference is
 something a person could see.

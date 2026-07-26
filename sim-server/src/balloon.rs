@@ -3,7 +3,7 @@
 // vertical motion.
 
 use crate::config::{
-    BALLOON_MAX_ALT, BALLOON_MIN_ALT, MAX_VERTICAL_RATE, TARGET_DRIFT_CHANCE_PER_TICK,
+    BALLOON_MAX_ALT, BALLOON_MIN_ALT, MAX_VERTICAL_RATE, TARGET_DRIFT_CHANCE_PER_SIM_HOUR,
     TARGET_DRIFT_RANGE, VERTICAL_GAIN,
 };
 use crate::wind_field::WindField;
@@ -62,8 +62,10 @@ impl Balloon {
         // Wrap back into [-180, 180).
         self.lon = ((self.lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
 
-        // Vertical: proportional target-altitude controller.
-        if rng.gen::<f64>() < TARGET_DRIFT_CHANCE_PER_TICK {
+        // Vertical: proportional target-altitude controller. Retargeting is a
+        // rate per simulated hour, scaled by dt like the advection above, so it
+        // doesn't silently change meaning when TIME_SCALE moves.
+        if rng.gen::<f64>() < TARGET_DRIFT_CHANCE_PER_SIM_HOUR * dt_seconds / 3600.0 {
             let delta = (rng.gen::<f64>() * 2.0 - 1.0) * TARGET_DRIFT_RANGE;
             self.target_alt = (self.target_alt + delta).clamp(BALLOON_MIN_ALT, BALLOON_MAX_ALT);
         }
@@ -103,6 +105,44 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         b.step(60.0, &wind, &mut rng);
         assert!(b.lon > 10.0);
+    }
+
+    /// Retargeting must happen at the same rate per *simulated* hour no matter
+    /// how much simulated time a tick covers.
+    ///
+    /// The bug this guards against: the chance was once expressed per tick, so
+    /// changing TIME_SCALE silently rescaled it. Dropping TIME_SCALE from 60 to
+    /// 15 would have quadrupled retargets per simulated hour — and since
+    /// altitude churn is what breaks radio links, it would have surfaced only as
+    /// an unexplained rise in the stale-belief fraction, far from its cause.
+    #[test]
+    fn retarget_rate_is_independent_of_tick_duration() {
+        const SIM_HOURS: f64 = 5_000.0;
+        let wind = WindField::zero();
+        let expected = TARGET_DRIFT_CHANCE_PER_SIM_HOUR * SIM_HOURS;
+
+        for (i, &dt) in [15.0_f64, 60.0, 240.0].iter().enumerate() {
+            let steps = (SIM_HOURS * 3600.0 / dt) as usize;
+            // Mid-range altitude so the ±4000 m jump is never clamped away.
+            let mut b = Balloon::new(0, 0.0, 0.0, 13000.0);
+            let mut rng = StdRng::seed_from_u64(7 + i as u64);
+            let mut prev = b.target_alt;
+            let mut retargets = 0u32;
+            for _ in 0..steps {
+                b.step(dt, &wind, &mut rng);
+                if b.target_alt != prev {
+                    retargets += 1;
+                    prev = b.target_alt;
+                }
+            }
+            let err = (retargets as f64 - expected).abs() / expected;
+            assert!(
+                err < 0.15,
+                "dt={dt}s: {retargets} retargets over {SIM_HOURS} sim hours, \
+                 expected ~{expected:.0} ({:.0}% off)",
+                err * 100.0
+            );
+        }
     }
 
     #[test]

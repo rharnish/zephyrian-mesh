@@ -13,7 +13,7 @@ use sim_server::config::*;
 /// beacon wave to reach 99% of a 1200-balloon field, from
 /// `cargo run --release --bin beacon_convergence`. Re-measure if the protocol
 /// or the default topology changes.
-const MEASURED_CONVERGENCE_ROUNDS: u64 = 50;
+const MEASURED_CONVERGENCE_ROUNDS: u64 = 38;
 
 fn real_secs_per_tick() -> f64 {
     TICK_INTERVAL_MS as f64 / 1000.0

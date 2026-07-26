@@ -14,26 +14,33 @@
 //   - `believes` should climb from 0 and converge toward `truth` (grounded %).
 //   - `unaware` (has a route, hasn't heard) should start at ~truth and decay —
 //     that decay curve *is* the discovery wavefront.
-//   - `stale` settles around 0.4-1.1% here, not 0. Zero wind freezes latitude
-//     and longitude but not altitude, and at 8 ticks per comms round the
-//     altitude random walk breaks links slightly faster than beliefs expire.
-//     A jump well above that band means something is wrong.
+//   - `stale` should stay at ~0.0-0.1%; with a frozen topology there is almost
+//     nothing for a belief to become stale about. Anything materially above
+//     that means links are churning faster than beliefs expire -- which is a
+//     real signal, and once pointed at a harness bug (a hardcoded dt that
+//     simulated 4x more time per round than the live server).
 //
 //   cargo run --release --bin beacon_convergence [n_balloons] [rounds]
 
 use sim_server::config::{
     BEACON_INTERVAL_ROUNDS, BELIEF_MAX_AGE_ROUNDS, COMMS_EVERY_N_TICKS, COMMS_ROUND_SIM_SECONDS,
-    DEFAULT_HORIZON_REFRACTION_COEFF, INITIAL_TOWERS, TICK_INTERVAL_MS,
+    DEFAULT_HORIZON_REFRACTION_COEFF, INITIAL_TOWERS, TICK_DT_SECONDS, TICK_INTERVAL_MS,
+    TIME_SCALE,
 };
 use sim_server::sim::{Snapshot, World};
 use sim_server::wind_field::WindField;
 use std::sync::Arc;
 
 /// Advance exactly one comms round and return the snapshot at the end of it.
+///
+/// dt must match what main.rs feeds the live server, or this harness silently
+/// measures a different physical regime than the one that ships. It was
+/// hardcoded to 60.0 -- correct only while TIME_SCALE happened to be 60.
 fn advance_round(world: &mut World) -> Snapshot {
-    let mut s = world.tick(60.0);
+    let dt = TICK_DT_SECONDS * TIME_SCALE;
+    let mut s = world.tick(dt);
     for _ in 1..COMMS_EVERY_N_TICKS {
-        s = world.tick(60.0);
+        s = world.tick(dt);
     }
     s
 }

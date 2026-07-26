@@ -149,17 +149,16 @@ Starting constants:
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Comms round | 8 ticks (~8 sim min, 0.4 real s) | Pacing dial. Puts the discovery arc at ~20 real seconds and belief expiry at ~24 — slow enough to watch a wavefront spread and a stale belief die. |
+| Comms round | 8 ticks (~2 sim min, 0.4 real s) | Pacing dial. Puts the discovery arc at ~20 real seconds and belief expiry at ~24 — slow enough to watch a wavefront spread and a stale belief die. |
 | Beacon interval | 5 rounds, jittered ±20% | Duty cycle. Decoupled from the link-recompute cadence so the comms and topology clocks don't beat against each other; jitter avoids lockstep rebroadcast collisions. |
-| Belief max age | 60 rounds (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~50 rounds to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §1. |
+| Belief max age | 60 rounds (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~38 rounds to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §1. |
 | Bundle TTL / max hops | ~20 | Covers p95 depth at operational densities; deliberately truncates the critical-regime tails, where handing off to satellite is the correct policy anyway. |
 | Ack timeout → satellite | a few beacon intervals | Must exceed a plausible round trip (2× path traversal), or satellite will fire while the ack is still legitimately in flight. |
 
-One consequence worth noting: at 8 ticks per round, topology churn is no longer negligible over a
-belief's lifetime. `beacon_convergence.rs` now shows a persistent 0.4–1.1% stale fraction even in
-its nominally "frozen" zero-wind phase, where it used to read exactly 0.0%. That is the altitude
-random walk breaking links faster than beliefs expire — real behavior surfacing at a realistic
-clock, not a regression.
+`TIME_SCALE` was lowered from 60 to 15 alongside this, which is what makes the simulated column
+plausible: a 10-minute beacon duty cycle and a 2-hour route-belief lifetime, against links that
+live a few simulated hours. Real-time pacing is unaffected — `TIME_SCALE` moves only simulated
+time. The cost is that balloons drift 4× slower on screen.
 
 ## 2. Tamper-evidence — real crypto, verified on demand
 
