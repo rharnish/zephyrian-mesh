@@ -330,7 +330,8 @@ done in either order, or interleaved.
   and it is the piece that validates the §3.1 constants against the live sim.
 - **C2.** Telemetry bundles with path history + forwarding along believed next-hop + loop/TTL
   handling; tower acks source-routed back; satellite fallback on ack timeout (port the
-  `connectivity_sweep` policy). Aggregate counters into `Snapshot`.
+  `connectivity_sweep` policy). Aggregate counters into `Snapshot`. **Design settled — see
+  §6 below.**
 - **C3.** Hash chain + Ed25519 signing/verification + key rotation, behind
   `GET /api/balloons/:id/comms`.
 - **C4.** Frontend: selection, animated packet along recorded path, ack animation, comms log panel,
@@ -362,3 +363,50 @@ delivery and ack loss.
 - Command/REST + Snapshot protocol to extend: `sim-server/src/sim.rs`, `sim-server/src/main.rs`.
 - Reused-`PolylineCollection` + reconcile patterns and the Controls-panel-building convention:
   `src/main.js`.
+
+## 6. C2 design decisions (settled, not yet implemented)
+
+Four questions came up scoping C2. Three are decided; the fourth is deliberately deferred until
+the comms clock is tuned, because before §3.2 it was not answerable by observation.
+
+**Decided.**
+
+- **Ack loss reuses the C1 belief-vs-truth shape.** Each bundle carries two independent states:
+  what the *balloon* can know, and what the *server* knows. The balloon may only ever act on the
+  left column.
+
+  | reality | balloon's view | server truth |
+  |---|---|---|
+  | never arrived | `Pending` → `TimedOut` | `NeverArrived` |
+  | arrived, ack died en route | `Pending` → `TimedOut` | `ArrivedAckLost` |
+  | arrived and acked | `Acked` | `ArrivedAcked` |
+
+  The two middle-column cells being identical *is* the phenomenon — a balloon genuinely cannot
+  distinguish "my data never made it" from "it made it and the receipt died." Rendering that as a
+  visible band of disagreement, exactly like the amber/red belief overlay, turns what looked like
+  a UI problem into the lesson. It also gives the harness a sharp metric: ack-loss rate versus
+  mean degree, expected to peak near percolation where paths are longest.
+
+- **One outstanding bundle per balloon.** A balloon emits its next bundle only once the previous
+  one is acked or times out. Bounded memory at 2000 balloons, matches a real store-and-forward
+  buffer, and keeps the counters interpretable. Free-running emission mostly buys queue-management
+  complexity.
+
+- **A stale next-hop holds, it does not drop.** The believed `next_hop` will frequently no longer
+  be a neighbour. The bundle waits in the balloon's buffer until its belief refreshes or the TTL
+  expires. This is what makes the network delay-tolerant rather than merely lossy, and holding is
+  what generates the interesting late deliveries.
+
+**Open.**
+
+- **Does a bundle advance one hop per tick, or one hop per duty-cycle slot?** The duty-cycle
+  version (reusing the balloon's beacon slot, since a radio that is awake is awake for both) is
+  the coherent physical story and makes ack timeouts meaningful, since beliefs can then expire
+  mid-flight. The per-tick version delivers roughly 5× faster. Settle it by watching both once
+  `COMMS_EVERY_N_TICKS` is tuned — before §3.2 the two were 0.7 s and 3.5 s on screen, i.e.
+  indistinguishable.
+
+**Verification.** Per the convention above, C2 needs `bin/bundle_delivery.rs`, with C1's phase-3
+move built in from the start: remove every tower and assert every bundle *resolves* — delivered,
+TTL-expired, or handed to satellite — with nothing held forever and no unbounded queue growth.
+That is the same class of bug as C1's self-sustaining beliefs, and equally invisible in a browser.
