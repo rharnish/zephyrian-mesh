@@ -75,6 +75,50 @@ pub struct BundleStats {
     /// is a congestion *pressure* gauge, not an outcome, and is excluded from
     /// `resolved()`.
     pub blocked: u64,
+
+    // --- Slot accounting ----------------------------------------------------
+    //
+    // A bundle's entire budget is BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS
+    // = 30 wake slots. Every slot where the holder wakes holding a bundle and
+    // fails to move it burns part of that budget, so the *stall rate* — not the
+    // loss counters above — is what decides whether bundles arrive in time.
+    // These break that down by cause.
+    /// Wake slots where the holder had at least one bundle in hand.
+    pub slots_with_bundle: u64,
+    /// ...of which the holder had no route belief at all.
+    pub stall_no_belief: u64,
+    /// ...of which the believed next hop was no longer a neighbour.
+    pub stall_stale_next_hop: u64,
+    /// ...of which the balloon believed it could hear a tower, but couldn't.
+    pub stall_tower_gone: u64,
+
+    // --- Path length --------------------------------------------------------
+    //
+    // Indexed by hop count, saturating at the last bucket. Compare
+    // `belief_hops` against true mesh depth (bin/mesh_depth.rs): if believed
+    // distance runs well past topological distance, routing is sending bundles
+    // the long way round and the expiry budget is being spent on detours.
+    /// Hops actually travelled by bundles that reached a tower.
+    pub delivered_hops: [u64; 32],
+    /// Hops travelled before running out of time.
+    pub expired_hops: [u64; 32],
+    /// Believed distance-to-tower, sampled once per wake slot per balloon.
+    pub belief_hops: [u64; 32],
+
+    // --- The last hop -------------------------------------------------------
+    //
+    // Every bundle in the world has to be handed to a tower by a balloon that
+    // can currently hear one, and each such balloon can pass exactly one bundle
+    // per duty-cycle slot. That makes the tower-adjacent population, not the
+    // mesh at large, the throughput limit on delivery.
+    /// Summed over rounds: balloons with a tower in radio range.
+    pub tower_adjacent_samples: u64,
+    /// Rounds over which the above was sampled.
+    pub rounds_sampled: u64,
+}
+
+fn bump(hist: &mut [u64; 32], n: usize) {
+    hist[n.min(31)] += 1;
 }
 
 impl BundleStats {
@@ -82,6 +126,64 @@ impl BundleStats {
     pub fn resolved(&self) -> u64 {
         self.delivered + self.dropped_loop + self.dropped_ttl + self.expired
     }
+
+    /// Wake slots that actually moved a bundle (forwarded, delivered, or
+    /// dropped). `blocked` is subtracted too: a handoff refused by a full
+    /// receiver wastes the slot exactly like a stale next hop does, even though
+    /// it costs no bundle.
+    pub fn slots_used(&self) -> u64 {
+        self.slots_with_bundle.saturating_sub(
+            self.stall_no_belief
+                + self.stall_stale_next_hop
+                + self.stall_tower_gone
+                + self.blocked,
+        )
+    }
+
+    /// Fraction of held-bundle wake slots wasted. This is the number that
+    /// decides delivery: at a mean depth of d hops a bundle needs d successful
+    /// slots out of the 30 it will ever get.
+    pub fn stall_rate(&self) -> f64 {
+        if self.slots_with_bundle == 0 {
+            return 0.0;
+        }
+        1.0 - self.slots_used() as f64 / self.slots_with_bundle as f64
+    }
+
+    /// Mean number of balloons that could hand a bundle straight to a tower.
+    pub fn mean_tower_adjacent(&self) -> f64 {
+        if self.rounds_sampled == 0 {
+            return 0.0;
+        }
+        self.tower_adjacent_samples as f64 / self.rounds_sampled as f64
+    }
+
+    /// Ceiling on deliveries per round, from the last hop alone: each
+    /// tower-adjacent balloon can pass one bundle per BEACON_INTERVAL_ROUNDS.
+    /// Nothing about mesh depth, queue depth, or routing quality can raise it —
+    /// only the tower-adjacent population.
+    pub fn delivery_capacity_per_round(&self) -> f64 {
+        self.mean_tower_adjacent() / BEACON_INTERVAL_ROUNDS as f64
+    }
+
+    /// Delivery among bundles that actually finished. `delivered / originated`
+    /// counts everything still legitimately in flight at the cutoff as a
+    /// failure, which understates delivery badly at these origination rates.
+    pub fn completion_rate(&self) -> f64 {
+        if self.resolved() == 0 {
+            return 0.0;
+        }
+        self.delivered as f64 / self.resolved() as f64
+    }
+}
+
+/// Mean of a saturating histogram, ignoring the empty case.
+pub fn hist_mean(h: &[u64; 32]) -> f64 {
+    let n: u64 = h.iter().sum();
+    if n == 0 {
+        return 0.0;
+    }
+    h.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum::<f64>() / n as f64
 }
 
 /// Advance bundles by one comms round.
@@ -100,9 +202,20 @@ pub fn step(
     //    slice 2 will hand these to satellite instead of dropping them.
     for b in balloons.iter_mut() {
         let before = b.queue.len();
+        for bd in b.queue.iter() {
+            if bd.age(round) > BUNDLE_MAX_AGE_ROUNDS {
+                bump(&mut stats.expired_hops, bd.hops());
+            }
+        }
         b.queue.retain(|bd| bd.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
         stats.expired += (before - b.queue.len()) as u64;
     }
+
+    // 1b. Sample the last-hop population. This is the delivery bottleneck, so
+    //     it gets measured every round rather than inferred from geometry.
+    stats.rounds_sampled += 1;
+    stats.tower_adjacent_samples +=
+        (0..balloons.len()).filter(|&i| adj.tower_in_range(i).is_some()).count() as u64;
 
     // 2. Gather this round's transmissions. Two-phase for the same reason as
     //    beacon::step — applying in place would let a bundle race along several
@@ -112,23 +225,34 @@ pub fn step(
 
     // One transmission per awake radio, so only the head of the queue moves.
     for &i in awake {
+        if let Some(bel) = balloons[i].belief {
+            bump(&mut stats.belief_hops, bel.hop_count as usize);
+        }
         let Some(bundle) = balloons[i].queue.front() else { continue };
+        stats.slots_with_bundle += 1;
 
         // A balloon with no belief has nowhere to send it. Hold.
-        let Some(belief) = balloons[i].belief else { continue };
+        let Some(belief) = balloons[i].belief else {
+            stats.stall_no_belief += 1;
+            continue;
+        };
 
         match belief.next_hop {
             // Believes it hears a tower directly. Only true if the link is
             // still live — belief can be stale, the radio cannot lie.
             None => {
                 if adj.tower_in_range(i).is_some() {
-                    balloons[i].queue.pop_front();
+                    let bd = balloons[i].queue.pop_front().expect("checked non-empty");
+                    bump(&mut stats.delivered_hops, bd.hops());
                     stats.delivered += 1;
+                } else {
+                    // Otherwise hold: the belief will expire or refresh.
+                    stats.stall_tower_gone += 1;
                 }
-                // Otherwise hold: the belief will expire or refresh.
             }
             Some(next) => {
                 if !adj.is_neighbor(i, next) {
+                    stats.stall_stale_next_hop += 1;
                     continue; // stale next hop — hold, don't drop
                 }
                 if bundle.path.contains(&next) {

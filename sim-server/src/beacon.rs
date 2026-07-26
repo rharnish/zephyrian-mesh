@@ -141,6 +141,13 @@ impl MeshAdjacency {
 /// which is what stops a flood from becoming a broadcast storm.
 fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
     let Some(cur) = cur else { return true };
+    if crate::ablation::prefer_nearer() {
+        // Ablation: nearest wins, freshness only breaks ties. Beliefs still drain
+        // when towers go away, because that property comes from expiry (which is
+        // keyed on emitted_at_round) rather than from this comparison.
+        return new.hop_count < cur.hop_count
+            || (new.hop_count == cur.hop_count && new.emitted_at_round > cur.emitted_at_round);
+    }
     // Freshness is judged by when the tower emitted the wave, which is a global
     // sim round and therefore comparable across towers. Crucially this is the
     // *only* thing that can refresh a belief's lease: re-hearing news you
