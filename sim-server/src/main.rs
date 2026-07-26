@@ -32,6 +32,10 @@ async fn main() {
     let wind = Arc::new(fetch_wind_field().await);
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Command>();
+    // Deliberately shallow (~0.8s at 20 Hz). This is a live view, not a log: a
+    // client that falls behind wants the *newest* state, not a backlog of stale
+    // frames replayed at it. Overflow is therefore normal and handled by
+    // skipping frames in `handle_socket`, not by growing this buffer.
     let (snapshot_tx, _) = broadcast::channel::<String>(16);
 
     let state = AppState {
@@ -122,9 +126,21 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.snapshots.subscribe();
-    while let Ok(json) = rx.recv().await {
+    loop {
+        // A slow client must be allowed to *skip* frames. Treating `Lagged` as
+        // end-of-stream (as `while let Ok(..)` does) hangs up on it instead,
+        // and since the frontend reconnects 2s later that turns a few dropped
+        // frames into a visible freeze-then-jump every ~10 seconds.
+        let json = match rx.recv().await {
+            Ok(json) => json,
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::debug!("client lagged, skipping {n} snapshots");
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
         if socket.send(Message::Text(json)).await.is_err() {
-            break; // client disconnected
+            break; // client actually disconnected
         }
     }
 }
