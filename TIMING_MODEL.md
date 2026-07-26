@@ -4,9 +4,15 @@ Everything in this simulator is scheduled in **ticks**, which is convenient for 
 useless for thinking. This document converts the whole timing model into seconds and names the
 levers that change it.
 
-`sim-server/src/config.rs` is the source of truth. Every number below is *derived* from the
-constants there by the two conversion rules in "Doing the arithmetic" — if a value here ever looks
-wrong, recompute it from config rather than trusting this table.
+`sim-server/src/config.rs` is the source of truth, and every number below is *derived* from the
+constants there. Rather than trusting this file, print the current values:
+
+```bash
+cargo run --release --bin timing
+```
+
+That binary computes all of it from the live constants, so it cannot go stale. **If it disagrees
+with this document, it is right and this document needs updating.**
 
 ## Three clocks
 
@@ -95,8 +101,15 @@ arrival and can never hold a route. See §1.2 of `MESH_COMMS_DESIGN.md`.
 | 12 | 3.0 s | 36 s | 30 s |
 | 16 | 4.0 s | 48 s | 40 s |
 
-Verify any change against `cargo run --release --bin beacon_convergence`, which prints its own
-round → real-seconds conversion from the live constants.
+`cargo run --release --bin timing` prints this table with a wider range of candidates, plus a
+**simulated** belief-age column — the plausibility check. A duty-cycled HAB radio trusting a route
+belief for 8 simulated hours is already generous; at `COMMS_EVERY_N_TICKS = 24` it is a full day.
+When real-time pacing and simulated plausibility pull apart, that is the signal to lower
+`TIME_SCALE` rather than push the comms clock further.
+
+After changing it, confirm the protocol still behaves with
+`cargo run --release --bin beacon_convergence`, which prints its own round → real-seconds
+conversion and asserts beliefs drain completely.
 
 ## Why this matters for design decisions
 
