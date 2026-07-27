@@ -124,6 +124,15 @@ impl World {
         }
     }
 
+    /// Reseeds the RNG driving balloon spawn/drift/duty-cycle jitter. `new`
+    /// defaults to entropy (right for a live server); offline harnesses that
+    /// want a reproducible run per parameter combo should call this before
+    /// `spawn_balloon_pool` so spawn positions/altitudes/jitter are pinned too.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.rng = StdRng::seed_from_u64(seed);
+        self
+    }
+
     /// Spawns the full always-on pool. Call once at startup.
     pub fn spawn_balloon_pool(&mut self, n: u32) {
         self.balloons.clear();

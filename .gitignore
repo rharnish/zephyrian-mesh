@@ -46,3 +46,6 @@ experiments/results*/*log
 experiments/legacy-js/results*/*json
 experiments/legacy-js/results*/*log
 
+# protocol sweep raw results
+experiments/protocol-results/json/*json
+
