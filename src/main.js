@@ -349,14 +349,14 @@ async function initCesium() {
     `;
   }
 
-  // 2D mode always draws balloons as plain dots (glyph detail reads as
-  // noise at flat-map zoom levels and shapes don't "point" meaningfully
-  // without a 3D horizon). In 3D/Columbus View, dots are the default and
-  // the "Glyphs" checkbox below opts into the altitude-glyph billboard —
-  // useful for eyeballing dot-vs-glyph render performance.
+  // Dots are the default; the "Glyphs" checkbox below opts into the
+  // altitude-glyph billboard. The checkbox is authoritative in *every* scene
+  // mode, 2D included — glyph detail does read as noise at flat-map zoom
+  // levels, but that's a judgement for whoever is looking, not something to
+  // enforce by overriding the control.
   let useGlyphs = false;
   function useDots() {
-    return !useGlyphs || viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+    return !useGlyphs;
   }
 
   function reconcileBalloons(serverBalloons) {
@@ -410,9 +410,14 @@ async function initCesium() {
     }
   }
 
-  // Flip every existing balloon between dot and glyph rendering whenever the
-  // scene finishes morphing into/out of 2D, or the "Force dots" override
-  // changes (see updateBalloonRenderModeForAll's other call site below).
+  // Flip every existing balloon between dot and glyph rendering when the
+  // "Glyphs" checkbox changes (see the call site further below).
+  //
+  // Also re-asserted on morphComplete. Strictly that's redundant now that
+  // rendering no longer depends on scene mode — entity graphics keep their
+  // `show` values across a morph — but it's one call per morph and there is
+  // an open, unreproduced report of entity/primitive state desyncing across
+  // exactly this event, so it stays as belt-and-braces.
   function updateBalloonRenderModeForAll() {
     const show2D = useDots();
     for (const entity of balloonEntities.values()) {
@@ -539,22 +544,38 @@ async function initCesium() {
   // range-circle ellipses aren't tagged __isTower, so widening this can't
   // turn the whole circle into a delete target.
   const CLICK_PICK_TOLERANCE_PX = 12;
+  // How many candidates to consider within that rectangle. A single nearest
+  // hit (`scene.pick`) isn't enough here: a balloon that's actually in range
+  // of a tower is, by definition, hovering near it, so its billboard very
+  // often occupies the exact screen pixel closest to the click — at which
+  // point `pick` returns the balloon and the tower is simply unreachable by
+  // clicking, however wide the tolerance rectangle is. `drillPick` returns
+  // everything hit in the rectangle so we can prefer a tower over a balloon
+  // explicitly, rather than however the nearest-pixel search happens to
+  // order them.
+  const CLICK_DRILL_LIMIT = 8;
   handler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position, CLICK_PICK_TOLERANCE_PX, CLICK_PICK_TOLERANCE_PX);
-    // Clicking a balloon selects it for inspection (takes priority over the
-    // add/remove-tower actions below).
-    if (Cesium.defined(picked) && picked.id && picked.id.__balloonId !== undefined) {
-      selectBalloon(picked.id.__balloonId);
-      return;
-    }
-    if (Cesium.defined(picked) && picked.id && picked.id.__isTower) {
-      const entry = [...towerById.entries()].find(([, tower]) => tower.entity === picked.id);
+    const candidates = viewer.scene.drillPick(
+      click.position,
+      CLICK_DRILL_LIMIT,
+      CLICK_PICK_TOLERANCE_PX,
+      CLICK_PICK_TOLERANCE_PX
+    );
+    const pickedTower = candidates.find((c) => c.id && c.id.__isTower);
+    if (pickedTower) {
+      const entry = [...towerById.entries()].find(([, tower]) => tower.entity === pickedTower.id);
       if (entry) {
         const [id] = entry;
         fetch(`${SIM_SERVER_URL}/api/towers/${id}`, { method: 'DELETE' }).catch((e) =>
           console.error('Failed to remove tower:', e)
         );
       }
+      return;
+    }
+    // No tower in range of the click — fall back to balloon selection.
+    const pickedBalloon = candidates.find((c) => c.id && c.id.__balloonId !== undefined);
+    if (pickedBalloon) {
+      selectBalloon(pickedBalloon.id.__balloonId);
       return;
     }
     const cartesian = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
