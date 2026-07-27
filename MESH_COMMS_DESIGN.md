@@ -33,10 +33,19 @@ demand for the inspected balloon so cost stays bounded.
 created_at, position, alt, gas, ballast, health, ttl}` plus an **environmental sensor block**
 `{temperature, pressure, humidity}`. Temperature and pressure come straight from the
 `atmosphere.rs` ISA model at the balloon's current altitude (§1 of `BALLOON_PHYSICS_VISION.md`
-computes them for the physics; until that exists they can be stubbed); humidity is synthesized
-(e.g., a decreasing-with-altitude profile with noise, since ERA5 humidity isn't in the current
-wind-only dataset — a natural future tie-in to the "extra variables" idea in
-`WEATHER_BACKEND_PLAN.md`). Destination is not "any grounded tower" — the balloon has no way to
+computes them for the physics); humidity is synthesized (a decreasing-with-altitude profile with
+spatial variation, since ERA5 humidity isn't in the current wind-only dataset — a natural future
+tie-in to the "extra variables" idea in `WEATHER_BACKEND_PLAN.md`).
+
+**Built.** `atmosphere.rs` and `telemetry.rs` now exist, so the sensor block is real rather than
+stubbed — see the note under C3 in the phasing section. Two departures from the paragraph above,
+both deliberate: `gas`, `ballast` and `health` are **omitted**, not stubbed, because they are P1
+buoyancy state that does not exist yet and a plausible-looking fake number is worse than an absent
+one; and the synthesized humidity is a smooth function of position rather than an RNG draw, since
+`bundle::step` takes no RNG and threading one in would make the seeded sweeps in
+`bin/protocol_sweep.rs` irreproducible for the sake of a cosmetic field. A record exists in two
+copies — one **retained** by the origin in `Balloon::log` (bounded by `COMMS_LOG_CAPACITY`, and the
+thing C3's hash chain will sign), one **carried** inside the `Bundle` and consumed at a tower. Destination is not "any grounded tower" — the balloon has no way to
 know which towers are grounded. It is "whichever tower this balloon currently *believes* it has a
 route to," which may be wrong or absent.
 
@@ -407,13 +416,28 @@ two can be done in either order, or interleaved.
   handling; tower acks source-routed back; satellite fallback on ack timeout (port the
   `connectivity_sweep` policy). Aggregate counters into `Snapshot`. **Design settled — see §4.**
 - **C3.** Hash chain + Ed25519 signing/verification + key rotation, behind
-  `GET /api/balloons/:id/comms`.
+  `GET /api/balloons/:id/comms`. **Partly done — the non-crypto half has landed.**
+  `atmosphere.rs` (ISA temperature/pressure/density, ported from the model in
+  `weather-data-server/wind_backend.py` and unit-tested to be its exact inverse, so a balloon's
+  reported pressure agrees with the pressure level its wind came from) and `telemetry.rs`
+  (`TelemetryRecord`, sampled at bundle origination, retained in a bounded `Balloon::log` *and*
+  carried inside the bundle). Verified by `bin/telemetry_records.rs`. **Still outstanding: all of
+  the cryptography** — hash chain, Ed25519 signing/verification, key rotation, the query endpoint,
+  and the tamper demo. The chain was deliberately left with the signing work rather than built
+  first: without signatures it isn't tamper-evident, since anyone editing a record can simply
+  recompute every subsequent hash.
 - **C4.** Frontend: selection, animated packet along recorded path, ack animation, comms log panel,
   tamper-demo, last-delivery glyph.
 
 Each phase is independently reviewable and visually demonstrable. **C1 is done** — beacon
 protocol, belief expiry, and the belief-vs-truth overlay are in `sim-server/src/beacon.rs` and the
-Controls panel. C2 is the next step.
+Controls panel. **C2 is now done too** — bundle forwarding, relay queues, the tower-contact
+window, tower acks, and satellite fallback are all in `sim-server/src/bundle.rs`, exercised by
+`bin/bundle_delivery.rs`. One addition beyond what §1/§4 specify: an ack competes with ordinary
+bundle-forwarding for the same one-transmission wake slot at non-tower-adjacent relays (ack wins),
+since letting both ride the same wake for free would have quietly doubled a balloon's per-slot
+throughput and undermined the last-hop scarcity findings in §4 — tower contacts are exempt, for
+the same reason `TOWER_CONTACT_BUNDLES` already is. C3 is the next step.
 
 **Verification convention (learned the hard way in C1).** Every comms phase needs an offline
 harness under `sim-server/src/bin/`, not just a look at the globe. `sim-server` is a library, so a
@@ -427,7 +451,10 @@ by clicking. `bin/beacon_convergence.rs` is the template.
 C2 needs `bin/bundle_delivery.rs`, with C1's phase-3 move built in from the start: remove every
 tower and assert every bundle *resolves* — delivered, TTL-expired, or handed to satellite — with
 nothing held forever and no unbounded queue growth. That is the same class of bug as C1's
-self-sustaining beliefs, and equally invisible in a browser.
+self-sustaining beliefs, and equally invisible in a browser. **Done, and it caught the same class
+of bug a second time**: acks are a second thing that must independently drain once a bundle
+resolves, so the tower-removal phase now tracks ack conservation
+(`delivered - (acked + ack_lost) - acks_in_flight == 0`) alongside the bundle one.
 
 ## Reused existing pieces
 

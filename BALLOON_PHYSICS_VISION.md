@@ -79,6 +79,13 @@ beam vs. a highlighted radio path through the mesh.
 ## Suggested phasing
 
 - **P1.** `atmosphere.rs` + buoyancy physics + ballast/gas state (self-contained; no comms).
+  **`atmosphere.rs` is done** — built by the comms track, which needed it for §1's telemetry
+  sensor block. It provides `temperature_k`, `pressure_hpa`, `density_kg_m3` and
+  `altitude_m_from_pressure_hpa` (a port of the `wind_backend.py` conversion, asserted to be the
+  exact inverse of `pressure_hpa`, which is what pins the two models together). `density_kg_m3`
+  exists specifically for the buoyancy work below even though telemetry never reads it.
+  **The rest of P1 — force integration, gas/ballast state, auto-venting, the autopilot — is
+  untouched.**
 - **P2.** Per-balloon command uplink (target alt / drop ballast / vent gas) + satellite vs radio
   channel.
 
@@ -88,8 +95,9 @@ beam vs. a highlighted radio path through the mesh.
 coupling runs comms → physics, in two places, and `MESH_COMMS_DESIGN.md` names both:
 
 - Its telemetry bundle carries an environmental sensor block whose temperature and pressure come
-  from the `atmosphere.rs` ISA model in §1 above. Until P1 exists these can be stubbed and swapped
-  later.
+  from the `atmosphere.rs` ISA model in §1 above. **This coupling is now resolved**: the comms
+  track built `atmosphere.rs` rather than stubbing the sensor block, so the ISA half of P1 already
+  exists and the buoyancy work can build on it directly.
 - Its key-rotation design uses the `RotateKey{id}` uplink command defined in §2 above.
 
 So the two tracks can be done in either order, or interleaved. Nothing in this document is blocked

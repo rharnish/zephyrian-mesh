@@ -25,23 +25,45 @@
 // holding its own bundle could not relay anyone else's, which gridlocked the
 // mesh and cost roughly half of all deliveries.
 //
-// Not here yet (slice 2): tower acks source-routed back along `path`, and
-// satellite fallback on ack timeout. Until then a bundle that reaches a tower is
-// simply delivered, and `BUNDLE_MAX_AGE_ROUNDS` expiry stands in for the timeout
-// that will later hand it to satellite.
+// Slice 2 adds two things, both in this module:
+//
+//   * **Tower acks**, source-routed back along a bundle's recorded `path`,
+//     reversed. Created the instant a bundle reaches a tower (the same
+//     "instantaneous" convention tower delivery itself already uses) and then
+//     hop by hop back to the origin, one balloon at a time.
+//   * **Satellite fallback** in place of the old silent expiry: a bundle that
+//     ages past BUNDLE_MAX_AGE_ROUNDS wherever it currently sits is handed to
+//     satellite instead of dropped.
+//
+// Acks are not a free side channel. A relay's wake slot is one transmission,
+// so an ack held by a non-tower-adjacent balloon takes priority over that
+// balloon's own bundle-forwarding this slot — letting both ride the same wake
+// would quietly double a balloon's per-slot throughput and undermine the
+// scarce-slot model the last-hop saturation findings depend on. Tower
+// contacts are unaffected: draining TOWER_CONTACT_BUNDLES already runs on a
+// separate, higher-capacity link, which is why it's allowed to break the
+// one-per-slot rule in the first place.
+//
+// The balloon's own view of its bundle (Pending/Acked/TimedOut, on
+// `Balloon::outstanding`) is deliberately poorer than what these stats can
+// see: satellite delivery is silent to the origin, so "never arrived",
+// "arrived but the ack died", and "arrived via satellite" are all
+// indistinguishable from inside, by construction. See MESH_COMMS_DESIGN.md §4.
 
 use crate::balloon::Balloon;
 use crate::beacon::MeshAdjacency;
 use crate::config::*;
 
-/// One unit of telemetry in transit. The payload is deliberately absent — the
-/// environmental sensor block needs `atmosphere.rs` (P1), and nothing about
-/// routing depends on it.
+/// One unit of telemetry in transit.
 #[derive(Debug, Clone)]
 pub struct Bundle {
     pub origin_id: u32,
     pub seq: u64,
     pub created_at_round: u64,
+    /// What the origin measured — the copy that travels. The origin keeps its
+    /// own copy in `Balloon::log`; see telemetry.rs for why there are two.
+    /// Nothing about routing reads this: it is payload, carried and delivered.
+    pub record: crate::telemetry::TelemetryRecord,
     /// Every balloon that has held this bundle, in order, origin first. The
     /// current holder is always `path.last()`. This single field provides loop
     /// detection, the hop budget, and the provenance that C3's relay
@@ -59,8 +81,48 @@ impl Bundle {
     }
 }
 
+/// A tower's receipt for one bundle, source-routed back along that bundle's
+/// recorded path, reversed. Carries the *bundle's* `created_at_round`, not its
+/// own — a round trip has to complete inside the same age budget as the
+/// one-way bundle timeout (see BUNDLE_MAX_AGE_ROUNDS), not a separate one.
+#[derive(Debug, Clone)]
+pub struct Ack {
+    pub origin_id: u32,
+    pub seq: u64,
+    pub created_at_round: u64,
+    /// Stops remaining after the current holder, ending at the origin. Popped
+    /// as the ack advances; the pop that empties this is the one that lands it
+    /// on the origin.
+    pub remaining: std::collections::VecDeque<u32>,
+}
+
+impl Ack {
+    pub fn age(&self, round: u64) -> u64 {
+        round.saturating_sub(self.created_at_round)
+    }
+}
+
+/// What a balloon can conclude about its own most recently originated bundle —
+/// necessarily poorer than server truth. `TimedOut` covers "never arrived",
+/// "arrived but the ack died", and "arrived via satellite" alike: none of
+/// those are distinguishable from inside, which is the point of the design,
+/// not a gap in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckState {
+    Pending,
+    Acked,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OutstandingBundle {
+    pub seq: u64,
+    pub created_at_round: u64,
+    pub state: AckState,
+}
+
 /// Cumulative outcomes. Every bundle that leaves circulation lands in exactly
-/// one of the `delivered` / `dropped_*` / `expired` counters — the harness
+/// one of the `delivered` / `dropped_*` / `satellite` counters — the harness
 /// asserts that, since a bundle that quietly vanishes would be invisible in the
 /// UI and fatal to the delivery statistics.
 #[derive(Debug, Default, Clone, Copy)]
@@ -69,12 +131,27 @@ pub struct BundleStats {
     pub delivered: u64,
     pub dropped_loop: u64,
     pub dropped_ttl: u64,
-    pub expired: u64,
+    /// Bundles that aged past BUNDLE_MAX_AGE_ROUNDS before reaching a tower and
+    /// were handed to satellite instead of dropped — the release valve for a
+    /// structurally saturated ground link (see MESH_COMMS_DESIGN.md §4).
+    pub satellite: u64,
     /// Handoffs that failed because the receiver was already carrying. Not a
     /// loss — the sender keeps the bundle and retries on its next slot — so this
     /// is a congestion *pressure* gauge, not an outcome, and is excluded from
     /// `resolved()`.
     pub blocked: u64,
+
+    // --- Acks ----------------------------------------------------------------
+    //
+    // Every bundle that reaches a tower spawns an ack that must independently
+    // survive its own trip back. These are server truth about that trip;
+    // `Balloon::outstanding` is the poorer view the origin itself can see.
+    /// Acks that completed the full reverse path back to their origin.
+    pub acked: u64,
+    /// Acks that aged out, or were dropped by a full ack_queue, before
+    /// completing the reverse path. The bundle they ack still counts as
+    /// `delivered` — this is "arrived, but the receipt didn't survive."
+    pub ack_lost: u64,
 
     // --- Slot accounting ----------------------------------------------------
     //
@@ -100,8 +177,8 @@ pub struct BundleStats {
     // the long way round and the expiry budget is being spent on detours.
     /// Hops actually travelled by bundles that reached a tower.
     pub delivered_hops: [u64; 32],
-    /// Hops travelled before running out of time.
-    pub expired_hops: [u64; 32],
+    /// Hops travelled before running out of time and going to satellite.
+    pub satellite_hops: [u64; 32],
     /// Believed distance-to-tower, sampled once per wake slot per balloon.
     pub belief_hops: [u64; 32],
 
@@ -122,9 +199,11 @@ fn bump(hist: &mut [u64; 32], n: usize) {
 }
 
 impl BundleStats {
-    /// Bundles that have left circulation, however they left.
+    /// Bundles that have left circulation, however they left. Satellite
+    /// delivery is a resolution, not a loss — nothing ages out into the void
+    /// anymore, it just changes channel.
     pub fn resolved(&self) -> u64 {
-        self.delivered + self.dropped_loop + self.dropped_ttl + self.expired
+        self.delivered + self.dropped_loop + self.dropped_ttl + self.satellite
     }
 
     /// Wake slots that actually moved a bundle (forwarded, delivered, or
@@ -199,41 +278,119 @@ pub fn step(
     round: u64,
     stats: &mut BundleStats,
 ) {
-    // 1. Expire. A bundle nobody could move for this long is out of options;
-    //    slice 2 will hand these to satellite instead of dropping them.
+    // 1. Expire bundles. One that's aged past its budget wherever it currently
+    //    sits is handed to satellite rather than dropped.
     for b in balloons.iter_mut() {
         let before = b.queue.len();
         for bd in b.queue.iter() {
             if bd.age(round) > BUNDLE_MAX_AGE_ROUNDS {
-                bump(&mut stats.expired_hops, bd.hops());
+                bump(&mut stats.satellite_hops, bd.hops());
             }
         }
         b.queue.retain(|bd| bd.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
-        stats.expired += (before - b.queue.len()) as u64;
+        stats.satellite += (before - b.queue.len()) as u64;
     }
 
-    // 1b. Sample the last-hop population. This is the delivery bottleneck, so
+    // 1a. Expire acks. Keyed on the *bundle's* created_at_round (carried
+    //     verbatim on the ack), so a round trip shares the bundle's own age
+    //     budget rather than getting a separate clock.
+    for b in balloons.iter_mut() {
+        let before = b.ack_queue.len();
+        b.ack_queue.retain(|a| a.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
+        stats.ack_lost += (before - b.ack_queue.len()) as u64;
+    }
+
+    // 1b. A balloon still waiting past the timeout gives up on hearing back.
+    //     TimedOut is deliberately the same outcome whether the bundle never
+    //     arrived, arrived and the ack died, or arrived via satellite — none of
+    //     those are distinguishable from inside.
+    for b in balloons.iter_mut() {
+        if let Some(o) = b.outstanding.as_mut() {
+            if o.state == AckState::Pending && round.saturating_sub(o.created_at_round) > BUNDLE_MAX_AGE_ROUNDS
+            {
+                o.state = AckState::TimedOut;
+            }
+        }
+    }
+
+    // 1c. Sample the last-hop population. This is the delivery bottleneck, so
     //     it gets measured every round rather than inferred from geometry.
     stats.rounds_sampled += 1;
     stats.tower_adjacent_samples +=
         (0..balloons.len()).filter(|&i| adj.tower_in_range(i).is_some()).count() as u64;
 
-    // 2. Gather this round's transmissions. Two-phase for the same reason as
-    //    beacon::step — applying in place would let a bundle race along several
-    //    hops within one round depending on iteration order, collapsing exactly
-    //    the delay being modelled.
+    // 2. Ack-forwarding. Takes priority over bundle-forwarding *to a mesh
+    //    peer* on a shared wake slot: that hop is one transmission, and letting
+    //    an ack ride alongside a bundle-forward would quietly double a
+    //    balloon's per-slot throughput there. This does NOT compete with tower
+    //    draining below — the tower link is a separate, higher-capacity
+    //    channel (same reason TOWER_CONTACT_BUNDLES already breaks the
+    //    one-per-slot rule), and a tower-adjacent balloon's belief never
+    //    points at a mesh peer anyway (hop_count == 1, next_hop == None), so it
+    //    was never a candidate for the bundle-forward branch this contends
+    //    with — excluding it here would only strand acks it's relaying for
+    //    someone else. Two-phase gather/apply, same reason as bundle-forwarding
+    //    below.
+    let mut ack_used: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut ack_moves: Vec<(u32, Ack)> = Vec::new();
+    let mut ack_resolved: Vec<(u32, u64)> = Vec::new(); // (origin_id, seq)
+
+    for &i in awake {
+        let Some(ack) = balloons[i].ack_queue.front() else { continue };
+        let Some(&next) = ack.remaining.front() else { continue };
+        if !adj.is_neighbor(i, next) {
+            continue; // stale hop — hold, same delay-tolerant idiom as bundles
+        }
+        let mut ack = balloons[i].ack_queue.pop_front().expect("checked front");
+        ack.remaining.pop_front();
+        ack_used.insert(i);
+        if ack.remaining.is_empty() {
+            ack_resolved.push((ack.origin_id, ack.seq));
+        } else {
+            ack_moves.push((next, ack));
+        }
+    }
+
+    for (to, ack) in ack_moves {
+        let to_idx = to as usize;
+        let has_room =
+            balloons.get(to_idx).is_some_and(|b| b.ack_queue.len() < ACK_QUEUE_CAPACITY);
+        if has_room {
+            balloons[to_idx].ack_queue.push_back(ack);
+        } else {
+            stats.ack_lost += 1;
+        }
+    }
+
+    for (origin_id, seq) in ack_resolved {
+        stats.acked += 1;
+        if let Some(o) = balloons.get_mut(origin_id as usize).and_then(|b| b.outstanding.as_mut())
+        {
+            if o.seq == seq && o.state == AckState::Pending {
+                o.state = AckState::Acked;
+            }
+        }
+    }
+
+    // 3. Gather this round's bundle transmissions. Two-phase for the same
+    //    reason as beacon::step — applying in place would let a bundle race
+    //    along several hops within one round depending on iteration order,
+    //    collapsing exactly the delay being modelled.
     let mut moves: Vec<(usize, u32)> = Vec::new(); // (from index, to balloon id)
 
     // One transmission per awake radio, so only the head of the queue moves.
+    // Tower draining below is never in contention with an ack this balloon is
+    // relaying — see the note on `ack_used` above — so it isn't gated on it;
+    // only the mesh-forward arm (`Some(next)`) is.
     for &i in awake {
         if let Some(bel) = balloons[i].belief {
             bump(&mut stats.belief_hops, bel.hop_count as usize);
         }
         let Some(bundle) = balloons[i].queue.front() else { continue };
-        stats.slots_with_bundle += 1;
 
         // A balloon with no belief has nowhere to send it. Hold.
         let Some(belief) = balloons[i].belief else {
+            stats.slots_with_bundle += 1;
             stats.stall_no_belief += 1;
             continue;
         };
@@ -242,6 +399,7 @@ pub fn step(
             // Believes it hears a tower directly. Only true if the link is
             // still live — belief can be stale, the radio cannot lie.
             None => {
+                stats.slots_with_bundle += 1;
                 if adj.tower_in_range(i).is_some() {
                     // A tower contact drains up to TOWER_CONTACT_BUNDLES, not
                     // one. The one-per-slot rule rations *beacon* airtime; a
@@ -253,6 +411,34 @@ pub fn step(
                         let bd = balloons[i].queue.pop_front().expect("checked non-empty");
                         bump(&mut stats.delivered_hops, bd.hops());
                         stats.delivered += 1;
+
+                        // Spawn the ack, source-routed back along the reversed
+                        // path. A zero-hop bundle (the origin delivered
+                        // directly) resolves on the spot — there's no one to
+                        // hand a packet to.
+                        let mut reversed: std::collections::VecDeque<u32> =
+                            bd.path.iter().rev().copied().collect();
+                        reversed.pop_front(); // drop `i` itself — already here
+                        if reversed.is_empty() {
+                            stats.acked += 1;
+                            if let Some(o) = balloons[i].outstanding.as_mut() {
+                                if o.seq == bd.seq && o.state == AckState::Pending {
+                                    o.state = AckState::Acked;
+                                }
+                            }
+                        } else {
+                            let ack = Ack {
+                                origin_id: bd.origin_id,
+                                seq: bd.seq,
+                                created_at_round: bd.created_at_round,
+                                remaining: reversed,
+                            };
+                            if balloons[i].ack_queue.len() < ACK_QUEUE_CAPACITY {
+                                balloons[i].ack_queue.push_back(ack);
+                            } else {
+                                stats.ack_lost += 1;
+                            }
+                        }
                     }
                 } else {
                     // Otherwise hold: the belief will expire or refresh.
@@ -260,6 +446,14 @@ pub fn step(
                 }
             }
             Some(next) => {
+                if ack_used.contains(&i) {
+                    // This slot's one mesh transmission went to the ack
+                    // instead; the bundle just holds. Excluded from
+                    // slots_with_bundle entirely rather than added to a stall
+                    // bucket — the forwarding logic below never even ran.
+                    continue;
+                }
+                stats.slots_with_bundle += 1;
                 if !adj.is_neighbor(i, next) {
                     stats.stall_stale_next_hop += 1;
                     continue; // stale next hop — hold, don't drop
@@ -279,7 +473,7 @@ pub fn step(
         }
     }
 
-    // 3. Apply. A receiver whose queue is full has nowhere to put it, so the
+    // 4. Apply. A receiver whose queue is full has nowhere to put it, so the
     //    handoff fails and the sender keeps carrying — the same hold-don't-drop
     //    rule as a stale next hop. Dropping here instead loses the overwhelming
     //    majority of traffic the moment the mesh is busy, which is what the
@@ -298,7 +492,7 @@ pub fn step(
         balloons[to_idx].queue.push_back(bundle);
     }
 
-    // 4. Originate. Two independent limits: the queue must have room (shared
+    // 5. Originate. Two independent limits: the queue must have room (shared
     //    with transit traffic), and the balloon may have only *one of its own*
     //    bundles outstanding — the rule the relay queue was wrongly enforcing.
     for &i in awake {
@@ -309,11 +503,24 @@ pub fn step(
         if b.queue.iter().any(|bd| bd.origin_id == b.id) {
             continue; // own bundle still in hand
         }
+        // Measure once, then keep one copy and send the other. Both carry the
+        // same seq because they are the same event (see telemetry.rs).
+        let record = crate::telemetry::TelemetryRecord::sample(b, round);
+        if b.log.len() >= COMMS_LOG_CAPACITY {
+            b.log.pop_front();
+        }
+        b.log.push_back(record.clone());
         b.queue.push_back(Bundle {
             origin_id: b.id,
             seq: b.bundle_seq,
             created_at_round: round,
+            record,
             path: vec![b.id],
+        });
+        b.outstanding = Some(OutstandingBundle {
+            seq: b.bundle_seq,
+            created_at_round: round,
+            state: AckState::Pending,
         });
         b.bundle_seq += 1;
         b.next_bundle_round = round + BUNDLE_INTERVAL_ROUNDS;
@@ -330,6 +537,14 @@ mod tests {
 
     fn edge(a: &str, b: &str) -> Edge {
         Edge { a_key: a.to_string(), b_key: b.to_string() }
+    }
+
+    /// Payload for hand-built test bundles. Routing never reads the record, so
+    /// these tests only need it to exist and to carry the right origin/seq.
+    fn test_record(origin_id: u32, seq: u64) -> crate::telemetry::TelemetryRecord {
+        let mut b = Balloon::new(origin_id, 0.0, 0.0, 18_000.0);
+        b.bundle_seq = seq;
+        crate::telemetry::TelemetryRecord::sample(&b, 0)
     }
 
     fn line(n: usize) -> (Vec<Balloon>, Vec<Tower>, MeshAdjacency) {
@@ -379,7 +594,7 @@ mod tests {
             }
         }
         assert_eq!(stats.delivered, 1, "stats: {stats:?}");
-        assert_eq!(stats.dropped_loop + stats.dropped_ttl + stats.expired, 0);
+        assert_eq!(stats.dropped_loop + stats.dropped_ttl + stats.satellite, 0);
     }
 
     #[test]
@@ -425,6 +640,7 @@ mod tests {
             origin_id: 1,
             seq: 0,
             created_at_round: 0,
+            record: test_record(1, 0),
             path: vec![1],
         });
 
@@ -453,7 +669,7 @@ mod tests {
             b.next_bundle_round = u64::MAX;
         }
         balloons[1].queue.push_back(Bundle {
-            origin_id: 1, seq: 0, created_at_round: 0, path: vec![1],
+            origin_id: 1, seq: 0, created_at_round: 0, record: test_record(1, 0), path: vec![1],
         });
 
         let mut stats = BundleStats::default();
@@ -481,10 +697,10 @@ mod tests {
             b.next_bundle_round = u64::MAX;
         }
         balloons[1].queue.push_back(Bundle {
-            origin_id: 1, seq: 0, created_at_round: 0, path: vec![1],
+            origin_id: 1, seq: 0, created_at_round: 0, record: test_record(1, 0), path: vec![1],
         });
         balloons[2].queue.push_back(Bundle {
-            origin_id: 2, seq: 0, created_at_round: 0, path: vec![2],
+            origin_id: 2, seq: 0, created_at_round: 0, record: test_record(2, 0), path: vec![2],
         });
 
         step(&mut balloons, &adj, &[2], 1, &mut stats);
@@ -502,11 +718,11 @@ mod tests {
         }
         for k in 0..RELAY_QUEUE_CAPACITY {
             balloons[1].queue.push_back(Bundle {
-                origin_id: 1, seq: k as u64, created_at_round: 0, path: vec![1],
+                origin_id: 1, seq: k as u64, created_at_round: 0, record: test_record(1, k as u64), path: vec![1],
             });
         }
         balloons[2].queue.push_back(Bundle {
-            origin_id: 2, seq: 0, created_at_round: 0, path: vec![2],
+            origin_id: 2, seq: 0, created_at_round: 0, record: test_record(2, 0), path: vec![2],
         });
 
         // b2 is awake but b1 is full: the handoff fails and b2 keeps it.
@@ -545,7 +761,7 @@ mod tests {
         // b0 hears the tower directly and is holding a full queue.
         for k in 0..RELAY_QUEUE_CAPACITY {
             balloons[0].queue.push_back(Bundle {
-                origin_id: 1, seq: k as u64, created_at_round: 0, path: vec![1, 0],
+                origin_id: 1, seq: k as u64, created_at_round: 0, record: test_record(1, k as u64), path: vec![1, 0],
             });
         }
 
@@ -569,7 +785,7 @@ mod tests {
         }
         for k in 0..4 {
             balloons[2].queue.push_back(Bundle {
-                origin_id: 2, seq: k, created_at_round: 0, path: vec![2],
+                origin_id: 2, seq: k, created_at_round: 0, record: test_record(2, k), path: vec![2],
             });
         }
 
@@ -580,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_nobody_can_move_eventually_expires() {
+    fn a_bundle_nobody_can_move_eventually_goes_to_satellite() {
         // One balloon, no links, no belief: it originates and can never send.
         let mut balloons = vec![Balloon::new(0, 0.0, 0.0, 18000.0)];
         let adj = MeshAdjacency::default();
@@ -589,7 +805,183 @@ mod tests {
         for round in 0..(BUNDLE_MAX_AGE_ROUNDS + 5) {
             step(&mut balloons, &adj, &[0], round, &mut stats);
         }
-        assert!(stats.expired >= 1, "stats: {stats:?}");
+        assert!(stats.satellite >= 1, "stats: {stats:?}");
         assert_eq!(stats.delivered, 0);
+        assert_eq!(stats.resolved(), stats.satellite, "satellite counts as resolved");
+        // Silent to the origin: it never hears back, so its own view times out
+        // even though the bundle did get out via satellite.
+        assert_eq!(balloons[0].outstanding.unwrap().state, AckState::TimedOut);
+    }
+
+    /// Originating measures the atmosphere once and keeps both copies in step:
+    /// one retained in the log, one riding the bundle.
+    #[test]
+    fn originating_records_telemetry_in_the_log_and_in_the_bundle() {
+        let mut balloons = vec![Balloon::new(0, 10.0, 20.0, 18_000.0)];
+        let adj = MeshAdjacency::default();
+        let mut stats = BundleStats::default();
+
+        step(&mut balloons, &adj, &[0], 5, &mut stats);
+
+        assert_eq!(balloons[0].log.len(), 1);
+        let logged = balloons[0].log.front().unwrap();
+        let carried = &balloons[0].queue.front().unwrap().record;
+
+        assert_eq!(logged.seq, 0);
+        assert_eq!(logged.seq, carried.seq, "the two copies are the same event");
+        assert_eq!(logged.created_at_round, 5);
+        assert_eq!(logged.alt_m, 18_000.0, "must sample where the balloon actually was");
+        assert!((logged.temperature_k - crate::atmosphere::T11).abs() < 1e-9);
+        assert!(logged.pressure_hpa > 0.0);
+    }
+
+    /// The log is bounded — an unbounded one is the kind of leak that looks
+    /// fine in a short harness run and eats memory in a server left up.
+    #[test]
+    fn the_telemetry_log_stays_bounded() {
+        let mut balloons = vec![Balloon::new(0, 0.0, 0.0, 18_000.0)];
+        let adj = MeshAdjacency::default();
+        let mut stats = BundleStats::default();
+
+        // Originate far more than the log can hold. The queue is drained each
+        // round so the one-outstanding rule never blocks origination.
+        for round in 0..(COMMS_LOG_CAPACITY as u64 * 3) {
+            balloons[0].next_bundle_round = 0;
+            balloons[0].queue.clear();
+            step(&mut balloons, &adj, &[0], round, &mut stats);
+        }
+
+        assert_eq!(balloons[0].log.len(), COMMS_LOG_CAPACITY);
+        // It kept the newest, not the oldest.
+        let seqs: Vec<u64> = balloons[0].log.iter().map(|r| r.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]), "log must stay ordered: {seqs:?}");
+        assert_eq!(*seqs.last().unwrap(), stats.originated - 1);
+    }
+
+    /// Happy path: a delivered bundle's ack walks the whole reverse path and
+    /// the origin's own view flips to Acked.
+    #[test]
+    fn an_ack_completes_the_reverse_path_and_the_origin_learns_it() {
+        let (mut balloons, _t, adj) = line(4);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        let awake: Vec<usize> = (0..4).collect();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        balloons[3].next_bundle_round = 0;
+
+        // Run long enough for the bundle to reach the tower (b0) and the ack
+        // to walk all the way back to b3 (origin).
+        for round in 0..40 {
+            step(&mut balloons, &adj, &awake, round, &mut stats);
+            if balloons[3].outstanding.is_some_and(|o| o.state == AckState::Acked) {
+                break;
+            }
+        }
+        assert_eq!(stats.delivered, 1, "stats: {stats:?}");
+        assert_eq!(stats.acked, 1, "stats: {stats:?}");
+        assert_eq!(stats.ack_lost, 0, "stats: {stats:?}");
+        assert_eq!(balloons[3].outstanding.unwrap().state, AckState::Acked);
+        assert!(balloons.iter().all(|b| b.ack_queue.is_empty()), "ack should have fully drained");
+    }
+
+    /// A bundle can arrive even though its ack never makes it back — the
+    /// reverse path can break after the forward trip succeeded. The origin
+    /// cannot tell this apart from "never arrived": both look like TimedOut.
+    #[test]
+    fn an_ack_can_be_lost_even_though_delivery_succeeded() {
+        let (mut balloons, towers, _adj) = line(4);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        let awake: Vec<usize> = (0..4).collect();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        balloons[3].next_bundle_round = 0;
+
+        // Deliver the bundle to the tower first...
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b2", "b3")],
+            4,
+            &towers,
+        );
+        let mut round = 0u64;
+        while stats.delivered == 0 && round < 20 {
+            step(&mut balloons, &adj, &awake, round, &mut stats);
+            round += 1;
+        }
+        assert_eq!(stats.delivered, 1, "bundle should have reached the tower");
+
+        // ...then sever the link the ack needs for its very next hop, before it
+        // can leave b0.
+        adj.rebuild(&[edge("t0", "b0"), edge("b1", "b2"), edge("b2", "b3")], 4, &towers);
+
+        for r in round..(round + BUNDLE_MAX_AGE_ROUNDS + 10) {
+            step(&mut balloons, &adj, &awake, r, &mut stats);
+        }
+        assert_eq!(stats.acked, 0, "stats: {stats:?}");
+        assert_eq!(stats.ack_lost, 1, "stats: {stats:?}");
+        assert_eq!(balloons[3].outstanding.unwrap().state, AckState::TimedOut);
+    }
+
+    /// A bundle originated and delivered with zero hops resolves on the spot —
+    /// there's no reverse path to walk, so no ack packet is even created.
+    #[test]
+    fn a_zero_hop_delivery_acks_immediately_with_no_packet() {
+        let (mut balloons, _t, adj) = line(2);
+        seed_beliefs(&mut balloons, 0);
+        let mut stats = BundleStats::default();
+        for b in balloons.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        balloons[0].next_bundle_round = 0; // b0 originates and hears the tower directly
+
+        // Origination happens last within a round, so the bundle isn't in the
+        // queue to deliver until b0's *next* wake slot.
+        step(&mut balloons, &adj, &[0], 0, &mut stats);
+        step(&mut balloons, &adj, &[0], 1, &mut stats);
+
+        assert_eq!(stats.delivered, 1, "stats: {stats:?}");
+        assert_eq!(stats.acked, 1, "stats: {stats:?}");
+        assert_eq!(balloons[0].outstanding.unwrap().state, AckState::Acked);
+        assert!(balloons[0].ack_queue.is_empty(), "no packet should have been created");
+    }
+
+    /// A full ack_queue drops the incoming ack rather than blocking the
+    /// handoff — the same deliberately-lossy behaviour the design calls out,
+    /// not a hold-and-retry rule acks don't need.
+    #[test]
+    fn a_full_ack_queue_drops_the_incoming_ack() {
+        let (mut balloons, towers, _a) = line(2);
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(&[edge("b0", "b1")], 2, &towers);
+        balloons[1].belief = Some(RouteBelief {
+            tower_id: 0, hop_count: 1, next_hop: Some(0), epoch: 1, emitted_at_round: 0,
+        });
+
+        for k in 0..ACK_QUEUE_CAPACITY {
+            balloons[0].ack_queue.push_back(Ack {
+                origin_id: 9,
+                seq: k as u64,
+                created_at_round: 0,
+                remaining: std::collections::VecDeque::from(vec![1]),
+            });
+        }
+        // One more ack arrives at b0's neighbour b1's expense: b1 forwards an
+        // ack destined through b0, but b0's queue is already full.
+        balloons[1].ack_queue.push_back(Ack {
+            origin_id: 9,
+            seq: 99,
+            created_at_round: 0,
+            remaining: std::collections::VecDeque::from(vec![0, 1]),
+        });
+
+        let mut stats = BundleStats::default();
+        step(&mut balloons, &adj, &[1], 1, &mut stats);
+
+        assert_eq!(stats.ack_lost, 1, "stats: {stats:?}");
+        assert_eq!(balloons[0].ack_queue.len(), ACK_QUEUE_CAPACITY);
     }
 }

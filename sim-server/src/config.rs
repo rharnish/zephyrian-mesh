@@ -112,8 +112,13 @@ pub const BEACON_MAX_HOPS: u32 = 20;
 pub const BUNDLE_INTERVAL_ROUNDS: u64 = 200;
 /// How long a bundle may go unresolved before it is given up on. Must exceed a
 /// deep-path traversal (14 hops x BEACON_INTERVAL_ROUNDS = 70 rounds) or bundles
-/// expire while legitimately in flight. In slice 2 this becomes the ack timeout
-/// that hands the bundle to satellite rather than dropping it.
+/// expire while legitimately in flight. This is the satellite-fallback timeout:
+/// a bundle that ages out — wherever it currently sits, not just at its origin —
+/// is handed to satellite rather than dropped. It doubles as the ack timeout: an
+/// ack is stamped with its bundle's `created_at_round`, so a round trip has to
+/// complete inside the same 150-round budget as the one-way bundle timeout, not
+/// a separate one — which is enough room even at the depth this is sized against
+/// (14 hops = 140 rounds round-trip).
 pub const BUNDLE_MAX_AGE_ROUNDS: u64 = 150;
 /// How many bundles a balloon may hold at once — its store-and-forward buffer.
 ///
@@ -187,6 +192,42 @@ pub const TOWER_CONTACT_BUNDLES: usize = 4;
 /// Sized against p95 mesh depth (see mesh_depth.rs); deeper paths only exist
 /// near percolation, where satellite is the right answer anyway.
 pub const BUNDLE_MAX_HOPS: usize = 20;
+
+/// How many acks a balloon may hold at once, source-routed back along a
+/// bundle's recorded path. Much smaller than RELAY_QUEUE_CAPACITY: an ack is
+/// only ever produced one-per-successful-delivery, riding a path that *just*
+/// worked, so ack volume is a fraction of bundle volume. A full ack queue
+/// drops the incoming ack — deliberately lossy, the same "acks can be lost"
+/// property §4 of the design doc calls out, not a case worth a hold-and-retry
+/// rule of its own.
+pub const ACK_QUEUE_CAPACITY: usize = 4;
+
+// --- Telemetry records (see MESH_COMMS_DESIGN.md §1) -------------------------
+//
+/// How many telemetry records a balloon retains locally. Records are created
+/// 1:1 with bundle origination, so at BUNDLE_INTERVAL_ROUNDS = 200 a 720-round
+/// sweep produces only ~3-4 per balloon — this is generous headroom for longer
+/// runs rather than a binding limit. Cost is trivial either way: 2000 balloons
+/// x 32 records x ~72 B is under 5 MB.
+///
+/// The bound exists because an unbounded log is the kind of slow leak that
+/// looks fine in a 400-round harness run and eats memory in a server left up
+/// overnight.
+pub const COMMS_LOG_CAPACITY: usize = 32;
+
+// Humidity synthesis (atmosphere.rs). Not ISA — the ISA says nothing about
+// humidity and the ERA5 dataset behind the wind field is wind-only, so §1 of
+// the design calls for a synthesized decreasing-with-altitude profile.
+/// Relative humidity at sea level, percent.
+pub const RH_SURFACE_PCT: f64 = 70.0;
+/// e-folding height for humidity decay. ~3 km puts the stratosphere under 1% RH,
+/// which is the right order for air that has been wrung out crossing the
+/// tropopause cold trap.
+pub const RH_SCALE_HEIGHT_M: f64 = 3000.0;
+/// Amplitude of the smooth spatial variation layered on the profile, as a
+/// fraction. Enough that balloons in different places report visibly different
+/// humidity; small enough that the altitude profile still dominates.
+pub const RH_SPATIAL_AMPLITUDE: f64 = 0.15;
 
 pub const GRID_CELL_SIZE_DEG: f64 = 6.0;
 

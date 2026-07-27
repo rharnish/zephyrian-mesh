@@ -32,12 +32,32 @@ pub struct Balloon {
     /// models a real store-and-forward buffer.
     #[serde(skip)]
     pub queue: std::collections::VecDeque<crate::bundle::Bundle>,
+    /// Acks in transit that this balloon is currently holding, source-routed
+    /// back along a bundle's recorded path. Bounded by ACK_QUEUE_CAPACITY.
+    #[serde(skip)]
+    pub ack_queue: std::collections::VecDeque<crate::bundle::Ack>,
     /// Next comms round this balloon may originate a bundle.
     #[serde(skip)]
     pub next_bundle_round: u64,
-    /// Monotonic per-balloon sequence number for bundles it originates.
+    /// Monotonic per-balloon sequence number for bundles it originates. Also
+    /// stamps the telemetry record created alongside each bundle — they are the
+    /// same event, so they share a sequence rather than keeping two counters
+    /// that could drift.
     #[serde(skip)]
     pub bundle_seq: u64,
+    /// Telemetry this balloon has measured and retained, oldest first — the
+    /// copy that *stays*, as against the copy inside each bundle that travels
+    /// (see telemetry.rs). Bounded by COMMS_LOG_CAPACITY. This is what C3's
+    /// hash chain will eventually sign.
+    #[serde(skip)]
+    pub log: std::collections::VecDeque<crate::telemetry::TelemetryRecord>,
+    /// This balloon's own view of its most recently originated bundle —
+    /// deliberately poorer than server truth. Flips to `Acked` only if a real
+    /// ack completes the full reverse path; flips to `TimedOut` if it doesn't,
+    /// whether the bundle never arrived, arrived and the ack died, or arrived
+    /// via satellite (which is silent to the origin). See bundle.rs.
+    #[serde(skip)]
+    pub outstanding: Option<crate::bundle::OutstandingBundle>,
     /// Hops to a tower as this balloon *believes*; `None` if it currently
     /// knows of no route. This is what the balloon would act on.
     pub believed_hops: Option<u32>,
@@ -58,8 +78,11 @@ impl Balloon {
             belief: None,
             next_beacon_round: 0,
             queue: std::collections::VecDeque::new(),
+            ack_queue: std::collections::VecDeque::new(),
             next_bundle_round: 0,
             bundle_seq: 0,
+            log: std::collections::VecDeque::new(),
+            outstanding: None,
             believed_hops: None,
             grounded: false,
         }

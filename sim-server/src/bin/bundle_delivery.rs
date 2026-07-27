@@ -3,10 +3,13 @@
 //
 // Drives a real `World` offline with zero wind. Reports delivery against mesh
 // density, then runs the invariant that matters: with every tower removed, every
-// bundle in the world must *resolve* — delivered, dropped, or expired — with
-// nothing held forever and no unbounded growth. C1's protocol bug was exactly
-// this shape (state that quietly sustained itself), it was invisible in the UI,
-// and it only surfaced in a scenario impossible to stage by clicking.
+// bundle in the world must *resolve* — delivered (with its ack independently
+// resolving too), dropped, or handed to satellite — with nothing held forever
+// and no unbounded growth. C1's protocol bug was exactly this shape (state that
+// quietly sustained itself), it was invisible in the UI, and it only surfaced in
+// a scenario impossible to stage by clicking. Slice 2 adds acks as a second
+// thing that must independently drain: a bundle resolving doesn't mean its ack
+// has, so the conservation check below tracks both.
 //
 //   cargo run --release --bin bundle_delivery [n_balloons] [rounds]
 
@@ -82,10 +85,10 @@ fn report_slots(st: &sim_server::bundle::BundleStats) {
         },
     );
     println!(
-        "    mean believed depth {:.2} hops  |  delivered at {:.2} hops  |  expired after {:.2} hops",
+        "    mean believed depth {:.2} hops  |  delivered at {:.2} hops  |  satellite after {:.2} hops",
         sim_server::bundle::hist_mean(&st.belief_hops),
         sim_server::bundle::hist_mean(&st.delivered_hops),
-        sim_server::bundle::hist_mean(&st.expired_hops),
+        sim_server::bundle::hist_mean(&st.satellite_hops),
     );
     print!("    belief-depth histogram:");
     for (h, &c) in st.belief_hops.iter().enumerate().take(21) {
@@ -101,13 +104,28 @@ fn report_slots(st: &sim_server::bundle::BundleStats) {
         }
     }
     println!();
-    print!("    expired-hops histogram:");
-    for (h, &c) in st.expired_hops.iter().enumerate().take(21) {
+    print!("    satellite-hops histogram:");
+    for (h, &c) in st.satellite_hops.iter().enumerate().take(21) {
         if c > 0 {
             print!(" {h}:{c}");
         }
     }
-    println!("\n");
+    println!();
+    // Every delivered bundle's ack independently either completes the reverse
+    // path, or doesn't — the two-state model from MESH_COMMS_DESIGN.md §4.
+    // `still owed` is delivered bundles whose ack hasn't resolved either way
+    // yet, same censoring caveat as delivered/originated above.
+    let owed = st.delivered.saturating_sub(st.acked + st.ack_lost);
+    println!(
+        "    acks: delivered {}  ->  acked {} ({:.1}%)  ack_lost {} ({:.1}%)  still owed {}",
+        st.delivered,
+        st.acked,
+        if st.delivered > 0 { 100.0 * st.acked as f64 / st.delivered as f64 } else { 0.0 },
+        st.ack_lost,
+        if st.delivered > 0 { 100.0 * st.ack_lost as f64 / st.delivered as f64 } else { 0.0 },
+        owed,
+    );
+    println!();
 }
 
 fn build(n: u32, coeff: f64) -> World {
@@ -157,12 +175,12 @@ fn main() {
     // between the two columns *is* that censoring. `completion` is the honest
     // delivery figure. Both are shown so the bias stays visible.
     println!(
-        "{:>6}  {:>7}  {:>10}  {:>10}  {:>7}  {:>9}  {:>9}  {:>10}  {:>10}",
+        "{:>6}  {:>7}  {:>10}  {:>10}  {:>9}  {:>9}  {:>9}  {:>10}  {:>10}",
         "coeff",
         "degree",
         "grounded%",
         "delivered",
-        "expired",
+        "satellite",
         "in-flight",
         "blocked",
         "deliv/orig",
@@ -184,11 +202,11 @@ fn main() {
             0.0
         };
         println!(
-            "{coeff:>6.2}  {:>7.2}  {:>9.1}%  {:>10}  {:>7}  {:>9}  {:>9}  {:>9.1}%  {:>9.1}%",
+            "{coeff:>6.2}  {:>7.2}  {:>9.1}%  {:>10}  {:>9}  {:>9}  {:>9}  {:>9.1}%  {:>9.1}%",
             last.mean_degree,
             last.grounded_pct,
             st.delivered,
-            st.expired,
+            st.satellite,
             last.bundles_in_flight,
             st.blocked,
             censored,
@@ -223,32 +241,49 @@ fn main() {
         s.bundles_in_flight
     });
 
-    println!("\n{:>7}  {:>10}  {:>10}  {:>9}", "round", "in-flight", "stranded", "resolved");
-    // Long enough for the last legitimately-moving bundle to age out.
+    let acks_in_flight =
+        |w: &World| -> u64 { w.balloons.iter().map(|b| b.ack_queue.len() as u64).sum() };
+
+    println!(
+        "\n{:>7}  {:>10}  {:>10}  {:>9}  {:>9}",
+        "round", "in-flight", "stranded", "resolved", "acks-in-flight"
+    );
+    // Long enough for the last legitimately-moving bundle to age out, and for
+    // its ack (same age budget) to age out too.
     let drain = BUNDLE_MAX_AGE_ROUNDS + BUNDLE_INTERVAL_ROUNDS + 50;
     let mut last_in_flight = u64::MAX;
+    let mut last_acks_in_flight = u64::MAX;
     for r in 1..=drain {
         let s = advance_round(&mut world);
         last_in_flight = s.bundles_in_flight;
+        last_acks_in_flight = acks_in_flight(&world);
         if r % 50 == 0 || r == drain {
             println!(
-                "{r:>7}  {:>10}  {:>10}  {:>9}",
+                "{r:>7}  {:>10}  {:>10}  {:>9}  {:>9}",
                 s.bundles_in_flight,
                 s.bundles_stranded,
-                world.bundle_stats().resolved()
+                world.bundle_stats().resolved(),
+                last_acks_in_flight,
             );
         }
     }
 
     let after = world.bundle_stats();
     println!(
-        "\nOriginated {} -> resolved {} (delivered {}, loop {}, ttl {}, expired {})",
+        "\nOriginated {} -> resolved {} (delivered {}, loop {}, ttl {}, satellite {})",
         after.originated,
         after.resolved(),
         after.delivered,
         after.dropped_loop,
         after.dropped_ttl,
-        after.expired,
+        after.satellite,
+    );
+    println!(
+        "Of {} delivered: acked {}, ack_lost {} (owed {})",
+        after.delivered,
+        after.acked,
+        after.ack_lost,
+        after.delivered.saturating_sub(after.acked + after.ack_lost),
     );
     println!("Blocked handoffs (retried, not lost): {}", after.blocked);
     println!(
@@ -258,15 +293,22 @@ fn main() {
     );
 
     // Conservation: nothing may vanish unaccounted. Every bundle ever created is
-    // either resolved or still being carried.
-    let unaccounted =
-        after.originated as i64 - after.resolved() as i64 - last_in_flight as i64;
+    // either resolved or still being carried, and every delivered bundle's ack
+    // is either resolved (acked or lost) or still in flight.
+    let unaccounted = after.originated as i64 - after.resolved() as i64 - last_in_flight as i64;
+    let acks_unaccounted =
+        after.delivered as i64 - (after.acked + after.ack_lost) as i64 - last_acks_in_flight as i64;
     println!("\nConservation check: originated - resolved - in_flight = {unaccounted} (must be 0)");
     println!("Bundles still in flight with no towers left: {last_in_flight} (must be 0)");
+    println!(
+        "Ack conservation check: delivered - (acked + ack_lost) - acks_in_flight = {acks_unaccounted} (must be 0)"
+    );
+    println!("Acks still in flight with no towers left: {last_acks_in_flight} (must be 0)");
 
-    if unaccounted != 0 || last_in_flight != 0 {
-        eprintln!("\nFAILED: bundles are leaking or stuck.");
+    if unaccounted != 0 || last_in_flight != 0 || acks_unaccounted != 0 || last_acks_in_flight != 0
+    {
+        eprintln!("\nFAILED: bundles or acks are leaking or stuck.");
         std::process::exit(1);
     }
-    println!("\nOK: every bundle resolved, none leaked.");
+    println!("\nOK: every bundle and every ack resolved, none leaked.");
 }

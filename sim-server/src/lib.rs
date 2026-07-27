@@ -1,3 +1,4 @@
+pub mod atmosphere;
 pub mod balloon;
 pub mod beacon;
 pub mod bundle;
@@ -7,6 +8,7 @@ pub mod geo;
 pub mod link_detection;
 pub mod sim;
 pub mod spatial_grid;
+pub mod telemetry;
 pub mod tower;
 pub mod union_find;
 pub mod wind_field;
