@@ -250,7 +250,7 @@ export class ControlPanel {
           <input id="deliveryOverlayToggle" type="checkbox" />
           <label for="deliveryOverlayToggle" style="flex:1;">Last-delivery overlay</label>
         </div>
-        <div id="deliveryLegend" style="display:none; margin-top:5px; opacity:0.85;">
+        <div id="deliveryLegend" style="margin-top:5px; opacity:0.85;">
           ${legendRows(DELIVERY_KEYS, DELIVERY_CSS, DELIVERY_LEGEND, 'delivery')}
         </div>
       </div>
@@ -357,7 +357,9 @@ export class ControlPanel {
       beliefToggle.checked = mode === OVERLAY_BELIEF;
       deliveryToggle.checked = mode === OVERLAY_DELIVERY;
       beliefLegend.style.display = mode === OVERLAY_BELIEF ? 'block' : 'none';
-      deliveryLegend.style.display = mode === OVERLAY_DELIVERY ? 'block' : 'none';
+      // The delivery legend deliberately stays put: its percentages are a live
+      // readout of the field, useful whether or not the tint is switched on.
+      // Its coloured dots keep working as the key for when it is.
       onOverlayChange(mode);
     };
     beliefToggle.addEventListener('change', () =>
@@ -449,6 +451,18 @@ export class ControlPanel {
       }
     }
     this._updateMeshHealth(snapshot);
+    this._updateDeliveryMix(snapshot);
+  }
+
+  // Always on screen, so kept independent of the mesh-health readout and its
+  // early returns. Derived from the balloons already in this snapshot rather
+  // than sent as three more fields — every balloon's lastChannel is right
+  // here, so a server-computed aggregate would restate what we hold.
+  _updateDeliveryMix(snapshot) {
+    const mix = deliveryMix(snapshot.balloons);
+    for (const key of DELIVERY_KEYS) {
+      this.deliveryValues[key].textContent = `${mix[key].toFixed(0)}%`;
+    }
   }
 
   // Unlike the sliders, this readout is never user-driven — it just mirrors
@@ -486,14 +500,6 @@ export class ControlPanel {
         lagMs >= VIEW_LAG_BAD_MS ? BELIEF_CSS.stale
         : lagMs >= VIEW_LAG_WARN_MS ? BELIEF_CSS.unaware
         : BELIEF_CSS.ok;
-    }
-
-    // Delivery mix. Derived from the balloons already in this snapshot rather
-    // than sent as three more fields — every balloon's lastChannel is right
-    // here, so a server-computed aggregate would restate what we hold.
-    const mix = deliveryMix(snapshot.balloons);
-    for (const key of DELIVERY_KEYS) {
-      this.deliveryValues[key].textContent = `${mix[key].toFixed(0)}%`;
     }
 
     if (typeof snapshot.believedGroundedPct !== 'number') return;
