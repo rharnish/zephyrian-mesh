@@ -1,136 +1,114 @@
 ---
 name: diagnose-lag
-description: Find out why the cesium-app browser is showing a stale world, or why a control snaps back / lags / desyncs from sim-server. Locates where a snapshot backlog is accumulating (client render, kernel socket, or the server's own write buffer) before changing anything.
+description: Diagnose cesium-app showing a stale world, or a control snapping back / desyncing from sim-server. The cesium-app-specific commands and history for the general diagnose-stream-lag method.
 ---
 
-# diagnose-lag
+# diagnose-lag (cesium-app)
 
-For symptoms that look like the UI disagreeing with the server: a slider that
-bounces back on release, a readout that trails, a globe that is subtly behind,
-a control that ignores another tab.
+**Read `diagnose-stream-lag` first** — it has the method (the three queues, the
+discriminating readings, why `send()` doesn't mean delivered, state-vs-events).
+This file is only what is specific to this project: the commands that work here,
+the numbers measured here, and the invariants not to break here.
 
-Nearly all of these are one root cause — **the browser is rendering a world
-older than the one the server has** — and the whole job is finding *where* the
-backlog sits before trying to fix it. The three candidates look identical from
-the UI and need completely different fixes.
+## The shape of it here
 
-## Rule 0: read the lag before theorising
+Snapshots are **state**, not events — each is a complete picture of the world,
+`edges: None` meaning "keep the last set" being the only exception. So dropping
+is always safe, and coalescing is the right answer everywhere.
 
-Every snapshot carries `serverTimeMs`, stamped when the server *built* it. The
-Controls panel shows the result as **View lag**.
+## Rule 0 is already done
 
-- **< 1s** — healthy. Whatever you are chasing is not staleness; stop here.
-- **seconds, stable** — the client is saturated but keeping pace.
-- **seconds, climbing** — a backlog is accumulating. Continue below.
+Every snapshot carries `serverTimeMs`, stamped at construction in
+`World::tick`. The Controls panel shows it as **View lag**: green under 1s,
+amber past that, red past 4s.
 
-This exists because it used to take a custom probe plus a second WebSocket to
-answer. Don't rebuild that; read the number.
+Read that before anything else. Under a second and staleness is not your bug.
 
-## Rule 1: the server is almost never the problem
-
-Measure before suspecting it. It confirms a command in **30–130ms**:
+## Ground truth, without a browser
 
 ```bash
-node .claude/skills/run-cesium-app/peek.mjs 's.tick'          # current server tick
-node .claude/skills/run-cesium-app/peek.mjs                   # all scalar fields
+node .claude/skills/run-cesium-app/peek.mjs                # all scalar fields
+node .claude/skills/run-cesium-app/peek.mjs 's.tick'
+node .claude/skills/run-cesium-app/peek.mjs 's.balloons.length'
 ```
 
-`peek.mjs` is a bare WebSocket with no rendering, so it is always current. If a
-value is right there, the server is right and the disagreement is downstream.
+A bare WebSocket, no rendering, always current. If a value is right here, the
+server is right — it confirms commands in **30–130ms**, so suspect it last.
 
-## Rule 2: headless Chromium cannot be trusted for timing
+## The headless driver lies about timing
 
-`run-cesium-app` runs on software GL and consumes snapshots **~33x slower than
-the server produces them** (measured: 0.6/s against 20/s). It is excellent for
-"does this render / does this control fire" and actively misleading for "how
-fast is this". Reproduce timing symptoms in a real browser, or accept that
-headless is a worst case and size fixes accordingly.
+`run-cesium-app` runs on software GL and consumes **~0.6 snapshots/s against
+the server's 20** — roughly 33x too slow. Use it for "does this render / does
+this control fire". Do not use it to measure latency, and do not size a timeout
+from it.
 
-## Locating the backlog
-
-Run all three. Only the combination discriminates.
-
-### 1. Tick gaps — is anything being dropped?
-
-Record the tick of every message *before* any client-side coalescing:
-
-```js
-// temporary probe in simClient.js's ws.onmessage
-try { const t = JSON.parse(event.data).tick;
-      (window.__rx = window.__rx || []).push(t); } catch (e) {}
-```
-
-Then read the gaps between consecutive entries:
-
-- **all gaps == 1** — nothing is being dropped anywhere. The client is being
-  fed an unbroken FIFO, so a queue is holding *every* snapshot. Go to 2 and 3.
-- **large / irregular gaps** — frames are being skipped, which is the healthy
-  behaviour under load. Staleness is then bounded and is not your bug.
-
-### 2. Kernel socket buffer — how much is in flight?
+## The three readings, with this project's commands
 
 ```bash
-ss -tnm 'sport = :8080'      # Send-Q column, and tb= is the buffer cap
-```
+# 1. sequence gaps — temporary probe in simClient.js's ws.onmessage
+#    try { const t = JSON.parse(event.data).tick;
+#          (window.__rx = window.__rx || []).push(t); } catch (e) {}
 
-Compare against snapshot size to convert bytes to seconds:
+# 2. transport
+ss -tnm 'sport = :8080'
 
-```bash
-node .claude/skills/run-cesium-app/peek.mjs 's.balloons.length + " balloons, " + (s.edges ? s.edges.length : "no") + " edges"'
-```
-
-A ~4MB buffer at ~183KB/snapshot is ~22 snapshots ≈ 1.1s. If Send-Q is near its
-cap but the observed lag is far larger, the socket is **not** where the backlog
-is.
-
-### 3. Server memory — the one that is easy to miss
-
-```bash
+# 3. producer memory
 P=$(pgrep -f 'target/release/sim-server' | head -1)
 awk '/VmRSS/{print $2/1024 " MB"}' /proc/$P/status
 ```
 
-`World` itself is small. Resident memory far above that is queued snapshots in
-the per-connection WebSocket write buffer, because `socket.send(..).await`
-returns when the sink accepts a message, not when the browser receives it.
+`World` itself is small; RSS well above that is queued snapshots.
 
-**Worked example (2026-07-28):** tick gaps all 1, Send-Q 3MB of a 4MB cap
-(~1.1s), RSS **251MB** (~1400 snapshots ≈ 70s), observed lag 752 ticks (~37s).
-Only the third reading explained the magnitude. Fix was `handle_socket`
-draining to the newest snapshot before each send (commit 2c4157b).
+## Worked example (2026-07-28)
 
-## Fixes, by where the backlog actually is
+Symptom: both Controls sliders bounced back on release; the balloon slider only
+when *shrinking*.
 
-| Location | Symptom | Fix |
-|---|---|---|
-| Server write buffer | RSS climbs with a slow client attached; tick gaps all 1 | Drain to newest before send (already done — `handle_socket`) |
-| Payload size | Lag scales with balloon/edge count | Stop sending redundant data. Precedent: dropping per-edge coordinates cut snapshots 725KB → 183KB, since `pairKey` plus the balloons array already carried it |
-| Client render cost | RSS flat, Send-Q flat, browser still behind | Coalesce in `simClient.js` (already done), then reduce per-snapshot render work |
+| reading | value |
+|---|---|
+| tick gaps | all exactly 1 — nothing dropped anywhere |
+| Send-Q | 3 MB of a 4 MB cap ≈ 1.1s |
+| sim-server RSS | **251 MB** ≈ 1400 snapshots ≈ 70s |
+| observed lag | 752 ticks (~37s) |
 
-## Controls that disagree with the server
+Only the third explained the magnitude: snapshots were queued in the
+per-connection WebSocket write buffer. Fixes: `handle_socket` drains to the
+newest snapshot before each send (`2c4157b`), and `PendingRequest` in
+`src/ui/controlPanel.js` replaced a 600ms cooldown with wait-for-confirmation
+(`2605397`).
 
-A control that snaps back is a *symptom* of the above, not a separate bug: it
-applied a snapshot older than its own change.
+The asymmetry was the clue that it was queue depth rather than latency: when
+shrinking, the stale queued snapshots are the *larger* ones, so the backlog
+drains slower.
 
-Never fix this with a timer. Wall-clock time on the client says nothing about
-*which* snapshot is being applied — that was the original 600ms cooldown, and
-it failed exactly when it mattered. Use `PendingRequest` in
-`src/ui/controlPanel.js`: after requesting a value, ignore that control's
-snapshot value until a snapshot actually carries what was asked for. Correct at
-any backlog depth.
+Payload work from the same session: per-edge endpoint coordinates were 83% of a
+snapshot and were overwritten by `refreshPositions` on the same tick. Removing
+them took snapshots **725 KB → 183 KB** (`cf2ecf0`).
 
 ## Do not break
 
-- **Snapshots must stay complete and self-contained.** That property is what
-  lets any of them be dropped, and what keeps the client unable to *drift* from
-  the server (worst case is stale, never wrong). A delta protocol would trade
-  it away and make every message load-bearing — strictly worse for this
-  failure mode. See the reasoning in `simClient.js`.
 - **The WebSocket path is browser-only.** The experiment binaries in
   `sim-server/src/bin/` drive `World::tick` in-process and never open a socket,
-  so `handle_socket` changes cannot affect headless runs. Adding a `Snapshot`
-  field is safe for them too: none serialize a `Snapshot`, none construct one
-  literally, and nothing compares results byte-wise. Re-check with:
+  so `handle_socket` changes cannot affect headless runs.
+- **Adding a `Snapshot` field is safe for them**, verified: none serialize a
+  `Snapshot` (both sweeps write their own flat `ResultRow`), none construct one
+  literally, and nothing compares results byte-wise — so a non-deterministic
+  field can't make a seeded sweep irreproducible. Re-check with:
   ```bash
   grep -n "serde_json::\|to_string_pretty" sim-server/src/bin/*.rs
   ```
+- **Keep snapshots self-contained.** It is what lets any of them be dropped and
+  what keeps the client unable to drift from the server.
+
+## Restarting after a server change
+
+`cargo build --release` does not affect the running process, and a new
+sim-server that finds `:8080` occupied **panics and exits silently**, leaving
+you on the old binary wondering why nothing changed.
+
+```bash
+cd sim-server && cargo build --release && cargo test
+pkill -f 'target/release/sim-server'; sleep 2
+./target/release/sim-server
+ss -ltnp | grep ':8080'      # confirm the PID actually changed
+```
