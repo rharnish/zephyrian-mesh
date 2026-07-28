@@ -1,0 +1,454 @@
+<title>Belief vs. Truth — how a balloon learns it can reach the ground</title>
+<style>
+  :root {
+    --paper: #eef2f6;
+    --panel: #ffffff;
+    --edge: #d5dee7;
+    --ink: #14202e;
+    --ink-2: #56687b;
+    --ink-3: #8496a8;
+    --signal: #b96e17;
+    --signal-soft: #f6e7d2;
+    --truth: #2e7d5b;
+    --truth-soft: #dcefe5;
+    --stale: #ab3441;
+    --stale-soft: #f7e0e2;
+    --wire: #b9c6d3;
+    --sky-a: #e4edf5;
+    --sky-b: #f6f9fb;
+    --ground: #dfe6ec;
+    --sans: "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0c131b;
+      --panel: #131c26;
+      --edge: #26333f;
+      --ink: #e6edf4;
+      --ink-2: #93a5b7;
+      --ink-3: #6d8095;
+      --signal: #dda254;
+      --signal-soft: #35281552;
+      --truth: #55c48c;
+      --truth-soft: #14291f8c;
+      --stale: #e0757f;
+      --stale-soft: #2b171a8c;
+      --wire: #3a4a5a;
+      --sky-a: #16202c;
+      --sky-b: #101821;
+      --ground: #1b2731;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0c131b;
+    --panel: #131c26;
+    --edge: #26333f;
+    --ink: #e6edf4;
+    --ink-2: #93a5b7;
+    --ink-3: #6d8095;
+    --signal: #dda254;
+    --signal-soft: #35281552;
+    --truth: #55c48c;
+    --truth-soft: #14291f8c;
+    --stale: #e0757f;
+    --stale-soft: #2b171a8c;
+    --wire: #3a4a5a;
+    --sky-a: #16202c;
+    --sky-b: #101821;
+    --ground: #1b2731;
+  }
+  :root[data-theme="light"] {
+    --paper: #eef2f6;
+    --panel: #ffffff;
+    --edge: #d5dee7;
+    --ink: #14202e;
+    --ink-2: #56687b;
+    --ink-3: #8496a8;
+    --signal: #b96e17;
+    --signal-soft: #f6e7d2;
+    --truth: #2e7d5b;
+    --truth-soft: #dcefe5;
+    --stale: #ab3441;
+    --stale-soft: #f7e0e2;
+    --wire: #b9c6d3;
+    --sky-a: #e4edf5;
+    --sky-b: #f6f9fb;
+    --ground: #dfe6ec;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+  }
+
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 56px 24px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--signal);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(30px, 4.4vw, 46px);
+    line-height: 1.08;
+    letter-spacing: -0.024em;
+    font-weight: 800;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--ink-2);
+    margin: 0;
+    max-width: 62ch;
+  }
+
+  .figure {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .figure > figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--edge);
+  }
+  .figure > figcaption .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .figure > figcaption .title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.012em;
+  }
+  .figure > figcaption .note {
+    flex-basis: 100%;
+    font-size: 14.5px;
+    color: var(--ink-2);
+    max-width: 68ch;
+  }
+  .canvas { overflow-x: auto; padding: 8px 12px 14px; }
+  .canvas svg { display: block; min-width: 620px; width: 100%; height: auto; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--edge); }
+  @media (max-width: 720px) { .split { grid-template-columns: 1fr; } }
+  .split > div { background: var(--panel); padding: 4px 8px 12px; }
+  .split h3 {
+    font-size: 12px;
+    font-family: var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin: 14px 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .split h3 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .split .sub { margin: 4px 12px 0; font-size: 14px; color: var(--ink-2); }
+  .split svg { min-width: 0; }
+
+  .glossary { display: flex; flex-wrap: wrap; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; }
+  .glossary div { background: var(--panel); padding: 16px 18px; flex: 1 1 178px; }
+  .glossary dt { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--signal); margin: 0 0 5px; }
+  .glossary dd { margin: 0; font-size: 14px; color: var(--ink-2); }
+
+  .thesis {
+    border-left: 3px solid var(--signal);
+    padding: 4px 0 4px 20px;
+    font-size: 19px;
+    line-height: 1.5;
+    max-width: 60ch;
+    margin: 0;
+  }
+  .thesis strong { font-weight: 700; }
+
+  text { font-family: var(--sans); }
+  .n { font-family: var(--mono); font-weight: 600; }
+</style>
+
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <symbol id="balloon" viewBox="0 0 40 52">
+      <path d="M20 2C31 2 37 11.5 37 20.5C37 29.5 28 35.5 20 39.5C12 35.5 3 29.5 3 20.5C3 11.5 9 2 20 2Z"
+            fill="currentColor" fill-opacity="0.14" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M20 2.4C15 10 13 15 13 20.5C13 26 15 32 20 39.2" fill="none" stroke="currentColor" stroke-width="1.1" stroke-opacity="0.5"/>
+      <path d="M20 2.4C25 10 27 15 27 20.5C27 26 25 32 20 39.2" fill="none" stroke="currentColor" stroke-width="1.1" stroke-opacity="0.5"/>
+      <path d="M11.5 34.5L16 42M28.5 34.5L24 42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <rect x="14.5" y="41.5" width="11" height="8" rx="2" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2"/>
+    </symbol>
+    <symbol id="tower" viewBox="0 0 40 52">
+      <path d="M20 8V1M13 3.5L20 1L27 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M7 50L20 8L33 50" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M13.5 29H26.5M11 39H29M15.8 20H24.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M13.5 29L26.5 39M26.5 29L13.5 39M15.8 20L24.2 29M24.2 20L15.8 29" stroke="currentColor" stroke-width="1.1" stroke-opacity="0.55"/>
+    </symbol>
+    <marker id="arrow-signal" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+      <path d="M0 1L9 5L0 9Z" fill="var(--signal)"/>
+    </marker>
+    <marker id="arrow-stale" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+      <path d="M0 1L9 5L0 9Z" fill="var(--stale)"/>
+    </marker>
+  </defs>
+</svg>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Zephyrian Dirigibles · mesh comms</p>
+    <h1>No balloon is ever told that it is connected.</h1>
+    <p class="lede">Balloons drift on real ERA5 winds. Each one carries a radio, and has to work out
+      from scratch whether it can still reach the ground — using nothing but the signals that
+      physically arrived at its antenna.</p>
+  </header>
+
+  <figure class="figure">
+    <figcaption>
+      <span class="tag">Figure 1</span>
+      <span class="title">Tower beacons flood outward; each balloon keeps one belief</span>
+      <span class="note">A tower broadcasts <span class="n">{tower, epoch, hop 0}</span>. Any balloon that
+        hears it records <strong>how many hops away</strong> the ground is and <strong>which neighbour it
+        heard from</strong> — its next hop — then rebroadcasts at hop + 1. Only if that beats what it already
+        believed; otherwise the flood would never stop. Thin grey lines are every radio link that exists.
+        The amber tree is what the balloons actually chose.</span>
+    </figcaption>
+    <div class="canvas">
+      <svg viewBox="0 0 900 350" role="img" aria-label="A ground tower emits beacon rings; five balloons relay them, each labelled with its hop count and next hop.">
+        <defs>
+          <linearGradient id="sky1" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--sky-a)"/>
+            <stop offset="1" stop-color="var(--sky-b)"/>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="900" height="312" fill="url(#sky1)"/>
+        <rect x="0" y="312" width="900" height="38" fill="var(--ground)"/>
+        <line x1="0" y1="312" x2="900" y2="312" stroke="var(--wire)" stroke-width="1.5"/>
+
+        <!-- beacon wavefronts -->
+        <g fill="none" stroke="var(--signal)" stroke-linecap="round">
+          <path d="M86 214A50 50 0 0 1 136 264" stroke-width="2.4" stroke-opacity="0.55"/>
+          <path d="M86 184A80 80 0 0 1 166 264" stroke-width="2.2" stroke-opacity="0.34"/>
+          <path d="M86 154A110 110 0 0 1 196 264" stroke-width="2" stroke-opacity="0.18"/>
+        </g>
+
+        <!-- every radio link that physically exists -->
+        <g stroke="var(--wire)" stroke-width="1.6" stroke-dasharray="1 5" stroke-linecap="round">
+          <line x1="86" y1="264" x2="250" y2="190"/>
+          <line x1="250" y1="190" x2="395" y2="118"/>
+          <line x1="250" y1="190" x2="540" y2="200"/>
+          <line x1="395" y1="118" x2="690" y2="120"/>
+          <line x1="540" y1="200" x2="690" y2="120"/>
+          <line x1="690" y1="120" x2="838" y2="215"/>
+        </g>
+
+        <!-- the next-hop tree the balloons chose -->
+        <g stroke="var(--signal)" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-signal)" fill="none">
+          <line x1="250" y1="190" x2="103" y2="256"/>
+          <line x1="395" y1="118" x2="264" y2="183"/>
+          <line x1="540" y1="200" x2="271" y2="191"/>
+          <line x1="690" y1="120" x2="412" y2="119"/>
+          <line x1="838" y1="215" x2="706" y2="131"/>
+        </g>
+
+        <g color="var(--truth)">
+          <use href="#tower" x="66" y="260" width="40" height="52"/>
+        </g>
+        <text x="86" y="336" text-anchor="middle" font-size="12" font-weight="700" fill="var(--truth)" letter-spacing="0.06em">TOWER</text>
+
+        <g color="var(--ink-2)">
+          <use href="#balloon" x="230" y="169" width="40" height="52"/>
+          <use href="#balloon" x="375" y="97" width="40" height="52"/>
+          <use href="#balloon" x="520" y="179" width="40" height="52"/>
+          <use href="#balloon" x="670" y="99" width="40" height="52"/>
+          <use href="#balloon" x="818" y="194" width="40" height="52"/>
+        </g>
+
+        <g font-size="12.5" font-weight="700" fill="var(--ink)" text-anchor="middle">
+          <text x="250" y="163">B1</text>
+          <text x="395" y="91">B2</text>
+          <text x="540" y="173">B3</text>
+          <text x="690" y="93">B4</text>
+          <text x="838" y="188">B5</text>
+        </g>
+
+        <!-- belief chips -->
+        <g font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12.5" font-weight="600">
+          <g>
+            <rect x="268" y="220" width="96" height="24" rx="5" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.2"/>
+            <text x="316" y="236.5" text-anchor="middle" fill="var(--signal)">hop 1 → T</text>
+          </g>
+          <g>
+            <rect x="423" y="66" width="104" height="24" rx="5" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.2"/>
+            <text x="475" y="82.5" text-anchor="middle" fill="var(--signal)">hop 2 → B1</text>
+          </g>
+          <g>
+            <rect x="568" y="226" width="104" height="24" rx="5" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.2"/>
+            <text x="620" y="242.5" text-anchor="middle" fill="var(--signal)">hop 2 → B1</text>
+          </g>
+          <g>
+            <rect x="718" y="112" width="104" height="24" rx="5" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.2"/>
+            <text x="770" y="128.5" text-anchor="middle" fill="var(--signal)">hop 3 → B2</text>
+          </g>
+          <g>
+            <rect x="786" y="242" width="104" height="24" rx="5" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.2"/>
+            <text x="838" y="258.5" text-anchor="middle" fill="var(--signal)">hop 4 → B4</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+  </figure>
+
+  <figure class="figure">
+    <figcaption>
+      <span class="tag">Figure 2</span>
+      <span class="title">Then B5 drifts out of range — and doesn't find out</span>
+      <span class="note">The wind carries B5 past B4's radio horizon. Nothing tells it. B5 still holds the
+        belief it formed in Figure 1, and will keep forwarding telemetry into that dead route until the
+        belief ages out on its own. The simulator knows better — but that knowledge lives only on this
+        side of the screen.</span>
+    </figcaption>
+    <div class="split">
+      <div>
+        <h3><span class="dot" style="background: var(--signal)"></span>What B5 knows</h3>
+        <p class="sub">One stale record. No graph, no map, no neighbours it hasn't heard from.</p>
+        <div class="canvas">
+          <svg viewBox="0 0 440 280" role="img" aria-label="B5 alone, holding a belief of hop 4 via B4, with the rest of the network drawn as unknown.">
+            <rect x="0" y="0" width="440" height="262" fill="var(--sky-b)"/>
+            <rect x="0" y="262" width="440" height="18" fill="var(--ground)"/>
+            <line x1="0" y1="262" x2="440" y2="262" stroke="var(--wire)" stroke-width="1.3"/>
+
+            <!-- the world B5 cannot see -->
+            <g opacity="0.26">
+              <g stroke="var(--wire)" stroke-width="1.4" stroke-dasharray="1 5">
+                <line x1="50" y1="224" x2="130" y2="164"/>
+                <line x1="130" y1="164" x2="212" y2="112"/>
+                <line x1="130" y1="164" x2="216" y2="204"/>
+                <line x1="212" y1="112" x2="300" y2="138"/>
+                <line x1="216" y1="204" x2="300" y2="138"/>
+              </g>
+              <g color="var(--ink-3)">
+                <use href="#tower" x="34" y="220" width="32" height="42"/>
+                <use href="#balloon" x="114" y="147" width="32" height="42"/>
+                <use href="#balloon" x="196" y="95" width="32" height="42"/>
+                <use href="#balloon" x="200" y="187" width="32" height="42"/>
+                <use href="#balloon" x="284" y="121" width="32" height="42"/>
+              </g>
+            </g>
+            <text x="168" y="76" text-anchor="middle" font-size="11.5" font-style="italic" fill="var(--ink-3)">unobservable to B5</text>
+
+            <!-- the broken link, as a belief pointing at nothing -->
+            <line x1="378" y1="196" x2="316" y2="152" stroke="var(--stale)" stroke-width="2.6"
+                  stroke-dasharray="7 6" marker-end="url(#arrow-stale)"/>
+
+            <g color="var(--stale)">
+              <use href="#balloon" x="368" y="176" width="40" height="52"/>
+            </g>
+            <text x="388" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--ink)">B5</text>
+
+            <g font-family="ui-monospace, Menlo, Consolas, monospace" font-weight="600">
+              <rect x="224" y="214" width="132" height="40" rx="5" fill="var(--stale-soft)" stroke="var(--stale)" stroke-width="1.2"/>
+              <text x="290" y="231" text-anchor="middle" font-size="12" fill="var(--stale)">hop 4 → B4</text>
+              <text x="290" y="246" text-anchor="middle" font-size="10.5" font-weight="500" fill="var(--ink-2)">age 6 of 8 rounds</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div>
+        <h3><span class="dot" style="background: var(--truth)"></span>What the simulator knows</h3>
+        <p class="sub">Union-find over every live link. Two components: one touches a tower, one doesn't.</p>
+        <div class="canvas">
+          <svg viewBox="0 0 440 280" role="img" aria-label="The same field with union-find components shaded: a grounded component containing the tower, and B5 alone in an ungrounded component.">
+            <rect x="0" y="0" width="440" height="262" fill="var(--sky-b)"/>
+            <rect x="0" y="262" width="440" height="18" fill="var(--ground)"/>
+            <line x1="0" y1="262" x2="440" y2="262" stroke="var(--wire)" stroke-width="1.3"/>
+
+            <path d="M18 254C2 204 24 146 84 138C126 78 214 68 252 100C318 106 336 164 310 196C302 240 240 260 168 254Z"
+                  fill="var(--truth-soft)" stroke="var(--truth)" stroke-width="1.6" stroke-dasharray="6 5"/>
+            <ellipse cx="384" cy="194" rx="52" ry="60" fill="var(--stale-soft)" stroke="var(--stale)" stroke-width="1.6" stroke-dasharray="6 5"/>
+
+            <g stroke="var(--wire)" stroke-width="1.8">
+              <line x1="50" y1="224" x2="130" y2="164"/>
+              <line x1="130" y1="164" x2="212" y2="112"/>
+              <line x1="130" y1="164" x2="216" y2="204"/>
+              <line x1="212" y1="112" x2="300" y2="138"/>
+              <line x1="216" y1="204" x2="300" y2="138"/>
+            </g>
+            <line x1="316" y1="146" x2="362" y2="180" stroke="var(--stale)" stroke-width="1.8" stroke-dasharray="4 6" stroke-opacity="0.7"/>
+            <g stroke="var(--stale)" stroke-width="2.4" stroke-linecap="round">
+              <line x1="333" y1="154" x2="345" y2="172"/>
+              <line x1="345" y1="154" x2="333" y2="172"/>
+            </g>
+
+            <g color="var(--truth)">
+              <use href="#tower" x="34" y="220" width="32" height="42"/>
+              <use href="#balloon" x="114" y="147" width="32" height="42"/>
+              <use href="#balloon" x="196" y="95" width="32" height="42"/>
+              <use href="#balloon" x="200" y="187" width="32" height="42"/>
+              <use href="#balloon" x="284" y="121" width="32" height="42"/>
+            </g>
+            <g color="var(--stale)">
+              <use href="#balloon" x="364" y="170" width="40" height="52"/>
+            </g>
+            <text x="384" y="164" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--ink)">B5</text>
+
+            <g font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" letter-spacing="0.06em">
+              <text x="86" y="116" text-anchor="middle" fill="var(--truth)">GROUNDED</text>
+              <text x="384" y="234" text-anchor="middle" fill="var(--stale)">NOT GROUNDED</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+  <dl class="glossary">
+    <div>
+      <dt>beacon</dt>
+      <dd>A tower's periodic shout: who I am, which wave this is, zero hops so far.</dd>
+    </div>
+    <div>
+      <dt>hop count</dt>
+      <dd>How many relays a beacon crossed to reach you. Lower is a better route.</dd>
+    </div>
+    <div>
+      <dt>next hop</dt>
+      <dd>The single neighbour you heard the best beacon from. Where your telemetry goes.</dd>
+    </div>
+    <div>
+      <dt>belief expiry</dt>
+      <dd>Beliefs age out on how old the <em>news</em> is, not on when it was last repeated.</dd>
+    </div>
+    <div>
+      <dt>union-find</dt>
+      <dd>The simulator's ground truth. Balloons have no access to it, ever.</dd>
+    </div>
+  </dl>
+
+  <p class="thesis">Before any signal arrives, being deep inside a healthy mesh and being alone over the
+    Pacific are <strong>indistinguishable</strong> to a balloon. That gap — between simulating a network
+    and simulating <em>knowledge</em> of a network — is the whole exercise.</p>
+
+</div>
