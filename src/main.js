@@ -3,80 +3,28 @@ import * as Cesium from 'cesium';
 
 import configData from './user-config.json';
 
-import { params, WIND_API_URL, SIM_SERVER_URL, SIM_SERVER_WS_URL, BALLOON_MIN_ALT, BALLOON_MAX_ALT } from './config.js';
+import { params, WIND_API_URL, SIM_SERVER_URL, SIM_SERVER_WS_URL } from './config.js';
 import { WindField } from './windField.js';
 import { WindVectorField } from './windVectors.js';
 import { Tower } from './tower.js';
+import { balloonIconForAltitude, BALLOON_ICON_WIDTH, BALLOON_ICON_HEIGHT } from './balloonIcon.js';
+import {
+  beliefKey,
+  deliveryKey,
+  bundleOutcome,
+  commsAckLabel,
+  BELIEF_CSS,
+  BELIEF_LEGEND,
+  BELIEF_VERDICT,
+  DELIVERY_CSS,
+  DELIVERY_LEGEND,
+  COMMS_OUTCOME_CSS,
+  MUTED_CSS,
+} from './overlays.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
 Cesium.Ion.defaultAccessToken = configData.CESIUM_ION_DEFAULT_ACCESS_TOKEN;
-
-// Balloon icon layout, shared between drawing and billboard anchoring. The
-// basket sits at the very bottom of the canvas so a BOTTOM-origin billboard
-// places the basket — not the envelope — at the entity's actual position,
-// which is also where radio-link edges terminate: edges visually connect
-// basket to basket, not balloon-envelope to balloon-envelope.
-const BALLOON_ICON_WIDTH = 16;
-const BALLOON_ICON_HEIGHT = 30;
-const BALLOON_BASKET_TOP_Y = 25;
-const BALLOON_BASKET_HEIGHT = 4;
-
-// Draws a hot-air-balloon glyph (teardrop envelope + single rigging line +
-// basket) onto a canvas. `fullness` (0..1) controls the envelope shape: 0 is
-// a narrow, elongated teardrop (low-altitude balloon, not yet fully
-// inflated), 1 is a fuller, rounder teardrop (high-altitude balloon at max
-// inflation). Rendered in white so it can be recolored per-entity via
-// billboard.color (Cesium multiplies the image by that tint).
-function buildBalloonIcon(fullness) {
-  const canvas = document.createElement('canvas');
-  canvas.width = BALLOON_ICON_WIDTH;
-  canvas.height = BALLOON_ICON_HEIGHT;
-  const ctx = canvas.getContext('2d');
-
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1;
-
-  const cx = BALLOON_ICON_WIDTH / 2;
-  const topY = 2;
-  const rx = 4 + 3 * fullness; // envelope bulge half-width: 4..7
-  const bulgeCenterY = topY + rx;
-  const bulgeBottomY = bulgeCenterY + rx;
-  const tipY = bulgeBottomY + (12 - 9 * fullness); // point length: long/narrow at low fullness, short/round at high fullness
-
-  // Teardrop: rounded top (semicircle) tapering to a point at tipY.
-  ctx.beginPath();
-  ctx.arc(cx, bulgeCenterY, rx, Math.PI, 0, false);
-  ctx.quadraticCurveTo(cx + rx * 0.3, bulgeBottomY, cx, tipY);
-  ctx.quadraticCurveTo(cx - rx * 0.3, bulgeBottomY, cx - rx, bulgeCenterY);
-  ctx.closePath();
-  ctx.fill();
-
-  // Single rigging line from the envelope's point down to the basket.
-  ctx.beginPath();
-  ctx.moveTo(cx, tipY);
-  ctx.lineTo(cx, BALLOON_BASKET_TOP_Y);
-  ctx.stroke();
-
-  // Basket
-  ctx.fillRect(cx - 2, BALLOON_BASKET_TOP_Y, 4, BALLOON_BASKET_HEIGHT);
-
-  return canvas;
-}
-
-// Precomputed set of balloon glyphs spanning narrow (low altitude) to full
-// (high altitude), plus a lookup from altitude to the nearest glyph.
-const BALLOON_ICON_COUNT = 10;
-const balloonIcons = Array.from({ length: BALLOON_ICON_COUNT }, (_, i) =>
-  buildBalloonIcon(i / (BALLOON_ICON_COUNT - 1))
-);
-
-function balloonIconForAltitude(altM) {
-  const t = Cesium.Math.clamp((altM - BALLOON_MIN_ALT) / (BALLOON_MAX_ALT - BALLOON_MIN_ALT), 0, 1);
-  const index = Math.round(t * (BALLOON_ICON_COUNT - 1));
-  return balloonIcons[index];
-}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -226,9 +174,9 @@ async function initCesium() {
     // Red well below the threshold, amber in the critical band either side of
     // it (where paths get long and delivery turns erratic), green above.
     const color =
-      degree < PERCOLATION_DEGREE - 1 ? '#e05561'
-      : degree < PERCOLATION_DEGREE + 1 ? '#e0a355'
-      : '#5fd08a';
+      degree < PERCOLATION_DEGREE - 1 ? BELIEF_CSS.stale
+      : degree < PERCOLATION_DEGREE + 1 ? BELIEF_CSS.unaware
+      : BELIEF_CSS.ok;
     meshDegreeBar.style.backgroundColor = color;
     meshDegreeValue.style.color = color;
 
@@ -248,39 +196,20 @@ async function initCesium() {
   const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
   const SELECTED_BALLOON_COLOR = Cesium.Color.fromCssColorString('#3fd0ff');
 
-  // Belief-vs-truth overlay (MESH_COMMS_DESIGN.md §3). The server
-  // sends each balloon's own belief (`believedHops`, learned only from beacons
-  // that reached it) alongside the union-find ground truth (`grounded`). The
-  // two disagreeing is the expected behavior of a duty-cycled mesh, not an
-  // error — this overlay is how you watch it happen.
-  const BELIEF_COLORS = {
-    ok: Cesium.Color.fromCssColorString('#5fd08a'),      // believes, and is right
-    stale: Cesium.Color.fromCssColorString('#e05561'),   // believes a route it has lost
-    unaware: Cesium.Color.fromCssColorString('#e0a355'), // has a route, hasn't heard yet
-    none: Cesium.Color.fromCssColorString('#6a6f78'),    // no belief, no route
-  };
+  // The overlay palettes live in overlays.js as CSS strings, because the
+  // panels below render them as HTML and the entities here need them as
+  // Cesium colors. Converting once, in one place, is what stops the two
+  // representations drifting apart.
+  const toCesiumColors = (cssTable) =>
+    Object.fromEntries(
+      Object.entries(cssTable).map(([key, css]) => [key, Cesium.Color.fromCssColorString(css)])
+    );
+  const BELIEF_COLORS = toCesiumColors(BELIEF_CSS);
+  const DELIVERY_COLORS = toCesiumColors(DELIVERY_CSS);
+  const COMMS_OUTCOME_COLORS = toCesiumColors(COMMS_OUTCOME_CSS);
+
   let beliefOverlayEnabled = false;
-
-  function beliefKey(b) {
-    const believes = b.believedHops !== null && b.believedHops !== undefined;
-    if (believes) return b.grounded ? 'ok' : 'stale';
-    return b.grounded ? 'unaware' : 'none';
-  }
-
-  // Last-delivery overlay (MESH_COMMS_DESIGN.md §3). `lastChannel` is server
-  // truth about how a balloon's most recently *resolved* bundle actually got
-  // through — deliberately not something the balloon itself could report,
-  // since satellite delivery is silent to the origin (see bundle.rs).
-  const DELIVERY_COLORS = {
-    radio: Cesium.Color.fromCssColorString('#8de05f'),     // lime — delivered over the mesh
-    satellite: Cesium.Color.fromCssColorString('#3fa7ff'), // blue — release-valve delivery
-    none: Cesium.Color.fromCssColorString('#8a8f98'),      // gray — nothing resolved yet
-  };
   let deliveryOverlayEnabled = false;
-
-  function deliveryKey(b) {
-    return b.lastChannel ?? 'none';
-  }
 
   // Animated packet along the recorded path (MESH_COMMS_DESIGN.md §3/C4).
   // On selection, fetch the balloon's most recently *resolved* bundle from
@@ -293,12 +222,6 @@ async function initCesium() {
   // live view of one currently in flight — a bundle can take many rounds per
   // hop, so watching one "live" would mostly look idle.
   const COMMS_PATH_COLOR = Cesium.Color.fromCssColorString('#ffd166');
-  const COMMS_OUTCOME_COLORS = {
-    acked: Cesium.Color.fromCssColorString('#5fd08a'),        // matches belief "ok"
-    ackDied: Cesium.Color.fromCssColorString('#e05561'),      // matches belief "stale"
-    satellite: Cesium.Color.fromCssColorString('#3fa7ff'),    // matches the delivery overlay
-    droppedInMesh: Cesium.Color.fromCssColorString('#8a8f98'),
-  };
   const COMMS_HOP_DURATION_MS = 550;
 
   const commsPathCollection = new Cesium.PolylineCollection();
@@ -406,29 +329,26 @@ async function initCesium() {
       material: Cesium.Material.fromType('PolylineDash', { color: COMMS_PATH_COLOR, dashLength: 12 }),
     });
 
+    const outcome = bundleOutcome(lb);
+    const outcomeColor = COMMS_OUTCOME_COLORS[outcome];
+
     animateCommsPacket(positions, COMMS_PATH_COLOR, () => {
-      if (lb.channel === 'satellite') {
-        commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.satellite;
+      // Satellite pickup and a mesh drop both end the story where the
+      // outbound leg stopped — there is no ack to animate, only a recolor.
+      if (outcome === 'satellite' || outcome === 'droppedInMesh') {
+        commsPacketEntity.point.color = outcomeColor;
         return;
       }
-      if (lb.state === 'acked') {
-        animateCommsPacket([...positions].reverse(), COMMS_OUTCOME_COLORS.acked, () => {
-          commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.acked;
-        });
-        return;
-      }
-      if (lb.channel === 'radio' && lb.ackHopsCompleted !== null && lb.ackHopsCompleted !== undefined) {
-        // The ack died partway back — animate only as far as it actually got.
-        const hopsToShow = Math.max(0, Math.min(balloonHops, lb.ackHopsCompleted));
-        const reversed = [...positions].reverse().slice(0, hopsToShow + towerLeg + 1);
-        animateCommsPacket(reversed, COMMS_OUTCOME_COLORS.ackDied, () => {
-          commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.ackDied;
-        });
-        return;
-      }
-      // Never reached a tower at all — dropped in the mesh (loop/TTL), no
-      // ack was ever spawned.
-      commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.droppedInMesh;
+      // The ack retraces the path. A completed one runs the whole way home;
+      // one that died is truncated to however far it actually got.
+      const reverse = [...positions].reverse();
+      const ackPath =
+        outcome === 'acked'
+          ? reverse
+          : reverse.slice(0, Math.max(0, Math.min(balloonHops, lb.ackHopsCompleted)) + towerLeg + 1);
+      animateCommsPacket(ackPath, outcomeColor, () => {
+        commsPacketEntity.point.color = outcomeColor;
+      });
     });
   }
 
@@ -439,25 +359,17 @@ async function initCesium() {
   // honest to show there beyond "—").
   let commsLogPanel, commsLogTableBody; // assigned when the panel is built
 
-  function commsAckLabel(ackState, ackHopsCompleted, hops) {
-    if (ackState === 'acked') return { text: 'acked', color: COMMS_OUTCOME_COLORS.acked };
-    if (ackState === 'pending') return { text: 'pending', color: Cesium.Color.fromCssColorString('#8a8f98') };
-    // timedOut
-    if (ackHopsCompleted !== null && ackHopsCompleted !== undefined) {
-      return {
-        text: `died @ ${ackHopsCompleted}/${hops}`,
-        color: COMMS_OUTCOME_COLORS.ackDied,
-      };
-    }
-    return { text: 'timed out', color: Cesium.Color.fromCssColorString('#8a8f98') };
-  }
-
   function commsLogRowHtml(record) {
-    const channelText = { radio: 'radio', satellite: 'satellite' }[record.channel] ?? '—';
+    // A record's channel is null until its bundle resolves, so anything that
+    // isn't one of the two real channels reads as "—", not as a state.
+    // Note this column is tinted from the *outcome* palette, not the delivery
+    // one — radio reads as the acked green rather than the overlay's lime.
+    const resolved = record.channel === 'radio' || record.channel === 'satellite';
+    const channelText = resolved ? record.channel : '—';
     const channelColor =
-      record.channel === 'radio' ? COMMS_OUTCOME_COLORS.acked.toCssColorString()
-      : record.channel === 'satellite' ? COMMS_OUTCOME_COLORS.satellite.toCssColorString()
-      : '#8a8f98';
+      record.channel === 'radio' ? COMMS_OUTCOME_CSS.acked
+      : record.channel === 'satellite' ? COMMS_OUTCOME_CSS.satellite
+      : MUTED_CSS;
     const ack = commsAckLabel(record.ackState, record.ackHopsCompleted, record.hops);
     return `
       <tr>
@@ -465,7 +377,7 @@ async function initCesium() {
         <td>${record.seq}</td>
         <td>${record.hops ?? '—'}</td>
         <td style="color:${channelColor};">${channelText}</td>
-        <td style="color:${ack.color.toCssColorString()};">${ack.text}</td>
+        <td style="color:${ack.css};">${ack.text}</td>
         <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
         <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
       </tr>
@@ -566,22 +478,20 @@ async function initCesium() {
     if (!lb) return `<div style="opacity:0.6;">No bundle originated yet.</div>`;
     if (!lb.path) return `<div style="opacity:0.6;">Pending &mdash; not resolved yet.</div>`;
 
-    let outcome, color;
-    if (lb.channel === 'satellite') {
-      [outcome, color] = ['picked up by satellite', COMMS_OUTCOME_COLORS.satellite];
-    } else if (lb.state === 'acked') {
-      [outcome, color] = ['delivered and acked', COMMS_OUTCOME_COLORS.acked];
-    } else if (lb.channel === 'radio' && lb.ackHopsCompleted !== null && lb.ackHopsCompleted !== undefined) {
-      const total = lb.path.length - 1;
-      outcome = `delivered, ack died after ${lb.ackHopsCompleted}/${total} hop${total === 1 ? '' : 's'}`;
-      color = COMMS_OUTCOME_COLORS.ackDied;
-    } else {
-      [outcome, color] = ['dropped in the mesh (loop/TTL) — never reached a tower', COMMS_OUTCOME_COLORS.droppedInMesh];
-    }
+    // Same classification the animation runs on, so the dot and this text can
+    // never tell two different stories about one bundle.
+    const total = lb.path.length - 1;
+    const outcome = bundleOutcome(lb);
+    const outcomeText = {
+      satellite: 'picked up by satellite',
+      acked: 'delivered and acked',
+      ackDied: `delivered, ack died after ${lb.ackHopsCompleted}/${total} hop${total === 1 ? '' : 's'}`,
+      droppedInMesh: 'dropped in the mesh (loop/TTL) — never reached a tower',
+    }[outcome];
     return `
       <div style="display:flex; justify-content:space-between;"><span>Seq</span><span>${lb.seq}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Hops</span><span>${lb.path.length - 1}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Outcome</span><span style="color:${color.toCssColorString()};">${outcome}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Hops</span><span>${total}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Outcome</span><span style="color:${COMMS_OUTCOME_CSS[outcome]};">${outcomeText}</span></div>
     `;
   }
 
@@ -600,23 +510,16 @@ async function initCesium() {
       b.believedHops === null || b.believedHops === undefined
         ? 'no route known'
         : `${b.believedHops} hop${b.believedHops === 1 ? '' : 's'} to a tower`;
-    const verdict = {
-      ok: ['#5fd08a', 'belief matches reality'],
-      stale: ['#e05561', 'stale — that route is gone'],
-      unaware: ['#e0a355', 'a route exists, not heard yet'],
-      none: ['#6a6f78', 'isolated, and knows it'],
-    }[key];
-    const channelText = { radio: 'radio mesh', satellite: 'satellite', none: 'nothing resolved yet' }[
-      deliveryKey(b)
-    ];
-    const channelColor = DELIVERY_COLORS[deliveryKey(b)]?.toCssColorString() ?? '#8a8f98';
+    const dKey = deliveryKey(b);
+    const channelText = DELIVERY_LEGEND[dKey];
+    const channelColor = DELIVERY_CSS[dKey] ?? MUTED_CSS;
     inspectorBody.innerHTML = `
       <div style="display:flex; justify-content:space-between;"><span>Latitude</span><span>${fmtLat(b.lat)}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Longitude</span><span>${fmtLon(b.lon)}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Altitude</span><span>${(b.alt / 1000).toFixed(2)} km</span></div>
       <div style="display:flex; justify-content:space-between; margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Actually grounded</span><span>${b.grounded ? 'yes' : 'no'}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Verdict</span><span style="color:${verdict[0]};">${verdict[1]}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Verdict</span><span style="color:${BELIEF_CSS[key]};">${BELIEF_VERDICT[key]}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Last delivered via</span><span style="color:${channelColor};">${channelText}</span></div>
       <div style="border-top: 1px solid rgba(255,255,255,0.2); margin-top:8px; padding-top:6px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
@@ -962,22 +865,15 @@ async function initCesium() {
           <label for="beliefOverlayToggle" style="flex:1;">Belief overlay</label>
         </div>
         <div id="beliefLegend" style="display:none; margin-top:5px; opacity:0.85;">
+          ${['ok', 'stale', 'unaware', 'none']
+            .map(
+              (key) => `
           <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#5fd08a;">&#9679;</span> believes, correct</span>
-            <span id="beliefOkValue">&ndash;</span>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#e05561;">&#9679;</span> stale belief</span>
-            <span id="beliefStaleValue">&ndash;</span>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#e0a355;">&#9679;</span> unaware of route</span>
-            <span id="beliefUnawareValue">&ndash;</span>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#6a6f78;">&#9679;</span> no route known</span>
-            <span id="beliefNoneValue">&ndash;</span>
-          </div>
+            <span><span style="color:${BELIEF_CSS[key]};">&#9679;</span> ${BELIEF_LEGEND[key]}</span>
+            <span id="belief${key[0].toUpperCase()}${key.slice(1)}Value">&ndash;</span>
+          </div>`
+            )
+            .join('')}
         </div>
       </div>
       <!-- Last-delivery overlay. Server truth about how each balloon's most
@@ -989,15 +885,14 @@ async function initCesium() {
           <label for="deliveryOverlayToggle" style="flex:1;">Last-delivery overlay</label>
         </div>
         <div id="deliveryLegend" style="display:none; margin-top:5px; opacity:0.85;">
+          ${['radio', 'satellite', 'none']
+            .map(
+              (key) => `
           <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#8de05f;">&#9679;</span> radio mesh</span>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#3fa7ff;">&#9679;</span> satellite</span>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span><span style="color:#8a8f98;">&#9679;</span> nothing resolved yet</span>
-          </div>
+            <span><span style="color:${DELIVERY_CSS[key]};">&#9679;</span> ${DELIVERY_LEGEND[key]}</span>
+          </div>`
+            )
+            .join('')}
         </div>
       </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">

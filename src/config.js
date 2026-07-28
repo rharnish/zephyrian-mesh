@@ -23,7 +23,11 @@ export const EARTH_RADIUS = 6371000;          // meters
 // still works when the frontend is opened from a browser on another
 // computer (npm run dev --host) — 127.0.0.1 in that browser would mean the
 // browser's own machine, not the one running wind_backend.py/sim-server.
-const BACKEND_HOST = window.location.hostname;
+// The `typeof window` guard is not defensive coding for the browser — it is
+// what lets this module be imported outside one. Every tunable in this file
+// lives here, so a unit test for anything that reads a tunable would
+// otherwise fail on this line before reaching the code under test.
+const BACKEND_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
 
 // sim-server (rust/sim-server, née rust/sim-core plan B) owns balloon/tower
 // simulation state; the frontend is a thin client that renders whatever it
