@@ -18,11 +18,69 @@ import { OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from '../balloonLayer.
 const PERCOLATION_DEGREE = 4.5;
 const MESH_DEGREE_BAR_MAX = 10; // full-width degree; threshold lands at 45%
 
-// Our own POST and the next broadcast snapshot race: a snapshot computed just
-// before the server applied our change would otherwise snap a slider back to
-// the old value for a tick before jumping forward again, which reads as the
-// slider "resisting" quick successive changes.
-const REMOTE_SYNC_COOLDOWN_MS = 600;
+// Our own request and the snapshot stream race. Snapshots already in flight
+// when we sent a change still carry the old value, and applying one of those
+// snaps the slider back to where it was before jumping forward again — the
+// "bounce" on release.
+//
+// This used to be handled by ignoring snapshots for a fixed 600ms after a
+// change, which does not work: the client reads snapshots from an unbounded
+// queue, so wall-clock time here says nothing about *which* snapshot is being
+// applied. Measured on this machine the browser can be hundreds of ticks
+// behind and losing ground, at which point every stale snapshot in the backlog
+// arrives long after any timer has expired. It also explained why shrinking
+// the balloon count bounced and growing it didn't: shrinking means the queued
+// stale snapshots are the larger, slower ones, so the backlog drains slower.
+//
+// So instead of guessing at a duration, we wait for proof: after requesting a
+// value, ignore this control's snapshot value until a snapshot actually
+// carries what we asked for. That is correct no matter how deep the backlog
+// gets.
+//
+// The timeout is only a safety net for a request that is never answered at
+// all — a dropped POST, or a server restart. It is deliberately far longer
+// than any plausible confirmation delay, because the two failures are not
+// symmetric: expiring early re-creates exactly the bounce this exists to
+// prevent, while expiring late merely means a control ignores another tab's
+// changes for a while longer after a command that already went missing.
+//
+// Sizing it needs the client's lag, not the server's. The server confirms in
+// 30-130ms, but the client reads snapshots off a socket it cannot drain fast
+// enough, so confirmation can surface many seconds after it was sent — on a
+// software-GL machine here, longer than 5s even with only 150 balloons.
+export const PENDING_REQUEST_TIMEOUT_MS = 30000;
+
+// One in-flight "I asked the server for this value" for a single control.
+// `matches` compares a snapshot's value against the requested one, since the
+// horizon coefficient is a float and the balloon count an integer.
+export class PendingRequest {
+  constructor(matches) {
+    this.matches = matches;
+    this.value = null; // null when nothing is outstanding
+    this.at = 0;
+  }
+
+  request(value) {
+    this.value = value;
+    this.at = Date.now();
+  }
+
+  // True while this snapshot's value should be ignored. Clears itself once the
+  // server confirms, or once the request has gone unanswered long enough that
+  // continuing to ignore would be worse than accepting whatever is there.
+  shouldIgnore(snapshotValue) {
+    if (this.value === null) return false;
+    if (this.matches(snapshotValue, this.value)) {
+      this.value = null;
+      return false;
+    }
+    if (Date.now() - this.at > PENDING_REQUEST_TIMEOUT_MS) {
+      this.value = null;
+      return false;
+    }
+    return true;
+  }
+}
 
 // Inline SVG (fill:currentColor) rather than the ⏸/▶ unicode glyphs, which
 // render as orange emoji on most systems and ignore CSS `color`. currentColor
@@ -76,11 +134,15 @@ export class ControlPanel {
     this.paused = false;
     // Lets another tab's slider changes (arriving via snapshots, since the
     // server is the source of truth) update this tab's controls too, without
-    // fighting a slider the user is actively dragging — or just released.
+    // fighting a slider the user is actively dragging — or one whose change is
+    // still making its way back through the snapshot stream.
     this.draggingHorizon = false;
     this.draggingBalloons = false;
-    this.horizonCooldownUntil = 0;
-    this.balloonsCooldownUntil = 0;
+    // Floats survive the JSON round trip intact at this slider's 0.05 step,
+    // but compare with a tolerance rather than betting the control's behavior
+    // on that.
+    this.horizonRequest = new PendingRequest((a, b) => Math.abs(a - b) < 1e-9);
+    this.balloonsRequest = new PendingRequest((a, b) => a === b);
 
     const panel = document.createElement('div');
     this.panel = panel;
@@ -230,7 +292,7 @@ export class ControlPanel {
       // Sync only on release (not every drag tick) — this triggers a full grid
       // rebuild on the server, so it's not something to send on every 'input'.
       this.draggingHorizon = false;
-      this.horizonCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
+      this.horizonRequest.request(params.horizonRefractionCoeff);
       onHorizonCommit(params.horizonRefractionCoeff);
     });
 
@@ -244,9 +306,9 @@ export class ControlPanel {
     this.balloonsSlider.addEventListener('change', () => {
       // Release-only for the same reason: this is a full clear+respawn there.
       this.draggingBalloons = false;
-      this.balloonsCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
       const requested = parseInt(this.balloonsSlider.value, 10);
       params.numBalloons = requested;
+      this.balloonsRequest.request(requested);
       onBalloonCountCommit(requested);
     });
 
@@ -342,27 +404,28 @@ export class ControlPanel {
   // `onHorizonEcho` fires when another tab's horizon change arrives, since the
   // tower range circles have to be rebuilt for it.
   syncFromSnapshot(snapshot, onHorizonEcho) {
-    const now = Date.now();
     if (typeof snapshot.paused === 'boolean' && snapshot.paused !== this.paused) {
       this.paused = snapshot.paused;
       this._updatePauseButton();
     }
-    if (
-      !this.draggingHorizon &&
-      now >= this.horizonCooldownUntil &&
-      typeof snapshot.horizonRefractionCoeff === 'number'
-    ) {
+    if (!this.draggingHorizon && typeof snapshot.horizonRefractionCoeff === 'number') {
       const coeff = snapshot.horizonRefractionCoeff;
-      if (coeff !== params.horizonRefractionCoeff) {
+      // shouldIgnore is always evaluated — it is what clears the request once
+      // the server confirms, so it must not be short-circuited away.
+      const stale = this.horizonRequest.shouldIgnore(coeff);
+      if (!stale && coeff !== params.horizonRefractionCoeff) {
         params.horizonRefractionCoeff = coeff;
         this.horizonSlider.value = coeff;
         this.horizonValue.textContent = coeff.toFixed(2);
         onHorizonEcho();
       }
     }
-    if (!this.draggingBalloons && now >= this.balloonsCooldownUntil) {
+    if (!this.draggingBalloons) {
+      // There is no count field on the snapshot — the visible balloons *are*
+      // the count, so this doubles as the confirmation that a resize landed.
       const n = snapshot.balloons.length;
-      if (n !== params.numBalloons) {
+      const stale = this.balloonsRequest.shouldIgnore(n);
+      if (!stale && n !== params.numBalloons) {
         params.numBalloons = n;
         this.balloonsSlider.value = n;
         this.balloonsValue.textContent = n;
