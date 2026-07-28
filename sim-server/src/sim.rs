@@ -83,10 +83,33 @@ pub struct EdgeSnapshot {
     pub grounded: bool,
 }
 
+/// Milliseconds since the Unix epoch. Saturates rather than panicking on a
+/// clock before 1970, which is not a real case but is not worth a panic path.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub tick: u64,
+    /// Wall clock at the moment this snapshot was *built*, so a client can say
+    /// how stale its view is with `Date.now() - serverTimeMs` rather than
+    /// diffing tick counters against a second connection and converting by an
+    /// assumed tick rate — which is exactly the assumption that breaks when
+    /// something is wrong.
+    ///
+    /// Deliberately stamped at construction and not at send time: a slow
+    /// client's delay accrues *after* this point (see `handle_socket`), so a
+    /// send-time stamp would read near zero and hide the thing worth measuring.
+    ///
+    /// Not simulation state — nothing in `World` reads it, and no experiment
+    /// binary serializes a `Snapshot`, so it cannot make a seeded sweep
+    /// irreproducible.
+    pub server_time_ms: u64,
     pub balloons: Vec<Balloon>,
     pub towers: Vec<Tower>,
     /// `None` on ticks where links weren't recomputed (still throttled the
@@ -274,6 +297,7 @@ impl World {
             let visible = &self.balloons[..self.visible_count];
             return Snapshot {
                 tick: self.tick_count,
+                server_time_ms: now_ms(),
                 balloons: visible.to_vec(),
                 towers: self.towers.clone(),
                 edges: None,
@@ -430,6 +454,7 @@ impl World {
 
         Snapshot {
             tick: self.tick_count,
+            server_time_ms: now_ms(),
             balloons: self.balloons[..self.visible_count].to_vec(),
             towers: self.towers.clone(),
             edges,
@@ -445,5 +470,53 @@ impl World {
             bundles_in_flight: self.count_carrying(),
             bundles_stranded: self.count_stranded(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_world() -> World {
+        let mut world = World::new(Arc::new(WindField::zero()));
+        world.spawn_balloon_pool(10);
+        world.set_visible_count(10);
+        world
+    }
+
+    #[test]
+    fn snapshots_are_stamped_with_the_current_wall_clock() {
+        let before = now_ms();
+        let snapshot = test_world().tick(1.0);
+        let after = now_ms();
+        assert!(
+            snapshot.server_time_ms >= before && snapshot.server_time_ms <= after,
+            "stamp {} outside [{}, {}]",
+            snapshot.server_time_ms,
+            before,
+            after
+        );
+    }
+
+    #[test]
+    fn the_paused_path_is_stamped_too() {
+        // `tick` builds a Snapshot in two places — the paused early return and
+        // the normal path. A field added to one and missed in the other still
+        // compiles, so pin the branch that is easy to forget.
+        let mut world = test_world();
+        world.paused = true;
+        let before = now_ms();
+        let snapshot = world.tick(1.0);
+        assert!(snapshot.paused);
+        assert!(snapshot.server_time_ms >= before);
+    }
+
+    #[test]
+    fn the_stamp_advances_across_ticks() {
+        let mut world = test_world();
+        let first = world.tick(1.0).server_time_ms;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = world.tick(1.0).server_time_ms;
+        assert!(second > first, "{second} should be later than {first}");
     }
 }

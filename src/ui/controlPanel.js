@@ -16,6 +16,11 @@ import { OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from '../balloonLayer.
 // is islands, above it a giant component; see sim-server/src/bin/mesh_depth.rs
 // for the measurement this comes from.
 const PERCOLATION_DEGREE = 4.5;
+// View-lag thresholds. Under a second is normal for a browser keeping up with
+// the snapshot stream; a few seconds means it is not, and the globe is showing
+// a world that has already moved on.
+const VIEW_LAG_WARN_MS = 1000;
+const VIEW_LAG_BAD_MS = 4000;
 const MESH_DEGREE_BAR_MAX = 10; // full-width degree; threshold lands at 45%
 
 // Our own request and the snapshot stream race. Snapshots already in flight
@@ -209,6 +214,10 @@ export class ControlPanel {
           <span>Grounded</span>
           <span id="meshGroundedValue">&ndash;</span>
         </label>
+        <label style="${SPREAD}" title="How old the world you are looking at is. Rises when this browser cannot keep up with the snapshot stream.">
+          <span>View lag</span>
+          <span id="viewLagValue">&ndash;</span>
+        </label>
       </div>
       <!-- Belief vs. truth. Balloons only know what beacons told them, so
            their belief lags reality (stale) or trails behind it (unaware).
@@ -320,6 +329,7 @@ export class ControlPanel {
     this.meshDegreeValue = $('#meshDegreeValue');
     this.meshDegreeBar = $('#meshDegreeBar');
     this.meshGroundedValue = $('#meshGroundedValue');
+    this.viewLagValue = $('#viewLagValue');
     this.beliefValues = {
       ok: $('#beliefOkValue'),
       stale: $('#beliefStaleValue'),
@@ -454,6 +464,22 @@ export class ControlPanel {
       : BELIEF_CSS.ok;
     this.meshDegreeBar.style.backgroundColor = color;
     this.meshDegreeValue.style.color = color;
+
+    // How old the world on screen is: the gap between when the server built
+    // this snapshot and now. Rises without bound when the client cannot drain
+    // the stream, which is otherwise invisible — a stale globe looks exactly
+    // like a live one. Assumes both clocks agree, which holds while server and
+    // browser are the same machine; across machines it still tracks *change*
+    // even if the absolute number carries the skew.
+    if (typeof snapshot.serverTimeMs === 'number') {
+      const lagMs = Math.max(0, Date.now() - snapshot.serverTimeMs);
+      this.viewLagValue.textContent =
+        lagMs < VIEW_LAG_WARN_MS ? `${lagMs} ms` : `${(lagMs / 1000).toFixed(1)} s`;
+      this.viewLagValue.style.color =
+        lagMs >= VIEW_LAG_BAD_MS ? BELIEF_CSS.stale
+        : lagMs >= VIEW_LAG_WARN_MS ? BELIEF_CSS.unaware
+        : BELIEF_CSS.ok;
+    }
 
     if (typeof snapshot.believedGroundedPct !== 'number') return;
     // "believes and is right" is everything that believes, minus those whose
