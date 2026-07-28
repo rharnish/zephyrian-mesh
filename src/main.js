@@ -1,4 +1,8 @@
 import 'cesium/Build/Cesium/Widgets/widgets.css';
+// Ours, and it must come after Cesium's: it drops the default body margin and
+// gives #cesiumContainer the full viewport. Without it the globe renders
+// short, with an 8px gutter around it.
+import './style.css';
 import * as Cesium from 'cesium';
 
 import configData from './user-config.json';
