@@ -31,7 +31,7 @@ import {
 } from './simClient.js';
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
 import { BalloonLayer, OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from './balloonLayer.js';
-import { toCesiumColors } from './cesiumColor.js';
+import { CommsReplay } from './commsReplay.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -89,6 +89,10 @@ async function initCesium() {
   // rather than cached alongside the balloon positions.
   const towerPosition = (tower) =>
     Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM);
+  const positionOfTower = (id) => {
+    const tower = towerById.get(id);
+    return tower ? towerPosition(tower) : undefined;
+  };
 
   // Control-panel elements + drag/cooldown state, assigned once the panel
   // is built below. Lets other tabs' slider changes (arriving via
@@ -201,148 +205,8 @@ async function initCesium() {
     beliefNoneValue.textContent = `${Math.max(0, 100 - ok - stale - unaware).toFixed(0)}%`;
   }
 
-  const COMMS_OUTCOME_COLORS = toCesiumColors(COMMS_OUTCOME_CSS);
-
-  // Animated packet along the recorded path (MESH_COMMS_DESIGN.md §3/C4).
-  // On selection, fetch the balloon's most recently *resolved* bundle from
-  // the sim-server (GET /api/balloons/:id/comms — the first query endpoint;
-  // everything else is fire-and-forget) and replay it: a dot travels the
-  // bundle's actual recorded path (not a recomputed shortest path), then the
-  // ack's fate plays out — all the way back if acked, partway if it died en
-  // route, or not at all if the bundle went out via satellite or never
-  // reached a tower. This is a replay of the last resolved bundle, not a
-  // live view of one currently in flight — a bundle can take many rounds per
-  // hop, so watching one "live" would mostly look idle.
-  const COMMS_PATH_COLOR = Cesium.Color.fromCssColorString('#ffd166');
-  const COMMS_HOP_DURATION_MS = 550;
-
-  const commsPathCollection = new Cesium.PolylineCollection();
-  viewer.scene.primitives.add(commsPathCollection);
-  let commsPathPrimitive = null;
-  let commsPacketEntity = null;
-  let commsAnimationFrame = null;
-  // Bumped on every clear so an in-flight animation's frame callback can tell
-  // it's been superseded (new selection, or the same one re-fetched) and stop
-  // touching an entity that may already be gone.
-  let commsAnimationToken = 0;
+  const commsReplay = new CommsReplay();
   let selectedComms = null; // last-fetched GET /api/balloons/:id/comms response
-
-  function clearCommsAnimation() {
-    commsAnimationToken++;
-    if (commsAnimationFrame !== null) {
-      cancelAnimationFrame(commsAnimationFrame);
-      commsAnimationFrame = null;
-    }
-    if (commsPathPrimitive) {
-      commsPathCollection.remove(commsPathPrimitive);
-      commsPathPrimitive = null;
-    }
-    if (commsPacketEntity) {
-      viewer.entities.remove(commsPacketEntity);
-      commsPacketEntity = null;
-    }
-  }
-
-  // Animates a dot across a sequence of positions, one hop per
-  // COMMS_HOP_DURATION_MS, then calls `onDone`. Reuses `commsPacketEntity`
-  // across legs (outbound, then the ack's reverse leg) so the dot doesn't
-  // jump between them.
-  function animateCommsPacket(positions, color, onDone) {
-    const token = commsAnimationToken;
-    if (!commsPacketEntity) {
-      commsPacketEntity = viewer.entities.add({
-        position: positions[0],
-        point: { pixelSize: 10, color, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
-      });
-    } else {
-      commsPacketEntity.point.color = color;
-      commsPacketEntity.position = positions[0];
-    }
-    if (positions.length < 2) {
-      onDone();
-      return;
-    }
-    let hop = 0;
-    const totalHops = positions.length - 1;
-    let hopStart = performance.now();
-    function frame(now) {
-      if (token !== commsAnimationToken) return; // superseded — stop touching this entity
-      const t = Math.min(1, (now - hopStart) / COMMS_HOP_DURATION_MS);
-      commsPacketEntity.position = Cesium.Cartesian3.lerp(
-        positions[hop], positions[hop + 1], t, new Cesium.Cartesian3()
-      );
-      if (t >= 1) {
-        hop++;
-        if (hop >= totalHops) {
-          onDone();
-          return;
-        }
-        hopStart = now;
-      }
-      commsAnimationFrame = requestAnimationFrame(frame);
-    }
-    commsAnimationFrame = requestAnimationFrame(frame);
-  }
-
-  // Renders (and animates) the selected balloon's last resolved bundle.
-  // Positions are snapshotted once at render time — a deliberate replay of a
-  // *past* path using each balloon's *current* position, same "possibly
-  // stale" idiom the rest of this design leans on rather than a hard error.
-  function renderCommsAnimation(comms) {
-    const lb = comms && comms.lastBundle;
-    if (!lb || !lb.path) return; // still Pending, or nothing originated yet
-
-    const positions = lb.path.map((id) => balloonLayer.positionOf(id)).filter(Boolean);
-    if (positions.length !== lb.path.length) return; // a hop balloon isn't currently visible
-
-    // The recorded path only ever holds balloon ids — delivery to a tower is
-    // modeled as instantaneous from the last tower-adjacent balloon, so the
-    // tower itself is never a hop. Append its position so the drawn/animated
-    // path actually reaches the tower instead of stopping one hop short.
-    let towerIncluded = false;
-    if (lb.towerId !== null && lb.towerId !== undefined) {
-      const tower = towerById.get(lb.towerId);
-      if (tower) {
-        positions.push(towerPosition(tower));
-        towerIncluded = true;
-      }
-    }
-    // Ack hops are counted purely over balloon-to-balloon hops (see
-    // `Ack.total_hops` in bundle.rs) — the tower hand-off above was never a
-    // modeled ack hop. The reverse path always starts at the tower though
-    // (that's where the ack is created), so the partial-reverse slice always
-    // shows that leg plus however many balloon hops the ack actually made.
-    const balloonHops = lb.path.length - 1;
-    const towerLeg = towerIncluded ? 1 : 0;
-
-    commsPathPrimitive = commsPathCollection.add({
-      positions,
-      width: 3,
-      material: Cesium.Material.fromType('PolylineDash', { color: COMMS_PATH_COLOR, dashLength: 12 }),
-    });
-
-    const outcome = bundleOutcome(lb);
-    const outcomeColor = COMMS_OUTCOME_COLORS[outcome];
-
-    animateCommsPacket(positions, COMMS_PATH_COLOR, () => {
-      // Satellite pickup and a mesh drop both end the story where the
-      // outbound leg stopped — there is no ack to animate, only a recolor.
-      if (outcome === 'satellite' || outcome === 'droppedInMesh') {
-        commsPacketEntity.point.color = outcomeColor;
-        return;
-      }
-      // The ack retraces the path. A completed one runs the whole way home;
-      // one that died is truncated to however far it actually got.
-      const reverse = [...positions].reverse();
-      const ackPath =
-        outcome === 'acked'
-          ? reverse
-          : reverse.slice(0, Math.max(0, Math.min(balloonHops, lb.ackHopsCompleted)) + towerLeg + 1);
-      animateCommsPacket(ackPath, outcomeColor, () => {
-        commsPacketEntity.point.color = outcomeColor;
-      });
-    });
-  }
 
   // Comms log panel (MESH_COMMS_DESIGN.md §3): a row per retained telemetry
   // record for the selected balloon, newest first — `seq · round · hops ·
@@ -392,13 +256,13 @@ async function initCesium() {
   }
 
   async function fetchAndAnimateComms(id) {
-    clearCommsAnimation();
+    commsReplay.clear(viewer);
     clearCommsLogPanel();
     selectedComms = null;
     const comms = await fetchBalloonComms(id);
     if (!comms || id !== balloonLayer.selectedId) return; // selection moved on while fetching
     selectedComms = comms;
-    renderCommsAnimation(selectedComms);
+    commsReplay.render(viewer, selectedComms, (id) => balloonLayer.positionOf(id), positionOfTower);
     renderCommsLogPanel(selectedComms);
   }
 
@@ -418,7 +282,7 @@ async function initCesium() {
   function deselectBalloon() {
     balloonLayer.setSelected(null);
     if (inspectorPanel) inspectorPanel.style.display = 'none';
-    clearCommsAnimation();
+    commsReplay.clear(viewer);
     clearCommsLogPanel();
     selectedComms = null;
   }
@@ -528,8 +392,7 @@ async function initCesium() {
   function resolveNodePosition(key) {
     const { kind, id } = parseNodeKey(key);
     if (kind === 'b') return balloonLayer.positionOf(id);
-    const tower = towerById.get(id);
-    return tower ? towerPosition(tower) : undefined;
+    return positionOfTower(id);
   }
 
   // --- sim-server connection -------------------------------------------------
