@@ -70,10 +70,16 @@ pub struct LastBundleView {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+/// One radio link: which two nodes, and whether their cluster reaches a tower.
+///
+/// Deliberately carries no positions. `pair_key` names both endpoints ("b12|t3")
+/// and the client already has every balloon and tower position in the same
+/// snapshot, so shipping coordinates here restated each node's position once
+/// per edge it appears in — at a mean degree of ~7 that was about 8 copies of
+/// every position, and 83% of the whole snapshot. The client looked them up by
+/// id and overwrote them on the same tick regardless.
 pub struct EdgeSnapshot {
     pub pair_key: String,
-    pub a: (f64, f64, f64),
-    pub b: (f64, f64, f64),
     pub grounded: bool,
 }
 
@@ -355,18 +361,6 @@ impl World {
             // Who can hear whom, for the beacon flood below.
             self.adjacency.rebuild(&grid_edges, self.visible_count, &self.towers);
 
-            let by_key = |key: &str| -> (f64, f64, f64) {
-                if let Some(id_str) = key.strip_prefix('b') {
-                    let id: u32 = id_str.parse().unwrap();
-                    let b = self.balloons.iter().find(|b| b.id == id).unwrap();
-                    (b.lon, b.lat, b.alt)
-                } else {
-                    let id: u32 = key[1..].parse().unwrap();
-                    let t = self.towers.iter().find(|t| t.id == id).unwrap();
-                    (t.lon, t.lat, t.height_m)
-                }
-            };
-
             Some(
                 grid_edges
                     .into_iter()
@@ -378,7 +372,7 @@ impl World {
                         } else {
                             format!("{}|{}", e.b_key, e.a_key)
                         };
-                        EdgeSnapshot { pair_key, a: by_key(&e.a_key), b: by_key(&e.b_key), grounded }
+                        EdgeSnapshot { pair_key, grounded }
                     })
                     .collect(),
             )

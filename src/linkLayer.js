@@ -34,7 +34,11 @@ export class LinkLayer {
     return this.collection;
   }
 
-  sync(viewer, edges) {
+  // An edge says only which two nodes are linked and whether their cluster is
+  // grounded; `resolvePosition` supplies where those nodes currently are. This
+  // is the same resolver refreshPositions uses, so a link is born at exactly
+  // the coordinates the next refresh would give it.
+  sync(viewer, edges, resolvePosition) {
     const collection = this._ensureCollection(viewer);
     const edgesByPairKey = new Map(edges.map((e) => [e.pairKey, e]));
 
@@ -48,21 +52,25 @@ export class LinkLayer {
     // Add or update current links.
     for (const edge of edges) {
       const [aKey, bKey] = edge.pairKey.split('|');
-      const posA = Cesium.Cartesian3.fromDegrees(edge.a[0], edge.a[1], edge.a[2]);
-      const posB = Cesium.Cartesian3.fromDegrees(edge.b[0], edge.b[1], edge.b[2]);
       const color = edge.grounded ? GROUNDED_LINK_COLOR : UNGROUNDED_LINK_COLOR;
       const existing = this.links.get(edge.pairKey);
       if (existing) {
-        existing.primitive.positions = [posA, posB];
+        // Only the color can have changed; refreshPositions re-anchors every
+        // link every tick anyway.
         existing.primitive.material.uniforms.color = color;
-      } else {
-        const primitive = collection.add({
-          positions: [posA, posB],
-          width: 2,
-          material: Cesium.Material.fromType('Color', { color }),
-        });
-        this.links.set(edge.pairKey, { primitive, aKey, bKey });
+        continue;
       }
+      const posA = resolvePosition(aKey);
+      const posB = resolvePosition(bKey);
+      // An endpoint we can't place isn't drawable — skip rather than inventing
+      // a position. The next edge sync picks it up once the node is rendered.
+      if (!posA || !posB) continue;
+      const primitive = collection.add({
+        positions: [posA, posB],
+        width: 2,
+        material: Cesium.Material.fromType('Color', { color }),
+      });
+      this.links.set(edge.pairKey, { primitive, aKey, bKey });
     }
   }
 

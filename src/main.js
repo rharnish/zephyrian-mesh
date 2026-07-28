@@ -189,7 +189,7 @@ async function initCesium() {
     balloonLayer.reconcile(viewer, snapshot.balloons);
     reconcileTowers(snapshot.towers);
     if (snapshot.edges) {
-      linkLayer.sync(viewer, snapshot.edges);
+      linkLayer.sync(viewer, snapshot.edges, resolveNodePosition);
     }
     linkLayer.refreshPositions(resolveNodePosition);
     controlPanel.syncFromSnapshot(snapshot, () => {
