@@ -3,6 +3,7 @@ import {
   beliefKey,
   deliveryKey,
   bundleOutcome,
+  deliveryMix,
   commsAckLabel,
   BELIEF_CSS,
   BELIEF_LEGEND,
@@ -45,6 +46,36 @@ describe('deliveryKey', () => {
   it('falls back to none when nothing has resolved yet', () => {
     expect(deliveryKey({ lastChannel: null })).toBe('none');
     expect(deliveryKey({})).toBe('none');
+  });
+});
+
+describe('deliveryMix', () => {
+  const of = (...channels) => channels.map((lastChannel) => ({ lastChannel }));
+
+  it('splits the field across the three buckets', () => {
+    const mix = deliveryMix(of('radio', 'radio', 'satellite', null));
+    expect(mix).toEqual({ radio: 50, satellite: 25, none: 25 });
+  });
+
+  it('counts a missing or null channel as unresolved', () => {
+    expect(deliveryMix([{ lastChannel: null }, {}])).toEqual({ radio: 0, satellite: 0, none: 100 });
+  });
+
+  it('returns zeros for an empty field rather than dividing by zero', () => {
+    expect(deliveryMix([])).toEqual({ radio: 0, satellite: 0, none: 0 });
+  });
+
+  it('sums to 100 for any field', () => {
+    const mix = deliveryMix(of('radio', 'satellite', null, 'radio', 'radio', 'satellite', null));
+    expect(mix.radio + mix.satellite + mix.none).toBeCloseTo(100);
+  });
+
+  it('does not drop a channel it does not recognise', () => {
+    // A new server-side channel must not make the legend silently under-count;
+    // it lands in "nothing resolved yet" until the client learns about it.
+    const mix = deliveryMix(of('radio', 'laser'));
+    expect(mix.radio + mix.satellite + mix.none).toBeCloseTo(100);
+    expect(mix.none).toBe(50);
   });
 });
 

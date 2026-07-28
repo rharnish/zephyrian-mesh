@@ -77,6 +77,35 @@ export function deliveryKey(b) {
   return b.lastChannel ?? 'none';
 }
 
+// Share (0..100) of balloons in each delivery bucket, for the panel legend.
+//
+// Derived here rather than sent by the server: `lastChannel` is already on
+// every balloon in the snapshot, so a server-computed aggregate would be
+// restating data the client is holding — the same redundancy the per-edge
+// coordinates were.
+//
+// The three buckets are exhaustive and mutually exclusive, so each is counted
+// directly rather than deriving the last from the others. That means rounding
+// can leave the displayed values summing to 99 or 101, which is preferable to
+// a bucket that silently absorbs the error.
+export function deliveryMix(balloons) {
+  const counts = { radio: 0, satellite: 0, none: 0 };
+  for (const b of balloons) {
+    const key = deliveryKey(b);
+    // An unrecognized channel would otherwise vanish from a legend that claims
+    // to cover everything; count it as unresolved rather than dropping it.
+    if (counts[key] === undefined) counts.none += 1;
+    else counts[key] += 1;
+  }
+  const total = balloons.length;
+  if (total === 0) return { radio: 0, satellite: 0, none: 0 };
+  return {
+    radio: (100 * counts.radio) / total,
+    satellite: (100 * counts.satellite) / total,
+    none: (100 * counts.none) / total,
+  };
+}
+
 // The single classification of "how did this bundle end up", shared by the
 // packet animation, the inspector summary, and (via commsAckLabel) the comms
 // log. These three used to each carry their own copy of this branch, which is

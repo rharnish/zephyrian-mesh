@@ -1,5 +1,5 @@
 import { params } from '../config.js';
-import { BELIEF_CSS, BELIEF_LEGEND, DELIVERY_CSS, DELIVERY_LEGEND } from '../overlays.js';
+import { BELIEF_CSS, BELIEF_LEGEND, DELIVERY_CSS, DELIVERY_LEGEND, deliveryMix } from '../overlays.js';
 import { OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from '../balloonLayer.js';
 
 // ---------------------------------------------------------------------------
@@ -100,23 +100,34 @@ const SPREAD = 'display:flex; justify-content:space-between;';
 const CHECKBOX_ROW = 'display:flex; gap:6px; align-items:center;';
 
 // Legend rows are generated from the palette so a new overlay state can't be
-// coloured in one place and captioned in another. `withValue` adds the
-// percentage readout the belief legend carries and the delivery one doesn't.
-function legendRows(keys, cssTable, labels, withValue) {
+// coloured in one place and captioned in another. `idPrefix` names the span
+// holding each row's percentage, and is what `valueRefs` below looks up.
+function legendRows(keys, cssTable, labels, idPrefix) {
   return keys
     .map((key) => {
-      const id = withValue
-        ? ` id="belief${key[0].toUpperCase()}${key.slice(1)}Value"`
-        : '';
-      const value = withValue ? `<span${id}>&ndash;</span>` : '';
+      const id = `${idPrefix}${key[0].toUpperCase()}${key.slice(1)}Value`;
       return `
           <div style="${SPREAD}">
             <span><span style="color:${cssTable[key]};">&#9679;</span> ${labels[key]}</span>
-            ${value}
+            <span id="${id}">&ndash;</span>
           </div>`;
     })
     .join('');
 }
+
+// The spans legendRows just created, keyed the same way, so a caller updates
+// them by overlay key rather than by remembering element ids.
+function valueRefs(panel, keys, idPrefix) {
+  return Object.fromEntries(
+    keys.map((key) => [
+      key,
+      panel.querySelector(`#${idPrefix}${key[0].toUpperCase()}${key.slice(1)}Value`),
+    ])
+  );
+}
+
+const BELIEF_KEYS = ['ok', 'stale', 'unaware', 'none'];
+const DELIVERY_KEYS = ['radio', 'satellite', 'none'];
 
 export class ControlPanel {
   constructor({
@@ -228,7 +239,7 @@ export class ControlPanel {
           <label for="beliefOverlayToggle" style="flex:1;">Belief overlay</label>
         </div>
         <div id="beliefLegend" style="display:none; margin-top:5px; opacity:0.85;">
-          ${legendRows(['ok', 'stale', 'unaware', 'none'], BELIEF_CSS, BELIEF_LEGEND, true)}
+          ${legendRows(BELIEF_KEYS, BELIEF_CSS, BELIEF_LEGEND, 'belief')}
         </div>
       </div>
       <!-- Last-delivery overlay. Server truth about how each balloon's most
@@ -240,7 +251,7 @@ export class ControlPanel {
           <label for="deliveryOverlayToggle" style="flex:1;">Last-delivery overlay</label>
         </div>
         <div id="deliveryLegend" style="display:none; margin-top:5px; opacity:0.85;">
-          ${legendRows(['radio', 'satellite', 'none'], DELIVERY_CSS, DELIVERY_LEGEND, false)}
+          ${legendRows(DELIVERY_KEYS, DELIVERY_CSS, DELIVERY_LEGEND, 'delivery')}
         </div>
       </div>
       <div style="${CHECKBOX_ROW} ${SECTION}">
@@ -330,12 +341,8 @@ export class ControlPanel {
     this.meshDegreeBar = $('#meshDegreeBar');
     this.meshGroundedValue = $('#meshGroundedValue');
     this.viewLagValue = $('#viewLagValue');
-    this.beliefValues = {
-      ok: $('#beliefOkValue'),
-      stale: $('#beliefStaleValue'),
-      unaware: $('#beliefUnawareValue'),
-      none: $('#beliefNoneValue'),
-    };
+    this.beliefValues = valueRefs(panel, BELIEF_KEYS, 'belief');
+    this.deliveryValues = valueRefs(panel, DELIVERY_KEYS, 'delivery');
 
     // --- overlays ---
     // The two are mutually exclusive: both recolor every balloon, and showing
@@ -479,6 +486,14 @@ export class ControlPanel {
         lagMs >= VIEW_LAG_BAD_MS ? BELIEF_CSS.stale
         : lagMs >= VIEW_LAG_WARN_MS ? BELIEF_CSS.unaware
         : BELIEF_CSS.ok;
+    }
+
+    // Delivery mix. Derived from the balloons already in this snapshot rather
+    // than sent as three more fields — every balloon's lastChannel is right
+    // here, so a server-computed aggregate would restate what we hold.
+    const mix = deliveryMix(snapshot.balloons);
+    for (const key of DELIVERY_KEYS) {
+      this.deliveryValues[key].textContent = `${mix[key].toFixed(0)}%`;
     }
 
     if (typeof snapshot.believedGroundedPct !== 'number') return;
