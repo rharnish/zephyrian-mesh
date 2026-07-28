@@ -32,6 +32,7 @@ import {
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
 import { BalloonLayer, OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from './balloonLayer.js';
 import { CommsReplay } from './commsReplay.js';
+import { InspectorPanel } from './ui/inspectorPanel.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -206,159 +207,38 @@ async function initCesium() {
   }
 
   const commsReplay = new CommsReplay();
-  let selectedComms = null; // last-fetched GET /api/balloons/:id/comms response
 
-  // Comms log panel (MESH_COMMS_DESIGN.md §3): a row per retained telemetry
-  // record for the selected balloon, newest first — `seq · round · hops ·
-  // channel · ack state`, plus hash-prefix/tamper columns kept as explicit
-  // placeholders (C3's hash chain hasn't landed yet, so there's nothing
-  // honest to show there beyond "—").
-  let commsLogPanel, commsLogTableBody; // assigned when the panel is built
-
-  function commsLogRowHtml(record) {
-    // A record's channel is null until its bundle resolves, so anything that
-    // isn't one of the two real channels reads as "—", not as a state.
-    // Note this column is tinted from the *outcome* palette, not the delivery
-    // one — radio reads as the acked green rather than the overlay's lime.
-    const resolved = record.channel === 'radio' || record.channel === 'satellite';
-    const channelText = resolved ? record.channel : '—';
-    const channelColor =
-      record.channel === 'radio' ? COMMS_OUTCOME_CSS.acked
-      : record.channel === 'satellite' ? COMMS_OUTCOME_CSS.satellite
-      : MUTED_CSS;
-    const ack = commsAckLabel(record.ackState, record.ackHopsCompleted, record.hops);
-    return `
-      <tr>
-        <td>${record.createdAtRound}</td>
-        <td>${record.seq}</td>
-        <td>${record.hops ?? '—'}</td>
-        <td style="color:${channelColor};">${channelText}</td>
-        <td style="color:${ack.css};">${ack.text}</td>
-        <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
-        <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
-      </tr>
-    `;
-  }
-
-  function renderCommsLogPanel(comms) {
-    if (!commsLogPanel || !commsLogTableBody) return;
-    const log = comms && comms.log;
-    if (!log || log.length === 0) {
-      commsLogPanel.style.display = 'none';
-      return;
-    }
-    commsLogPanel.style.display = 'block';
-    commsLogTableBody.innerHTML = log.map(commsLogRowHtml).join('');
-  }
-
-  function clearCommsLogPanel() {
-    if (commsLogPanel) commsLogPanel.style.display = 'none';
-  }
+  const inspector = new InspectorPanel({
+    onClose: () => deselectBalloon(),
+    onReplay: () => {
+      if (balloonLayer.selectedId !== null) fetchAndAnimateComms(balloonLayer.selectedId);
+    },
+  });
 
   async function fetchAndAnimateComms(id) {
     commsReplay.clear(viewer);
-    clearCommsLogPanel();
-    selectedComms = null;
+    inspector.clearComms();
     const comms = await fetchBalloonComms(id);
     if (!comms || id !== balloonLayer.selectedId) return; // selection moved on while fetching
-    selectedComms = comms;
-    commsReplay.render(viewer, selectedComms, (id) => balloonLayer.positionOf(id), positionOfTower);
-    renderCommsLogPanel(selectedComms);
+    commsReplay.render(viewer, comms, (bid) => balloonLayer.positionOf(bid), positionOfTower);
+    inspector.setComms(comms);
   }
-
-  // Balloon selection/inspection. Clicking a balloon selects it; the inspector
-  // panel (built below) shows its live position/altitude. This is the surface
-  // the richer measurements + comms/tamper details attach to later — see
-  // MESH_COMMS_DESIGN.md.
-  let inspectorPanel, inspectorBody, inspectorTitle; // assigned when the panel is built
 
   function selectBalloon(id) {
     balloonLayer.setSelected(id);
-    if (inspectorPanel) inspectorPanel.style.display = 'block';
-    if (inspectorTitle) inspectorTitle.textContent = `Balloon #${id}`;
+    inspector.show(id);
     fetchAndAnimateComms(id);
   }
 
   function deselectBalloon() {
     balloonLayer.setSelected(null);
-    if (inspectorPanel) inspectorPanel.style.display = 'none';
+    inspector.hide();
     commsReplay.clear(viewer);
-    clearCommsLogPanel();
-    selectedComms = null;
-  }
-
-  // "82.32 W", "29.65 N" — same convention as the tower labels (towerModel.js).
-  const fmtLon = (lon) => `${Math.abs(lon).toFixed(3)}° ${lon < 0 ? 'W' : 'E'}`;
-  const fmtLat = (lat) => `${Math.abs(lat).toFixed(3)}° ${lat < 0 ? 'S' : 'N'}`;
-
-  // Text summary of the last-bundle animation, matching its colors. Reads
-  // from `selectedComms` (fetched once on selection), not the per-snapshot
-  // balloon — so this stays stable across the ~50ms snapshot cadence that
-  // rebuilds the rest of the inspector.
-  function commsSummaryHtml() {
-    if (selectedComms === undefined || selectedComms === null) {
-      return `<div style="opacity:0.6;">Loading&hellip;</div>`;
-    }
-    const lb = selectedComms.lastBundle;
-    if (!lb) return `<div style="opacity:0.6;">No bundle originated yet.</div>`;
-    if (!lb.path) return `<div style="opacity:0.6;">Pending &mdash; not resolved yet.</div>`;
-
-    // Same classification the animation runs on, so the dot and this text can
-    // never tell two different stories about one bundle.
-    const total = lb.path.length - 1;
-    const outcome = bundleOutcome(lb);
-    const outcomeText = {
-      satellite: 'picked up by satellite',
-      acked: 'delivered and acked',
-      ackDied: `delivered, ack died after ${lb.ackHopsCompleted}/${total} hop${total === 1 ? '' : 's'}`,
-      droppedInMesh: 'dropped in the mesh (loop/TTL) — never reached a tower',
-    }[outcome];
-    return `
-      <div style="display:flex; justify-content:space-between;"><span>Seq</span><span>${lb.seq}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Hops</span><span>${total}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Outcome</span><span style="color:${COMMS_OUTCOME_CSS[outcome]};">${outcomeText}</span></div>
-    `;
   }
 
   function updateInspectorFromSnapshot(snapshot) {
-    if (balloonLayer.selectedId === null || !inspectorBody) return;
-    const b = snapshot.balloons.find((x) => x.id === balloonLayer.selectedId);
-    if (!b) {
-      inspectorBody.innerHTML =
-        `<div style="opacity:0.7;">Not in the active set right now (raise the balloon count to bring it back).</div>`;
-      return;
-    }
-    // Deliberately shows the balloon's belief and the truth as two separate
-    // rows: the balloon acts on the former and has no access to the latter.
-    const key = beliefKey(b);
-    const beliefText =
-      b.believedHops === null || b.believedHops === undefined
-        ? 'no route known'
-        : `${b.believedHops} hop${b.believedHops === 1 ? '' : 's'} to a tower`;
-    const dKey = deliveryKey(b);
-    const channelText = DELIVERY_LEGEND[dKey];
-    const channelColor = DELIVERY_CSS[dKey] ?? MUTED_CSS;
-    inspectorBody.innerHTML = `
-      <div style="display:flex; justify-content:space-between;"><span>Latitude</span><span>${fmtLat(b.lat)}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Longitude</span><span>${fmtLon(b.lon)}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Altitude</span><span>${(b.alt / 1000).toFixed(2)} km</span></div>
-      <div style="display:flex; justify-content:space-between; margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Actually grounded</span><span>${b.grounded ? 'yes' : 'no'}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Verdict</span><span style="color:${BELIEF_CSS[key]};">${BELIEF_VERDICT[key]}</span></div>
-      <div style="display:flex; justify-content:space-between;"><span>Last delivered via</span><span style="color:${channelColor};">${channelText}</span></div>
-      <div style="border-top: 1px solid rgba(255,255,255,0.2); margin-top:8px; padding-top:6px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-          <span style="font-weight:bold;">Last bundle</span>
-          <button id="commsReplayBtn" title="Replay the animation" style="font-size:11px; padding:1px 6px; cursor:pointer;">&#8635; Replay</button>
-        </div>
-        ${commsSummaryHtml()}
-      </div>
-      <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
-        Measurements (gas, ballast, temperature, humidity) and the message log /
-        tamper chain will appear here once those systems are built — see
-        MESH_COMMS_DESIGN.md.
-      </div>
-    `;
+    if (balloonLayer.selectedId === null) return;
+    inspector.update(snapshot.balloons.find((x) => x.id === balloonLayer.selectedId) ?? null);
   }
 
   viewer.scene.morphComplete.addEventListener(() => balloonLayer.refreshRenderMode());
@@ -584,65 +464,6 @@ async function initCesium() {
     </div>
   `;
   document.body.appendChild(panel);
-
-  // --- Balloon inspector panel (top-right, shown on selection) ---------------
-  inspectorPanel = document.createElement('div');
-  inspectorPanel.style.cssText = `
-    position: fixed; top: 10px; right: 10px; z-index: 1000; display: none;
-    background: rgba(20, 20, 20, 0.8); color: #fff;
-    font: 12px sans-serif; padding: 10px 12px; border-radius: 6px;
-    width: 240px; border: 1px solid rgba(63, 208, 255, 0.5);
-  `;
-  inspectorPanel.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-      <span id="inspectorTitle" style="font-weight:bold; color:#3fd0ff;">Balloon</span>
-      <button id="inspectorClose" title="Deselect" style="line-height:1;">&times;</button>
-    </div>
-    <div id="inspectorBody" style="display:flex; flex-direction:column; gap:4px;"></div>
-  `;
-  document.body.appendChild(inspectorPanel);
-  inspectorBody = inspectorPanel.querySelector('#inspectorBody');
-  inspectorTitle = inspectorPanel.querySelector('#inspectorTitle');
-  inspectorPanel.querySelector('#inspectorClose').addEventListener('click', deselectBalloon);
-  // Delegated: inspectorBody's innerHTML is fully rebuilt every snapshot
-  // (~50ms), so a listener bound directly to #commsReplayBtn would need
-  // rebinding just as often.
-  inspectorBody.addEventListener('click', (e) => {
-    if (e.target.id === 'commsReplayBtn' && balloonLayer.selectedId !== null) {
-      fetchAndAnimateComms(balloonLayer.selectedId);
-    }
-  });
-
-  // --- Comms log panel (bottom-right, shown alongside the inspector) --------
-  // New DOM, same precedent as the inspector panel itself (MESH_COMMS_DESIGN.md
-  // §3: "net-new DOM; the Controls panel is the only precedent").
-  commsLogPanel = document.createElement('div');
-  commsLogPanel.style.cssText = `
-    position: fixed; bottom: 10px; right: 10px; z-index: 1000; display: none;
-    background: rgba(20, 20, 20, 0.85); color: #fff;
-    font: 11px sans-serif; padding: 10px 12px; border-radius: 6px;
-    width: 420px; max-height: 220px; overflow-y: auto;
-    border: 1px solid rgba(63, 208, 255, 0.5);
-  `;
-  commsLogPanel.innerHTML = `
-    <div style="font-weight:bold; margin-bottom:6px; color:#3fd0ff;">Comms log</div>
-    <table style="width:100%; border-collapse:collapse;">
-      <thead>
-        <tr style="opacity:0.6; text-align:left;">
-          <th style="font-weight:normal;">Round</th>
-          <th style="font-weight:normal;">Seq</th>
-          <th style="font-weight:normal;">Hops</th>
-          <th style="font-weight:normal;">Channel</th>
-          <th style="font-weight:normal;">Ack</th>
-          <th style="font-weight:normal;" title="Needs C3's hash chain">Hash</th>
-          <th style="font-weight:normal;" title="Needs C3's hash chain">Tamper</th>
-        </tr>
-      </thead>
-      <tbody id="commsLogTableBody"></tbody>
-    </table>
-  `;
-  document.body.appendChild(commsLogPanel);
-  commsLogTableBody = commsLogPanel.querySelector('#commsLogTableBody');
 
   const panelBody = panel.querySelector('#panelBody');
   const panelCollapseToggle = panel.querySelector('#panelCollapseToggle');
