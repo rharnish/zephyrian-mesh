@@ -7,7 +7,6 @@ import { params, WIND_API_URL } from './config.js';
 import { WindField } from './windField.js';
 import { WindVectorField } from './windVectors.js';
 import { Tower } from './tower.js';
-import { balloonIconForAltitude, BALLOON_ICON_WIDTH, BALLOON_ICON_HEIGHT } from './balloonIcon.js';
 import {
   beliefKey,
   deliveryKey,
@@ -31,6 +30,8 @@ import {
   removeTower,
 } from './simClient.js';
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
+import { BalloonLayer, OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from './balloonLayer.js';
+import { toCesiumColors } from './cesiumColor.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -81,8 +82,7 @@ async function initCesium() {
   // --- Towers and balloons: both now server-owned. These maps reconcile
   // Cesium entities against sim-server's snapshots (add/update/remove) --
   // no local physics or link-detection state lives here anymore.
-  const balloonEntities = new Map(); // id -> Cesium.Entity
-  const balloonPositions = new Map(); // id -> Cesium.Cartesian3, mirrors balloonEntities for cheap link-line lookups
+  const balloonLayer = new BalloonLayer();
   const towerById = new Map(); // id -> Tower (rendering wrapper)
 
   // Towers are static once placed, so their Cartesian3 is derived on demand
@@ -201,23 +201,7 @@ async function initCesium() {
     beliefNoneValue.textContent = `${Math.max(0, 100 - ok - stale - unaware).toFixed(0)}%`;
   }
 
-  const BALLOON_COLOR = Cesium.Color.fromCssColorString('#d9dbe0');
-  const SELECTED_BALLOON_COLOR = Cesium.Color.fromCssColorString('#3fd0ff');
-
-  // The overlay palettes live in overlays.js as CSS strings, because the
-  // panels below render them as HTML and the entities here need them as
-  // Cesium colors. Converting once, in one place, is what stops the two
-  // representations drifting apart.
-  const toCesiumColors = (cssTable) =>
-    Object.fromEntries(
-      Object.entries(cssTable).map(([key, css]) => [key, Cesium.Color.fromCssColorString(css)])
-    );
-  const BELIEF_COLORS = toCesiumColors(BELIEF_CSS);
-  const DELIVERY_COLORS = toCesiumColors(DELIVERY_CSS);
   const COMMS_OUTCOME_COLORS = toCesiumColors(COMMS_OUTCOME_CSS);
-
-  let beliefOverlayEnabled = false;
-  let deliveryOverlayEnabled = false;
 
   // Animated packet along the recorded path (MESH_COMMS_DESIGN.md §3/C4).
   // On selection, fetch the balloon's most recently *resolved* bundle from
@@ -308,7 +292,7 @@ async function initCesium() {
     const lb = comms && comms.lastBundle;
     if (!lb || !lb.path) return; // still Pending, or nothing originated yet
 
-    const positions = lb.path.map((id) => balloonPositions.get(id)).filter(Boolean);
+    const positions = lb.path.map((id) => balloonLayer.positionOf(id)).filter(Boolean);
     if (positions.length !== lb.path.length) return; // a hop balloon isn't currently visible
 
     // The recorded path only ever holds balloon ids — delivery to a tower is
@@ -412,7 +396,7 @@ async function initCesium() {
     clearCommsLogPanel();
     selectedComms = null;
     const comms = await fetchBalloonComms(id);
-    if (!comms || id !== selectedBalloonId) return; // selection moved on while fetching
+    if (!comms || id !== balloonLayer.selectedId) return; // selection moved on while fetching
     selectedComms = comms;
     renderCommsAnimation(selectedComms);
     renderCommsLogPanel(selectedComms);
@@ -422,44 +406,17 @@ async function initCesium() {
   // panel (built below) shows its live position/altitude. This is the surface
   // the richer measurements + comms/tamper details attach to later — see
   // MESH_COMMS_DESIGN.md.
-  let selectedBalloonId = null;
   let inspectorPanel, inspectorBody, inspectorTitle; // assigned when the panel is built
 
-  // Single place that decides a balloon's tint: selection wins, then the
-  // belief overlay if enabled, then the default. Called on selection change,
-  // on overlay toggle, and whenever a balloon's belief state changes.
-  function applyBalloonColor(id) {
-    const e = balloonEntities.get(id);
-    if (!e) return;
-    const selected = id === selectedBalloonId;
-    const color = selected
-      ? SELECTED_BALLOON_COLOR
-      : deliveryOverlayEnabled
-        ? DELIVERY_COLORS[e.__deliveryKey] ?? BALLOON_COLOR
-        : beliefOverlayEnabled
-          ? BELIEF_COLORS[e.__beliefKey] ?? BALLOON_COLOR
-          : BALLOON_COLOR;
-    e.point.color = color;
-    e.point.pixelSize = selected ? 11 : 6;
-    e.billboard.color = color;
-  }
-
   function selectBalloon(id) {
-    const previous = selectedBalloonId;
-    // Update the selection *before* recoloring, since applyBalloonColor reads
-    // selectedBalloonId to decide the tint.
-    selectedBalloonId = id;
-    if (previous !== null && previous !== id) applyBalloonColor(previous);
-    applyBalloonColor(id);
+    balloonLayer.setSelected(id);
     if (inspectorPanel) inspectorPanel.style.display = 'block';
     if (inspectorTitle) inspectorTitle.textContent = `Balloon #${id}`;
     fetchAndAnimateComms(id);
   }
 
   function deselectBalloon() {
-    const previous = selectedBalloonId;
-    selectedBalloonId = null;
-    if (previous !== null) applyBalloonColor(previous);
+    balloonLayer.setSelected(null);
     if (inspectorPanel) inspectorPanel.style.display = 'none';
     clearCommsAnimation();
     clearCommsLogPanel();
@@ -500,8 +457,8 @@ async function initCesium() {
   }
 
   function updateInspectorFromSnapshot(snapshot) {
-    if (selectedBalloonId === null || !inspectorBody) return;
-    const b = snapshot.balloons.find((x) => x.id === selectedBalloonId);
+    if (balloonLayer.selectedId === null || !inspectorBody) return;
+    const b = snapshot.balloons.find((x) => x.id === balloonLayer.selectedId);
     if (!b) {
       inspectorBody.innerHTML =
         `<div style="opacity:0.7;">Not in the active set right now (raise the balloon count to bring it back).</div>`;
@@ -540,89 +497,7 @@ async function initCesium() {
     `;
   }
 
-  // Dots are the default; the "Glyphs" checkbox below opts into the
-  // altitude-glyph billboard. The checkbox is authoritative in *every* scene
-  // mode, 2D included — glyph detail does read as noise at flat-map zoom
-  // levels, but that's a judgement for whoever is looking, not something to
-  // enforce by overriding the control.
-  let useGlyphs = false;
-  function useDots() {
-    return !useGlyphs;
-  }
-
-  function reconcileBalloons(serverBalloons) {
-    const show2D = useDots();
-    const seen = new Set();
-    for (const b of serverBalloons) {
-      seen.add(b.id);
-      const position = Cesium.Cartesian3.fromDegrees(b.lon, b.lat, b.alt);
-      balloonPositions.set(b.id, position);
-      const icon = balloonIconForAltitude(b.alt);
-      const entity = balloonEntities.get(b.id);
-      const key = beliefKey(b);
-      const dKey = deliveryKey(b);
-      if (entity) {
-        entity.position = position;
-        entity.billboard.image = icon;
-        // Only touch color when the relevant overlay state actually changed —
-        // this runs for every balloon every snapshot.
-        if (entity.__beliefKey !== key) {
-          entity.__beliefKey = key;
-          if (beliefOverlayEnabled) applyBalloonColor(b.id);
-        }
-        if (entity.__deliveryKey !== dKey) {
-          entity.__deliveryKey = dKey;
-          if (deliveryOverlayEnabled) applyBalloonColor(b.id);
-        }
-      } else {
-        const newEntity = viewer.entities.add({
-          position,
-          point: {
-            pixelSize: 6,
-            color: BALLOON_COLOR,
-            show: show2D,
-          },
-          billboard: {
-            image: icon,
-            width: BALLOON_ICON_WIDTH,
-            height: BALLOON_ICON_HEIGHT,
-            color: BALLOON_COLOR,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            show: !show2D,
-          },
-        });
-        newEntity.__balloonId = b.id; // lets click-picking map back to a balloon id
-        newEntity.__beliefKey = key;
-        newEntity.__deliveryKey = dKey;
-        balloonEntities.set(b.id, newEntity);
-        if (b.id === selectedBalloonId || beliefOverlayEnabled || deliveryOverlayEnabled) applyBalloonColor(b.id);
-      }
-    }
-    for (const [id, entity] of balloonEntities) {
-      if (!seen.has(id)) {
-        viewer.entities.remove(entity);
-        balloonEntities.delete(id);
-        balloonPositions.delete(id);
-      }
-    }
-  }
-
-  // Flip every existing balloon between dot and glyph rendering when the
-  // "Glyphs" checkbox changes (see the call site further below).
-  //
-  // Also re-asserted on morphComplete. Strictly that's redundant now that
-  // rendering no longer depends on scene mode — entity graphics keep their
-  // `show` values across a morph — but it's one call per morph and there is
-  // an open, unreproduced report of entity/primitive state desyncing across
-  // exactly this event, so it stays as belt-and-braces.
-  function updateBalloonRenderModeForAll() {
-    const show2D = useDots();
-    for (const entity of balloonEntities.values()) {
-      entity.point.show = show2D;
-      entity.billboard.show = !show2D;
-    }
-  }
-  viewer.scene.morphComplete.addEventListener(updateBalloonRenderModeForAll);
+  viewer.scene.morphComplete.addEventListener(() => balloonLayer.refreshRenderMode());
 
   function reconcileTowers(serverTowers) {
     const seen = new Set();
@@ -652,7 +527,7 @@ async function initCesium() {
   // derived from the model on demand rather than cached.
   function resolveNodePosition(key) {
     const { kind, id } = parseNodeKey(key);
-    if (kind === 'b') return balloonPositions.get(id);
+    if (kind === 'b') return balloonLayer.positionOf(id);
     const tower = towerById.get(id);
     return tower ? towerPosition(tower) : undefined;
   }
@@ -661,7 +536,7 @@ async function initCesium() {
   // One authoritative snapshot stream; this client only renders it. Every
   // subsystem that reacts to a snapshot is fanned out from here.
   connectSimServer((snapshot) => {
-    reconcileBalloons(snapshot.balloons);
+    balloonLayer.reconcile(viewer, snapshot.balloons);
     reconcileTowers(snapshot.towers);
     if (snapshot.edges) {
       linkLayer.sync(viewer, snapshot.edges);
@@ -870,8 +745,8 @@ async function initCesium() {
   // (~50ms), so a listener bound directly to #commsReplayBtn would need
   // rebinding just as often.
   inspectorBody.addEventListener('click', (e) => {
-    if (e.target.id === 'commsReplayBtn' && selectedBalloonId !== null) {
-      fetchAndAnimateComms(selectedBalloonId);
+    if (e.target.id === 'commsReplayBtn' && balloonLayer.selectedId !== null) {
+      fetchAndAnimateComms(balloonLayer.selectedId);
     }
   });
 
@@ -931,8 +806,7 @@ async function initCesium() {
 
   const glyphsToggle = panel.querySelector('#glyphsToggle');
   glyphsToggle.addEventListener('change', () => {
-    useGlyphs = glyphsToggle.checked;
-    updateBalloonRenderModeForAll();
+    balloonLayer.setUseGlyphs(glyphsToggle.checked);
   });
 
   // Wind-vectors controls stay disabled until the (slow, backgrounded) wind
@@ -1015,28 +889,23 @@ async function initCesium() {
   const beliefOverlayToggle = panel.querySelector('#beliefOverlayToggle');
   const deliveryLegend = panel.querySelector('#deliveryLegend');
   const deliveryOverlayToggle = panel.querySelector('#deliveryOverlayToggle');
-  // Mutually exclusive with the belief overlay — both recolor every balloon,
-  // and showing two overlays at once would just make each one illegible.
-  beliefOverlayToggle.addEventListener('change', () => {
-    beliefOverlayEnabled = beliefOverlayToggle.checked;
-    beliefLegend.style.display = beliefOverlayEnabled ? 'block' : 'none';
-    if (beliefOverlayEnabled && deliveryOverlayToggle.checked) {
-      deliveryOverlayToggle.checked = false;
-      deliveryOverlayEnabled = false;
-      deliveryLegend.style.display = 'none';
-    }
-    for (const id of balloonEntities.keys()) applyBalloonColor(id);
-  });
-  deliveryOverlayToggle.addEventListener('change', () => {
-    deliveryOverlayEnabled = deliveryOverlayToggle.checked;
-    deliveryLegend.style.display = deliveryOverlayEnabled ? 'block' : 'none';
-    if (deliveryOverlayEnabled && beliefOverlayToggle.checked) {
-      beliefOverlayToggle.checked = false;
-      beliefOverlayEnabled = false;
-      beliefLegend.style.display = 'none';
-    }
-    for (const id of balloonEntities.keys()) applyBalloonColor(id);
-  });
+  // The two overlays are mutually exclusive — both recolor every balloon, and
+  // showing two at once would just make each one illegible. Driving a single
+  // mode off whichever box was ticked enforces that by construction, rather
+  // than each handler remembering to un-tick the other.
+  function applyOverlaySelection(mode) {
+    balloonLayer.setOverlay(mode);
+    beliefOverlayToggle.checked = mode === OVERLAY_BELIEF;
+    deliveryOverlayToggle.checked = mode === OVERLAY_DELIVERY;
+    beliefLegend.style.display = mode === OVERLAY_BELIEF ? 'block' : 'none';
+    deliveryLegend.style.display = mode === OVERLAY_DELIVERY ? 'block' : 'none';
+  }
+  beliefOverlayToggle.addEventListener('change', () =>
+    applyOverlaySelection(beliefOverlayToggle.checked ? OVERLAY_BELIEF : OVERLAY_NONE)
+  );
+  deliveryOverlayToggle.addEventListener('change', () =>
+    applyOverlaySelection(deliveryOverlayToggle.checked ? OVERLAY_DELIVERY : OVERLAY_NONE)
+  );
 
   numBalloonsSlider = panel.querySelector('#numBalloonsSlider');
   numBalloonsValueLabel = panel.querySelector('#numBalloonsValue');
