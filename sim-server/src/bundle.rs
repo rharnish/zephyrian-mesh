@@ -94,6 +94,10 @@ pub struct Ack {
     /// as the ack advances; the pop that empties this is the one that lands it
     /// on the origin.
     pub remaining: std::collections::VecDeque<u32>,
+    /// `remaining`'s length at creation — fixed, so `total_hops - remaining.len()`
+    /// at any later point is how many hops the ack has completed. That's what
+    /// lets a *lost* ack report how far it got instead of just that it died.
+    pub total_hops: u32,
 }
 
 impl Ack {
@@ -107,18 +111,90 @@ impl Ack {
 /// "arrived but the ack died", and "arrived via satellite" alike: none of
 /// those are distinguishable from inside, which is the point of the design,
 /// not a gap in it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AckState {
     Pending,
     Acked,
     TimedOut,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// How a bundle actually got to a tower — server truth, not the balloon's own
+/// (poorer) view. Drives the per-balloon last-delivery glyph (§3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Channel {
+    Radio,
+    Satellite,
+}
+
+#[derive(Debug, Clone)]
 pub struct OutstandingBundle {
     pub seq: u64,
     pub created_at_round: u64,
     pub state: AckState,
+    /// The bundle's full recorded path once it itself resolved (delivered to
+    /// a tower, or handed to satellite) — `None` while still Pending. This is
+    /// server truth kept for the C4 animated-packet view, not something the
+    /// balloon could derive on its own.
+    pub path: Option<Vec<u32>>,
+    /// How the bundle got through, set at the same moment as `path`.
+    pub channel: Option<Channel>,
+    /// The tower that actually took delivery, set at the same moment as
+    /// `path`/`channel`. `None` for satellite delivery and dead ends — the
+    /// bundle never reached a tower in either case.
+    pub tower_id: Option<u32>,
+    /// How many hops of the reverse ack path completed before it was lost —
+    /// only meaningful once `state == TimedOut` and the bundle *did* reach a
+    /// tower (an ack existed to lose). `None` if the bundle itself never
+    /// arrived (no ack was ever spawned) or the ack made it all the way.
+    pub ack_hops_completed: Option<u32>,
+}
+
+/// A settled copy of `OutstandingBundle`, taken the moment its state stops
+/// being `Pending`. See `Balloon::last_resolved` for why this needs to exist
+/// separately from `outstanding` itself.
+#[derive(Debug, Clone)]
+pub struct ResolvedBundle {
+    pub seq: u64,
+    pub state: AckState,
+    pub channel: Option<Channel>,
+    pub tower_id: Option<u32>,
+    pub path: Vec<u32>,
+    pub ack_hops_completed: Option<u32>,
+}
+
+/// Called right after `b.outstanding`'s state flips off `Pending`, to freeze
+/// a copy in `b.last_resolved` before the *next* origination overwrites
+/// `outstanding` with a fresh `Pending` one. A no-op if `outstanding` is
+/// absent or still `Pending` (nothing settled yet).
+fn snapshot_resolved(b: &mut Balloon) {
+    let Some(o) = &b.outstanding else { return };
+    if o.state == AckState::Pending {
+        return;
+    }
+    let (seq, state, channel, tower_id, path, ack_hops_completed) = (
+        o.seq,
+        o.state,
+        o.channel,
+        o.tower_id,
+        o.path.clone().unwrap_or_default(),
+        o.ack_hops_completed,
+    );
+
+    // Also stamp the matching retained telemetry record, so the C4 comms-log
+    // panel (§3) can show a full history of outcomes, not just the latest —
+    // `last_resolved` below only ever holds one.
+    if let Some(record) = b.log.iter_mut().find(|r| r.seq == seq) {
+        record.channel = channel;
+        record.tower_id = tower_id;
+        record.ack_state = state;
+        record.hops = if path.is_empty() { None } else { Some(path.len() as u32 - 1) };
+        record.ack_hops_completed = ack_hops_completed;
+    }
+
+    b.last_resolved =
+        Some(ResolvedBundle { seq, state, channel, tower_id, path, ack_hops_completed });
 }
 
 /// Cumulative outcomes. Every bundle that leaves circulation lands in exactly
@@ -266,6 +342,19 @@ pub fn hist_mean(h: &[u64; 32]) -> f64 {
     h.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum::<f64>() / n as f64
 }
 
+/// Records how far a bundle got before it was destroyed in the mesh (loop or
+/// TTL — never reached a tower, so it's not a satellite handoff either). The
+/// origin's own view still only learns `TimedOut` once it ages out (see 1b);
+/// this is the server-truth path the C4 animated-packet view reads, same
+/// idiom as the satellite/delivered cases above.
+fn record_dead_end(balloons: &mut [Balloon], origin_id: u32, seq: u64, path: Vec<u32>) {
+    if let Some(o) = balloons.get_mut(origin_id as usize).and_then(|b| b.outstanding.as_mut()) {
+        if o.seq == seq {
+            o.path = Some(path);
+        }
+    }
+}
+
 /// Advance bundles by one comms round.
 ///
 /// `awake` is the set of balloon indices that transmitted this round, taken
@@ -280,24 +369,51 @@ pub fn step(
 ) {
     // 1. Expire bundles. One that's aged past its budget wherever it currently
     //    sits is handed to satellite rather than dropped.
+    let mut satellite_origins: Vec<(u32, u64, Vec<u32>)> = Vec::new(); // (origin_id, seq, path)
     for b in balloons.iter_mut() {
         let before = b.queue.len();
         for bd in b.queue.iter() {
             if bd.age(round) > BUNDLE_MAX_AGE_ROUNDS {
                 bump(&mut stats.satellite_hops, bd.hops());
+                satellite_origins.push((bd.origin_id, bd.seq, bd.path.clone()));
             }
         }
         b.queue.retain(|bd| bd.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
         stats.satellite += (before - b.queue.len()) as u64;
     }
+    for (origin_id, seq, path) in satellite_origins {
+        if let Some(o) = balloons.get_mut(origin_id as usize) {
+            o.last_channel = Some(Channel::Satellite);
+            if let Some(out) = o.outstanding.as_mut() {
+                if out.seq == seq {
+                    out.path = Some(path);
+                    out.channel = Some(Channel::Satellite);
+                }
+            }
+        }
+    }
 
     // 1a. Expire acks. Keyed on the *bundle's* created_at_round (carried
     //     verbatim on the ack), so a round trip shares the bundle's own age
     //     budget rather than getting a separate clock.
+    let mut ack_died: Vec<(u32, u64, u32)> = Vec::new(); // (origin_id, seq, hops_completed)
     for b in balloons.iter_mut() {
         let before = b.ack_queue.len();
+        for a in b.ack_queue.iter() {
+            if a.age(round) > BUNDLE_MAX_AGE_ROUNDS {
+                ack_died.push((a.origin_id, a.seq, a.total_hops - a.remaining.len() as u32));
+            }
+        }
         b.ack_queue.retain(|a| a.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
         stats.ack_lost += (before - b.ack_queue.len()) as u64;
+    }
+    for (origin_id, seq, hops) in ack_died {
+        if let Some(o) = balloons.get_mut(origin_id as usize).and_then(|b| b.outstanding.as_mut())
+        {
+            if o.seq == seq {
+                o.ack_hops_completed = Some(hops);
+            }
+        }
     }
 
     // 1b. A balloon still waiting past the timeout gives up on hearing back.
@@ -309,6 +425,7 @@ pub fn step(
             if o.state == AckState::Pending && round.saturating_sub(o.created_at_round) > BUNDLE_MAX_AGE_ROUNDS
             {
                 o.state = AckState::TimedOut;
+                snapshot_resolved(b);
             }
         }
     }
@@ -359,16 +476,26 @@ pub fn step(
             balloons[to_idx].ack_queue.push_back(ack);
         } else {
             stats.ack_lost += 1;
+            let hops = ack.total_hops - ack.remaining.len() as u32;
+            if let Some(o) =
+                balloons.get_mut(ack.origin_id as usize).and_then(|b| b.outstanding.as_mut())
+            {
+                if o.seq == ack.seq {
+                    o.ack_hops_completed = Some(hops);
+                }
+            }
         }
     }
 
     for (origin_id, seq) in ack_resolved {
         stats.acked += 1;
-        if let Some(o) = balloons.get_mut(origin_id as usize).and_then(|b| b.outstanding.as_mut())
-        {
-            if o.seq == seq && o.state == AckState::Pending {
-                o.state = AckState::Acked;
+        if let Some(b) = balloons.get_mut(origin_id as usize) {
+            if let Some(o) = b.outstanding.as_mut() {
+                if o.seq == seq && o.state == AckState::Pending {
+                    o.state = AckState::Acked;
+                }
             }
+            snapshot_resolved(b);
         }
     }
 
@@ -400,7 +527,7 @@ pub fn step(
             // still live — belief can be stale, the radio cannot lie.
             None => {
                 stats.slots_with_bundle += 1;
-                if adj.tower_in_range(i).is_some() {
+                if let Some(tower_id) = adj.tower_in_range(i) {
                     // A tower contact drains up to TOWER_CONTACT_BUNDLES, not
                     // one. The one-per-slot rule rations *beacon* airtime; a
                     // point-to-point link to a ground station is a different
@@ -411,6 +538,16 @@ pub fn step(
                         let bd = balloons[i].queue.pop_front().expect("checked non-empty");
                         bump(&mut stats.delivered_hops, bd.hops());
                         stats.delivered += 1;
+                        if let Some(o) = balloons.get_mut(bd.origin_id as usize) {
+                            o.last_channel = Some(Channel::Radio);
+                            if let Some(out) = o.outstanding.as_mut() {
+                                if out.seq == bd.seq {
+                                    out.path = Some(bd.path.clone());
+                                    out.channel = Some(Channel::Radio);
+                                    out.tower_id = Some(tower_id);
+                                }
+                            }
+                        }
 
                         // Spawn the ack, source-routed back along the reversed
                         // path. A zero-hop bundle (the origin delivered
@@ -426,17 +563,28 @@ pub fn step(
                                     o.state = AckState::Acked;
                                 }
                             }
+                            snapshot_resolved(&mut balloons[i]);
                         } else {
+                            let total_hops = reversed.len() as u32;
                             let ack = Ack {
                                 origin_id: bd.origin_id,
                                 seq: bd.seq,
                                 created_at_round: bd.created_at_round,
                                 remaining: reversed,
+                                total_hops,
                             };
                             if balloons[i].ack_queue.len() < ACK_QUEUE_CAPACITY {
                                 balloons[i].ack_queue.push_back(ack);
                             } else {
                                 stats.ack_lost += 1;
+                                if let Some(o) = balloons
+                                    .get_mut(bd.origin_id as usize)
+                                    .and_then(|b| b.outstanding.as_mut())
+                                {
+                                    if o.seq == bd.seq {
+                                        o.ack_hops_completed = Some(0);
+                                    }
+                                }
                             }
                         }
                     }
@@ -459,13 +607,17 @@ pub fn step(
                     continue; // stale next hop — hold, don't drop
                 }
                 if bundle.path.contains(&next) {
+                    let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
                     balloons[i].queue.pop_front();
                     stats.dropped_loop += 1;
+                    record_dead_end(balloons, origin_id, seq, path);
                     continue;
                 }
                 if bundle.path.len() >= BUNDLE_MAX_HOPS {
+                    let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
                     balloons[i].queue.pop_front();
                     stats.dropped_ttl += 1;
+                    record_dead_end(balloons, origin_id, seq, path);
                     continue;
                 }
                 moves.push((i, next));
@@ -521,6 +673,10 @@ pub fn step(
             seq: b.bundle_seq,
             created_at_round: round,
             state: AckState::Pending,
+            path: None,
+            channel: None,
+            tower_id: None,
+            ack_hops_completed: None,
         });
         b.bundle_seq += 1;
         b.next_bundle_round = round + BUNDLE_INTERVAL_ROUNDS;
@@ -595,6 +751,17 @@ mod tests {
         }
         assert_eq!(stats.delivered, 1, "stats: {stats:?}");
         assert_eq!(stats.dropped_loop + stats.dropped_ttl + stats.satellite, 0);
+
+        // The origin's own retained record now carries the recorded path and
+        // the channel it went out on — the data the C4 animated-packet view
+        // reads (MESH_COMMS_DESIGN.md §3).
+        let outstanding = balloons[3].outstanding.as_ref().unwrap();
+        assert_eq!(outstanding.channel, Some(Channel::Radio));
+        assert_eq!(outstanding.path.as_deref(), Some(&[3, 2, 1, 0][..]));
+        // `line()` wires exactly one tower at id 0 — the path stops one hop
+        // short of it, so the animated-packet view needs this recorded
+        // separately to draw the final leg.
+        assert_eq!(outstanding.tower_id, Some(0));
     }
 
     #[test]
@@ -810,7 +977,19 @@ mod tests {
         assert_eq!(stats.resolved(), stats.satellite, "satellite counts as resolved");
         // Silent to the origin: it never hears back, so its own view times out
         // even though the bundle did get out via satellite.
-        assert_eq!(balloons[0].outstanding.unwrap().state, AckState::TimedOut);
+        let outstanding = balloons[0].outstanding.as_ref().unwrap();
+        assert_eq!(outstanding.state, AckState::TimedOut);
+        // But server truth (what the C4 view reads) does know it was satellite.
+        assert_eq!(outstanding.channel, Some(Channel::Satellite));
+        assert_eq!(outstanding.tower_id, None, "satellite delivery never touches a tower");
+        assert_eq!(outstanding.path.as_deref(), Some(&[0][..]));
+        // And it's been frozen into `last_resolved`, which is what the query
+        // endpoint actually serves — `outstanding` alone would reset to
+        // Pending the moment this balloon originates its next bundle.
+        let resolved = balloons[0].last_resolved.as_ref().unwrap();
+        assert_eq!(resolved.channel, Some(Channel::Satellite));
+        assert_eq!(resolved.tower_id, None);
+        assert_eq!(resolved.path, vec![0]);
     }
 
     /// Originating measures the atmosphere once and keeps both copies in step:
@@ -875,15 +1054,22 @@ mod tests {
         // to walk all the way back to b3 (origin).
         for round in 0..40 {
             step(&mut balloons, &adj, &awake, round, &mut stats);
-            if balloons[3].outstanding.is_some_and(|o| o.state == AckState::Acked) {
+            if balloons[3].outstanding.as_ref().is_some_and(|o| o.state == AckState::Acked) {
                 break;
             }
         }
         assert_eq!(stats.delivered, 1, "stats: {stats:?}");
         assert_eq!(stats.acked, 1, "stats: {stats:?}");
         assert_eq!(stats.ack_lost, 0, "stats: {stats:?}");
-        assert_eq!(balloons[3].outstanding.unwrap().state, AckState::Acked);
+        assert_eq!(balloons[3].outstanding.as_ref().unwrap().state, AckState::Acked);
         assert!(balloons.iter().all(|b| b.ack_queue.is_empty()), "ack should have fully drained");
+        // The matching retained telemetry record is stamped too — the C4
+        // comms-log panel reads this per-row, not just `last_resolved`.
+        let record = balloons[3].log.iter().find(|r| r.seq == 0).unwrap();
+        assert_eq!(record.ack_state, AckState::Acked);
+        assert_eq!(record.channel, Some(Channel::Radio));
+        assert_eq!(record.tower_id, Some(0));
+        assert_eq!(record.hops, Some(3));
     }
 
     /// A bundle can arrive even though its ack never makes it back — the
@@ -923,7 +1109,16 @@ mod tests {
         }
         assert_eq!(stats.acked, 0, "stats: {stats:?}");
         assert_eq!(stats.ack_lost, 1, "stats: {stats:?}");
-        assert_eq!(balloons[3].outstanding.unwrap().state, AckState::TimedOut);
+        let outstanding = balloons[3].outstanding.as_ref().unwrap();
+        assert_eq!(outstanding.state, AckState::TimedOut);
+        // The ack died on its very first hop (b0 could never reach b1) — the
+        // C4 view should be able to show it dying right at the tower end,
+        // not partway or at the origin.
+        assert_eq!(outstanding.ack_hops_completed, Some(0));
+        let resolved = balloons[3].last_resolved.as_ref().unwrap();
+        assert_eq!(resolved.ack_hops_completed, Some(0));
+        assert_eq!(resolved.channel, Some(Channel::Radio));
+        assert_eq!(resolved.tower_id, Some(0));
     }
 
     /// A bundle originated and delivered with zero hops resolves on the spot —
@@ -945,7 +1140,7 @@ mod tests {
 
         assert_eq!(stats.delivered, 1, "stats: {stats:?}");
         assert_eq!(stats.acked, 1, "stats: {stats:?}");
-        assert_eq!(balloons[0].outstanding.unwrap().state, AckState::Acked);
+        assert_eq!(balloons[0].outstanding.as_ref().unwrap().state, AckState::Acked);
         assert!(balloons[0].ack_queue.is_empty(), "no packet should have been created");
     }
 
@@ -967,6 +1162,7 @@ mod tests {
                 seq: k as u64,
                 created_at_round: 0,
                 remaining: std::collections::VecDeque::from(vec![1]),
+                total_hops: 1,
             });
         }
         // One more ack arrives at b0's neighbour b1's expense: b1 forwards an
@@ -976,6 +1172,7 @@ mod tests {
             seq: 99,
             created_at_round: 0,
             remaining: std::collections::VecDeque::from(vec![0, 1]),
+            total_hops: 2,
         });
 
         let mut stats = BundleStats::default();

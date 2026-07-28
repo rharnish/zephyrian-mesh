@@ -267,6 +267,241 @@ async function initCesium() {
     return b.grounded ? 'unaware' : 'none';
   }
 
+  // Last-delivery overlay (MESH_COMMS_DESIGN.md §3). `lastChannel` is server
+  // truth about how a balloon's most recently *resolved* bundle actually got
+  // through — deliberately not something the balloon itself could report,
+  // since satellite delivery is silent to the origin (see bundle.rs).
+  const DELIVERY_COLORS = {
+    radio: Cesium.Color.fromCssColorString('#8de05f'),     // lime — delivered over the mesh
+    satellite: Cesium.Color.fromCssColorString('#3fa7ff'), // blue — release-valve delivery
+    none: Cesium.Color.fromCssColorString('#8a8f98'),      // gray — nothing resolved yet
+  };
+  let deliveryOverlayEnabled = false;
+
+  function deliveryKey(b) {
+    return b.lastChannel ?? 'none';
+  }
+
+  // Animated packet along the recorded path (MESH_COMMS_DESIGN.md §3/C4).
+  // On selection, fetch the balloon's most recently *resolved* bundle from
+  // the sim-server (GET /api/balloons/:id/comms — the first query endpoint;
+  // everything else is fire-and-forget) and replay it: a dot travels the
+  // bundle's actual recorded path (not a recomputed shortest path), then the
+  // ack's fate plays out — all the way back if acked, partway if it died en
+  // route, or not at all if the bundle went out via satellite or never
+  // reached a tower. This is a replay of the last resolved bundle, not a
+  // live view of one currently in flight — a bundle can take many rounds per
+  // hop, so watching one "live" would mostly look idle.
+  const COMMS_PATH_COLOR = Cesium.Color.fromCssColorString('#ffd166');
+  const COMMS_OUTCOME_COLORS = {
+    acked: Cesium.Color.fromCssColorString('#5fd08a'),        // matches belief "ok"
+    ackDied: Cesium.Color.fromCssColorString('#e05561'),      // matches belief "stale"
+    satellite: Cesium.Color.fromCssColorString('#3fa7ff'),    // matches the delivery overlay
+    droppedInMesh: Cesium.Color.fromCssColorString('#8a8f98'),
+  };
+  const COMMS_HOP_DURATION_MS = 550;
+
+  const commsPathCollection = new Cesium.PolylineCollection();
+  viewer.scene.primitives.add(commsPathCollection);
+  let commsPathPrimitive = null;
+  let commsPacketEntity = null;
+  let commsAnimationFrame = null;
+  // Bumped on every clear so an in-flight animation's frame callback can tell
+  // it's been superseded (new selection, or the same one re-fetched) and stop
+  // touching an entity that may already be gone.
+  let commsAnimationToken = 0;
+  let selectedComms = null; // last-fetched GET /api/balloons/:id/comms response
+
+  function clearCommsAnimation() {
+    commsAnimationToken++;
+    if (commsAnimationFrame !== null) {
+      cancelAnimationFrame(commsAnimationFrame);
+      commsAnimationFrame = null;
+    }
+    if (commsPathPrimitive) {
+      commsPathCollection.remove(commsPathPrimitive);
+      commsPathPrimitive = null;
+    }
+    if (commsPacketEntity) {
+      viewer.entities.remove(commsPacketEntity);
+      commsPacketEntity = null;
+    }
+  }
+
+  // Animates a dot across a sequence of positions, one hop per
+  // COMMS_HOP_DURATION_MS, then calls `onDone`. Reuses `commsPacketEntity`
+  // across legs (outbound, then the ack's reverse leg) so the dot doesn't
+  // jump between them.
+  function animateCommsPacket(positions, color, onDone) {
+    const token = commsAnimationToken;
+    if (!commsPacketEntity) {
+      commsPacketEntity = viewer.entities.add({
+        position: positions[0],
+        point: { pixelSize: 10, color, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      });
+    } else {
+      commsPacketEntity.point.color = color;
+      commsPacketEntity.position = positions[0];
+    }
+    if (positions.length < 2) {
+      onDone();
+      return;
+    }
+    let hop = 0;
+    const totalHops = positions.length - 1;
+    let hopStart = performance.now();
+    function frame(now) {
+      if (token !== commsAnimationToken) return; // superseded — stop touching this entity
+      const t = Math.min(1, (now - hopStart) / COMMS_HOP_DURATION_MS);
+      commsPacketEntity.position = Cesium.Cartesian3.lerp(
+        positions[hop], positions[hop + 1], t, new Cesium.Cartesian3()
+      );
+      if (t >= 1) {
+        hop++;
+        if (hop >= totalHops) {
+          onDone();
+          return;
+        }
+        hopStart = now;
+      }
+      commsAnimationFrame = requestAnimationFrame(frame);
+    }
+    commsAnimationFrame = requestAnimationFrame(frame);
+  }
+
+  // Renders (and animates) the selected balloon's last resolved bundle.
+  // Positions are snapshotted once at render time — a deliberate replay of a
+  // *past* path using each balloon's *current* position, same "possibly
+  // stale" idiom the rest of this design leans on rather than a hard error.
+  function renderCommsAnimation(comms) {
+    const lb = comms && comms.lastBundle;
+    if (!lb || !lb.path) return; // still Pending, or nothing originated yet
+
+    const positions = lb.path.map((id) => balloonPositions.get(id)).filter(Boolean);
+    if (positions.length !== lb.path.length) return; // a hop balloon isn't currently visible
+
+    // The recorded path only ever holds balloon ids — delivery to a tower is
+    // modeled as instantaneous from the last tower-adjacent balloon, so the
+    // tower itself is never a hop. Append its position so the drawn/animated
+    // path actually reaches the tower instead of stopping one hop short.
+    let towerIncluded = false;
+    if (lb.towerId !== null && lb.towerId !== undefined) {
+      const tower = towerById.get(lb.towerId);
+      if (tower) {
+        positions.push(Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM));
+        towerIncluded = true;
+      }
+    }
+    // Ack hops are counted purely over balloon-to-balloon hops (see
+    // `Ack.total_hops` in bundle.rs) — the tower hand-off above was never a
+    // modeled ack hop. The reverse path always starts at the tower though
+    // (that's where the ack is created), so the partial-reverse slice always
+    // shows that leg plus however many balloon hops the ack actually made.
+    const balloonHops = lb.path.length - 1;
+    const towerLeg = towerIncluded ? 1 : 0;
+
+    commsPathPrimitive = commsPathCollection.add({
+      positions,
+      width: 3,
+      material: Cesium.Material.fromType('PolylineDash', { color: COMMS_PATH_COLOR, dashLength: 12 }),
+    });
+
+    animateCommsPacket(positions, COMMS_PATH_COLOR, () => {
+      if (lb.channel === 'satellite') {
+        commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.satellite;
+        return;
+      }
+      if (lb.state === 'acked') {
+        animateCommsPacket([...positions].reverse(), COMMS_OUTCOME_COLORS.acked, () => {
+          commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.acked;
+        });
+        return;
+      }
+      if (lb.channel === 'radio' && lb.ackHopsCompleted !== null && lb.ackHopsCompleted !== undefined) {
+        // The ack died partway back — animate only as far as it actually got.
+        const hopsToShow = Math.max(0, Math.min(balloonHops, lb.ackHopsCompleted));
+        const reversed = [...positions].reverse().slice(0, hopsToShow + towerLeg + 1);
+        animateCommsPacket(reversed, COMMS_OUTCOME_COLORS.ackDied, () => {
+          commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.ackDied;
+        });
+        return;
+      }
+      // Never reached a tower at all — dropped in the mesh (loop/TTL), no
+      // ack was ever spawned.
+      commsPacketEntity.point.color = COMMS_OUTCOME_COLORS.droppedInMesh;
+    });
+  }
+
+  // Comms log panel (MESH_COMMS_DESIGN.md §3): a row per retained telemetry
+  // record for the selected balloon, newest first — `seq · round · hops ·
+  // channel · ack state`, plus hash-prefix/tamper columns kept as explicit
+  // placeholders (C3's hash chain hasn't landed yet, so there's nothing
+  // honest to show there beyond "—").
+  let commsLogPanel, commsLogTableBody; // assigned when the panel is built
+
+  function commsAckLabel(ackState, ackHopsCompleted, hops) {
+    if (ackState === 'acked') return { text: 'acked', color: COMMS_OUTCOME_COLORS.acked };
+    if (ackState === 'pending') return { text: 'pending', color: Cesium.Color.fromCssColorString('#8a8f98') };
+    // timedOut
+    if (ackHopsCompleted !== null && ackHopsCompleted !== undefined) {
+      return {
+        text: `died @ ${ackHopsCompleted}/${hops}`,
+        color: COMMS_OUTCOME_COLORS.ackDied,
+      };
+    }
+    return { text: 'timed out', color: Cesium.Color.fromCssColorString('#8a8f98') };
+  }
+
+  function commsLogRowHtml(record) {
+    const channelText = { radio: 'radio', satellite: 'satellite' }[record.channel] ?? '—';
+    const channelColor =
+      record.channel === 'radio' ? COMMS_OUTCOME_COLORS.acked.toCssColorString()
+      : record.channel === 'satellite' ? COMMS_OUTCOME_COLORS.satellite.toCssColorString()
+      : '#8a8f98';
+    const ack = commsAckLabel(record.ackState, record.ackHopsCompleted, record.hops);
+    return `
+      <tr>
+        <td>${record.createdAtRound}</td>
+        <td>${record.seq}</td>
+        <td>${record.hops ?? '—'}</td>
+        <td style="color:${channelColor};">${channelText}</td>
+        <td style="color:${ack.color.toCssColorString()};">${ack.text}</td>
+        <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
+        <td style="opacity:0.5;" title="Needs C3's hash chain">&mdash;</td>
+      </tr>
+    `;
+  }
+
+  function renderCommsLogPanel(comms) {
+    if (!commsLogPanel || !commsLogTableBody) return;
+    const log = comms && comms.log;
+    if (!log || log.length === 0) {
+      commsLogPanel.style.display = 'none';
+      return;
+    }
+    commsLogPanel.style.display = 'block';
+    commsLogTableBody.innerHTML = log.map(commsLogRowHtml).join('');
+  }
+
+  function clearCommsLogPanel() {
+    if (commsLogPanel) commsLogPanel.style.display = 'none';
+  }
+
+  async function fetchAndAnimateComms(id) {
+    clearCommsAnimation();
+    clearCommsLogPanel();
+    selectedComms = null;
+    try {
+      const res = await fetch(`${SIM_SERVER_URL}/api/balloons/${id}/comms`);
+      if (!res.ok || id !== selectedBalloonId) return; // selection moved on while fetching
+      selectedComms = await res.json();
+      renderCommsAnimation(selectedComms);
+      renderCommsLogPanel(selectedComms);
+    } catch (e) {
+      console.error('Failed to fetch balloon comms:', e);
+    }
+  }
+
   // Balloon selection/inspection. Clicking a balloon selects it; the inspector
   // panel (built below) shows its live position/altitude. This is the surface
   // the richer measurements + comms/tamper details attach to later — see
@@ -283,9 +518,11 @@ async function initCesium() {
     const selected = id === selectedBalloonId;
     const color = selected
       ? SELECTED_BALLOON_COLOR
-      : beliefOverlayEnabled
-        ? BELIEF_COLORS[e.__beliefKey] ?? BALLOON_COLOR
-        : BALLOON_COLOR;
+      : deliveryOverlayEnabled
+        ? DELIVERY_COLORS[e.__deliveryKey] ?? BALLOON_COLOR
+        : beliefOverlayEnabled
+          ? BELIEF_COLORS[e.__beliefKey] ?? BALLOON_COLOR
+          : BALLOON_COLOR;
     e.point.color = color;
     e.point.pixelSize = selected ? 11 : 6;
     e.billboard.color = color;
@@ -300,6 +537,7 @@ async function initCesium() {
     applyBalloonColor(id);
     if (inspectorPanel) inspectorPanel.style.display = 'block';
     if (inspectorTitle) inspectorTitle.textContent = `Balloon #${id}`;
+    fetchAndAnimateComms(id);
   }
 
   function deselectBalloon() {
@@ -307,11 +545,45 @@ async function initCesium() {
     selectedBalloonId = null;
     if (previous !== null) applyBalloonColor(previous);
     if (inspectorPanel) inspectorPanel.style.display = 'none';
+    clearCommsAnimation();
+    clearCommsLogPanel();
+    selectedComms = null;
   }
 
   // "82.32 W", "29.65 N" — same convention as the tower labels (towerModel.js).
   const fmtLon = (lon) => `${Math.abs(lon).toFixed(3)}° ${lon < 0 ? 'W' : 'E'}`;
   const fmtLat = (lat) => `${Math.abs(lat).toFixed(3)}° ${lat < 0 ? 'S' : 'N'}`;
+
+  // Text summary of the last-bundle animation, matching its colors. Reads
+  // from `selectedComms` (fetched once on selection), not the per-snapshot
+  // balloon — so this stays stable across the ~50ms snapshot cadence that
+  // rebuilds the rest of the inspector.
+  function commsSummaryHtml() {
+    if (selectedComms === undefined || selectedComms === null) {
+      return `<div style="opacity:0.6;">Loading&hellip;</div>`;
+    }
+    const lb = selectedComms.lastBundle;
+    if (!lb) return `<div style="opacity:0.6;">No bundle originated yet.</div>`;
+    if (!lb.path) return `<div style="opacity:0.6;">Pending &mdash; not resolved yet.</div>`;
+
+    let outcome, color;
+    if (lb.channel === 'satellite') {
+      [outcome, color] = ['picked up by satellite', COMMS_OUTCOME_COLORS.satellite];
+    } else if (lb.state === 'acked') {
+      [outcome, color] = ['delivered and acked', COMMS_OUTCOME_COLORS.acked];
+    } else if (lb.channel === 'radio' && lb.ackHopsCompleted !== null && lb.ackHopsCompleted !== undefined) {
+      const total = lb.path.length - 1;
+      outcome = `delivered, ack died after ${lb.ackHopsCompleted}/${total} hop${total === 1 ? '' : 's'}`;
+      color = COMMS_OUTCOME_COLORS.ackDied;
+    } else {
+      [outcome, color] = ['dropped in the mesh (loop/TTL) — never reached a tower', COMMS_OUTCOME_COLORS.droppedInMesh];
+    }
+    return `
+      <div style="display:flex; justify-content:space-between;"><span>Seq</span><span>${lb.seq}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Hops</span><span>${lb.path.length - 1}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Outcome</span><span style="color:${color.toCssColorString()};">${outcome}</span></div>
+    `;
+  }
 
   function updateInspectorFromSnapshot(snapshot) {
     if (selectedBalloonId === null || !inspectorBody) return;
@@ -334,6 +606,10 @@ async function initCesium() {
       unaware: ['#e0a355', 'a route exists, not heard yet'],
       none: ['#6a6f78', 'isolated, and knows it'],
     }[key];
+    const channelText = { radio: 'radio mesh', satellite: 'satellite', none: 'nothing resolved yet' }[
+      deliveryKey(b)
+    ];
+    const channelColor = DELIVERY_COLORS[deliveryKey(b)]?.toCssColorString() ?? '#8a8f98';
     inspectorBody.innerHTML = `
       <div style="display:flex; justify-content:space-between;"><span>Latitude</span><span>${fmtLat(b.lat)}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Longitude</span><span>${fmtLon(b.lon)}</span></div>
@@ -341,6 +617,14 @@ async function initCesium() {
       <div style="display:flex; justify-content:space-between; margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Actually grounded</span><span>${b.grounded ? 'yes' : 'no'}</span></div>
       <div style="display:flex; justify-content:space-between;"><span>Verdict</span><span style="color:${verdict[0]};">${verdict[1]}</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Last delivered via</span><span style="color:${channelColor};">${channelText}</span></div>
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); margin-top:8px; padding-top:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+          <span style="font-weight:bold;">Last bundle</span>
+          <button id="commsReplayBtn" title="Replay the animation" style="font-size:11px; padding:1px 6px; cursor:pointer;">&#8635; Replay</button>
+        </div>
+        ${commsSummaryHtml()}
+      </div>
       <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
         Measurements (gas, ballast, temperature, humidity) and the message log /
         tamper chain will appear here once those systems are built — see
@@ -369,14 +653,19 @@ async function initCesium() {
       const icon = balloonIconForAltitude(b.alt);
       const entity = balloonEntities.get(b.id);
       const key = beliefKey(b);
+      const dKey = deliveryKey(b);
       if (entity) {
         entity.position = position;
         entity.billboard.image = icon;
-        // Only touch color when the belief state actually changed — this runs
-        // for every balloon every snapshot.
+        // Only touch color when the relevant overlay state actually changed —
+        // this runs for every balloon every snapshot.
         if (entity.__beliefKey !== key) {
           entity.__beliefKey = key;
           if (beliefOverlayEnabled) applyBalloonColor(b.id);
+        }
+        if (entity.__deliveryKey !== dKey) {
+          entity.__deliveryKey = dKey;
+          if (deliveryOverlayEnabled) applyBalloonColor(b.id);
         }
       } else {
         const newEntity = viewer.entities.add({
@@ -397,8 +686,9 @@ async function initCesium() {
         });
         newEntity.__balloonId = b.id; // lets click-picking map back to a balloon id
         newEntity.__beliefKey = key;
+        newEntity.__deliveryKey = dKey;
         balloonEntities.set(b.id, newEntity);
-        if (b.id === selectedBalloonId || beliefOverlayEnabled) applyBalloonColor(b.id);
+        if (b.id === selectedBalloonId || beliefOverlayEnabled || deliveryOverlayEnabled) applyBalloonColor(b.id);
       }
     }
     for (const [id, entity] of balloonEntities) {
@@ -690,6 +980,26 @@ async function initCesium() {
           </div>
         </div>
       </div>
+      <!-- Last-delivery overlay. Server truth about how each balloon's most
+           recent bundle actually got through — radio mesh vs. satellite
+           release valve. See MESH_COMMS_DESIGN.md §3/§4. -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input id="deliveryOverlayToggle" type="checkbox" />
+          <label for="deliveryOverlayToggle" style="flex:1;">Last-delivery overlay</label>
+        </div>
+        <div id="deliveryLegend" style="display:none; margin-top:5px; opacity:0.85;">
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#8de05f;">&#9679;</span> radio mesh</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#3fa7ff;">&#9679;</span> satellite</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span><span style="color:#8a8f98;">&#9679;</span> nothing resolved yet</span>
+          </div>
+        </div>
+      </div>
       <div style="display:flex; gap:6px; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 8px;">
         <input id="windVectorsToggle" type="checkbox" />
         <label for="windVectorsToggle" style="flex:1;">Wind vectors</label>
@@ -728,6 +1038,45 @@ async function initCesium() {
   inspectorBody = inspectorPanel.querySelector('#inspectorBody');
   inspectorTitle = inspectorPanel.querySelector('#inspectorTitle');
   inspectorPanel.querySelector('#inspectorClose').addEventListener('click', deselectBalloon);
+  // Delegated: inspectorBody's innerHTML is fully rebuilt every snapshot
+  // (~50ms), so a listener bound directly to #commsReplayBtn would need
+  // rebinding just as often.
+  inspectorBody.addEventListener('click', (e) => {
+    if (e.target.id === 'commsReplayBtn' && selectedBalloonId !== null) {
+      fetchAndAnimateComms(selectedBalloonId);
+    }
+  });
+
+  // --- Comms log panel (bottom-right, shown alongside the inspector) --------
+  // New DOM, same precedent as the inspector panel itself (MESH_COMMS_DESIGN.md
+  // §3: "net-new DOM; the Controls panel is the only precedent").
+  commsLogPanel = document.createElement('div');
+  commsLogPanel.style.cssText = `
+    position: fixed; bottom: 10px; right: 10px; z-index: 1000; display: none;
+    background: rgba(20, 20, 20, 0.85); color: #fff;
+    font: 11px sans-serif; padding: 10px 12px; border-radius: 6px;
+    width: 420px; max-height: 220px; overflow-y: auto;
+    border: 1px solid rgba(63, 208, 255, 0.5);
+  `;
+  commsLogPanel.innerHTML = `
+    <div style="font-weight:bold; margin-bottom:6px; color:#3fd0ff;">Comms log</div>
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr style="opacity:0.6; text-align:left;">
+          <th style="font-weight:normal;">Round</th>
+          <th style="font-weight:normal;">Seq</th>
+          <th style="font-weight:normal;">Hops</th>
+          <th style="font-weight:normal;">Channel</th>
+          <th style="font-weight:normal;">Ack</th>
+          <th style="font-weight:normal;" title="Needs C3's hash chain">Hash</th>
+          <th style="font-weight:normal;" title="Needs C3's hash chain">Tamper</th>
+        </tr>
+      </thead>
+      <tbody id="commsLogTableBody"></tbody>
+    </table>
+  `;
+  document.body.appendChild(commsLogPanel);
+  commsLogTableBody = commsLogPanel.querySelector('#commsLogTableBody');
 
   const panelBody = panel.querySelector('#panelBody');
   const panelCollapseToggle = panel.querySelector('#panelCollapseToggle');
@@ -840,9 +1189,28 @@ async function initCesium() {
   beliefUnawareValue = panel.querySelector('#beliefUnawareValue');
   beliefNoneValue = panel.querySelector('#beliefNoneValue');
   const beliefOverlayToggle = panel.querySelector('#beliefOverlayToggle');
+  const deliveryLegend = panel.querySelector('#deliveryLegend');
+  const deliveryOverlayToggle = panel.querySelector('#deliveryOverlayToggle');
+  // Mutually exclusive with the belief overlay — both recolor every balloon,
+  // and showing two overlays at once would just make each one illegible.
   beliefOverlayToggle.addEventListener('change', () => {
     beliefOverlayEnabled = beliefOverlayToggle.checked;
     beliefLegend.style.display = beliefOverlayEnabled ? 'block' : 'none';
+    if (beliefOverlayEnabled && deliveryOverlayToggle.checked) {
+      deliveryOverlayToggle.checked = false;
+      deliveryOverlayEnabled = false;
+      deliveryLegend.style.display = 'none';
+    }
+    for (const id of balloonEntities.keys()) applyBalloonColor(id);
+  });
+  deliveryOverlayToggle.addEventListener('change', () => {
+    deliveryOverlayEnabled = deliveryOverlayToggle.checked;
+    deliveryLegend.style.display = deliveryOverlayEnabled ? 'block' : 'none';
+    if (deliveryOverlayEnabled && beliefOverlayToggle.checked) {
+      beliefOverlayToggle.checked = false;
+      beliefOverlayEnabled = false;
+      beliefLegend.style.display = 'none';
+    }
     for (const id of balloonEntities.keys()) applyBalloonColor(id);
   });
 

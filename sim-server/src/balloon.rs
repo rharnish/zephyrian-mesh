@@ -65,6 +65,19 @@ pub struct Balloon {
     /// Sent alongside `believed_hops` purely so the UI can show where the two
     /// disagree; nothing in the simulation may read this on a balloon's behalf.
     pub grounded: bool,
+    /// How this balloon's most recently *resolved* bundle actually got
+    /// through — server truth (§3 of the design doc), not the balloon's own
+    /// view: satellite delivery is silent to the origin, so this is
+    /// deliberately something the balloon itself could never know. `None`
+    /// until its first bundle resolves.
+    pub last_channel: Option<crate::bundle::Channel>,
+    /// A settled snapshot of `outstanding`, taken the moment it stops being
+    /// `Pending` — unlike `outstanding` itself, this is *not* clobbered by the
+    /// next origination, so the C4 animated-packet query always has a
+    /// complete round-trip to replay instead of flashing back to "Pending"
+    /// every time a new bundle starts. `None` until the first one resolves.
+    #[serde(skip)]
+    pub last_resolved: Option<crate::bundle::ResolvedBundle>,
 }
 
 impl Balloon {
@@ -85,6 +98,8 @@ impl Balloon {
             outstanding: None,
             believed_hops: None,
             grounded: false,
+            last_channel: None,
+            last_resolved: None,
         }
     }
 

@@ -83,6 +83,7 @@ async fn main() {
         .route("/api/horizon-coeff", post(set_horizon_coeff))
         .route("/api/paused", post(set_paused))
         .route("/api/wind-levels", get(get_wind_levels))
+        .route("/api/balloons/:id/comms", get(get_balloon_comms))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -197,4 +198,21 @@ struct SetPausedBody {
 async fn set_paused(State(state): State<AppState>, Json(body): Json<SetPausedBody>) -> impl IntoResponse {
     let _ = state.commands.send(Command::SetPaused(body.paused));
     axum::http::StatusCode::ACCEPTED
+}
+
+// The first *query* endpoint (§3/C4 of MESH_COMMS_DESIGN.md) — every handler
+// above just fires a Command and returns 202. `World` lives entirely inside
+// the sim task (see the `tokio::spawn` in `main`), so reading it means
+// round-tripping a request through the same command channel and waiting on a
+// oneshot for the answer.
+async fn get_balloon_comms(State(state): State<AppState>, Path(id): Path<u32>) -> impl IntoResponse {
+    let (respond_to, rx) = tokio::sync::oneshot::channel();
+    if state.commands.send(Command::QueryBalloonComms { id, respond_to }).is_err() {
+        return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    match rx.await {
+        Ok(Some(comms)) => Json(comms).into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }

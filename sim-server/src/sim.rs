@@ -23,6 +23,49 @@ pub enum Command {
     RemoveTower { id: u32 },
     SetHorizonRefractionCoeff(f64),
     SetPaused(bool),
+    /// The first *query* (not mutation) command — every other variant is
+    /// fire-and-forget. GET /api/balloons/:id/comms (MESH_COMMS_DESIGN.md
+    /// §3/C4) needs a read of live `World` state, and `World` is only ever
+    /// touched from the single task that owns it (see main.rs), so a request
+    /// has to round-trip through the same command channel and get its answer
+    /// back over a oneshot.
+    QueryBalloonComms { id: u32, respond_to: tokio::sync::oneshot::Sender<Option<BalloonComms>> },
+}
+
+/// What the C4 animated-packet view reads for one balloon: its belief state
+/// (already public) plus its own most recently *originated* bundle's fate —
+/// server truth, since e.g. satellite delivery is silent to the balloon
+/// itself (see bundle.rs). `None` fields mean "not resolved yet", not "no
+/// data" — a `Pending` bundle has no path/channel/ack info yet by construction.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BalloonComms {
+    pub id: u32,
+    pub believed_hops: Option<u32>,
+    pub grounded: bool,
+    pub last_bundle: Option<LastBundleView>,
+    /// The full retained log (`Balloon::log`, bounded by `COMMS_LOG_CAPACITY`),
+    /// newest first — the C4 comms-log panel (§3). Each record now carries its
+    /// own resolution outcome (see `bundle::snapshot_resolved`), so this is a
+    /// history, not just the latest bundle's fate.
+    pub log: Vec<crate::telemetry::TelemetryRecord>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LastBundleView {
+    pub seq: u64,
+    pub state: crate::bundle::AckState,
+    pub channel: Option<crate::bundle::Channel>,
+    /// The tower that took delivery. `None` for satellite delivery, dead
+    /// ends, and while the bundle is still Pending.
+    pub tower_id: Option<u32>,
+    /// Full recorded path (origin to tower-adjacent balloon), inclusive of
+    /// both ends. `None` while the bundle is still Pending.
+    pub path: Option<Vec<u32>>,
+    /// How many hops of the reverse ack path completed before it was lost.
+    /// Only meaningful for a `TimedOut` bundle that *did* reach a tower.
+    pub ack_hops_completed: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -188,6 +231,30 @@ impl World {
             Command::RemoveTower { id } => self.remove_tower(id),
             Command::SetHorizonRefractionCoeff(c) => self.horizon_refraction_coeff = c,
             Command::SetPaused(p) => self.paused = p,
+            Command::QueryBalloonComms { id, respond_to } => {
+                // Reads `last_resolved`, not the live `outstanding` — the
+                // latter resets to `Pending` the instant a new bundle
+                // originates, which would make the query flash back to
+                // "nothing to show" between originations. See
+                // `Balloon::last_resolved`.
+                let comms = self.balloons.get(id as usize).map(|b| BalloonComms {
+                    id: b.id,
+                    believed_hops: b.believed_hops,
+                    grounded: b.grounded,
+                    last_bundle: b.last_resolved.as_ref().map(|r| LastBundleView {
+                        seq: r.seq,
+                        state: r.state,
+                        channel: r.channel,
+                        tower_id: r.tower_id,
+                        path: Some(r.path.clone()),
+                        ack_hops_completed: r.ack_hops_completed,
+                    }),
+                    log: b.log.iter().rev().cloned().collect(),
+                });
+                // Best-effort: a dropped receiver just means the HTTP request
+                // that asked was already cancelled (client disconnected).
+                let _ = respond_to.send(comms);
+            }
         }
     }
 
