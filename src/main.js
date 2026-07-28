@@ -30,6 +30,7 @@ import {
   addTower,
   removeTower,
 } from './simClient.js';
+import { LinkLayer, parseNodeKey } from './linkLayer.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -83,6 +84,11 @@ async function initCesium() {
   const balloonEntities = new Map(); // id -> Cesium.Entity
   const balloonPositions = new Map(); // id -> Cesium.Cartesian3, mirrors balloonEntities for cheap link-line lookups
   const towerById = new Map(); // id -> Tower (rendering wrapper)
+
+  // Towers are static once placed, so their Cartesian3 is derived on demand
+  // rather than cached alongside the balloon positions.
+  const towerPosition = (tower) =>
+    Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM);
 
   // Control-panel elements + drag/cooldown state, assigned once the panel
   // is built below. Lets other tabs' slider changes (arriving via
@@ -313,7 +319,7 @@ async function initCesium() {
     if (lb.towerId !== null && lb.towerId !== undefined) {
       const tower = towerById.get(lb.towerId);
       if (tower) {
-        positions.push(Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM));
+        positions.push(towerPosition(tower));
         towerIncluded = true;
       }
     }
@@ -639,70 +645,16 @@ async function initCesium() {
   }
 
   // --- Radio link rendering -------------------------------------------------
-  const linkCollection = new Cesium.PolylineCollection();
-  viewer.scene.primitives.add(linkCollection);
+  const linkLayer = new LinkLayer();
 
-  const GROUNDED_LINK_COLOR = Cesium.Color.LIME.withAlpha(0.6);   // cluster reaches a tower
-  const UNGROUNDED_LINK_COLOR = Cesium.Color.GRAY.withAlpha(0.5); // balloon-only cluster
-
-  // pairKey -> { primitive, aKey, bKey }, so unchanged links are reused
-  // instead of destroyed/recreated every tick. aKey/bKey (e.g. "b12", "t3",
-  // parsed from pairKey) let refreshLinkPositions() below look up each
-  // endpoint's *current* position every tick, not just on the throttled
-  // ticks where sim-server recomputes edge topology — otherwise a link's
-  // line stays frozen at its endpoints' positions as of the last topology
-  // recompute while the balloon billboards keep moving every tick, which
-  // reads as a "ghost edge" detached from its nodes until the next
-  // recompute catches it up (most visible after something briefly stalls
-  // the main thread, e.g. a 2D/3D scene-mode morph).
-  const linkPrimitives = new Map();
-
-  function positionForNodeKey(key) {
-    const id = Number(key.slice(1));
-    if (key[0] === 'b') return balloonPositions.get(id);
+  // Resolves an edge endpoint ("b12" / "t3") to where that node is drawn right
+  // now. Balloons move every tick; towers never do, so their position is
+  // derived from the model on demand rather than cached.
+  function resolveNodePosition(key) {
+    const { kind, id } = parseNodeKey(key);
+    if (kind === 'b') return balloonPositions.get(id);
     const tower = towerById.get(id);
-    return tower ? Cesium.Cartesian3.fromDegrees(tower.lon, tower.lat, tower.heightM) : undefined;
-  }
-
-  function refreshLinkPositions() {
-    for (const link of linkPrimitives.values()) {
-      const posA = positionForNodeKey(link.aKey);
-      const posB = positionForNodeKey(link.bKey);
-      if (posA && posB) {
-        link.primitive.positions = [posA, posB];
-      }
-    }
-  }
-
-  function syncLinks(edges) {
-    const edgesByPairKey = new Map(edges.map((e) => [e.pairKey, e]));
-
-    // Remove links that no longer exist.
-    for (const [pairKey, link] of linkPrimitives) {
-      if (!edgesByPairKey.has(pairKey)) {
-        linkCollection.remove(link.primitive);
-        linkPrimitives.delete(pairKey);
-      }
-    }
-    // Add or update current links.
-    for (const edge of edges) {
-      const [aKey, bKey] = edge.pairKey.split('|');
-      const posA = Cesium.Cartesian3.fromDegrees(edge.a[0], edge.a[1], edge.a[2]);
-      const posB = Cesium.Cartesian3.fromDegrees(edge.b[0], edge.b[1], edge.b[2]);
-      const color = edge.grounded ? GROUNDED_LINK_COLOR : UNGROUNDED_LINK_COLOR;
-      const existing = linkPrimitives.get(edge.pairKey);
-      if (existing) {
-        existing.primitive.positions = [posA, posB];
-        existing.primitive.material.uniforms.color = color;
-      } else {
-        const primitive = linkCollection.add({
-          positions: [posA, posB],
-          width: 2,
-          material: Cesium.Material.fromType('Color', { color }),
-        });
-        linkPrimitives.set(edge.pairKey, { primitive, aKey, bKey });
-      }
-    }
+    return tower ? towerPosition(tower) : undefined;
   }
 
   // --- sim-server connection -------------------------------------------------
@@ -712,9 +664,9 @@ async function initCesium() {
     reconcileBalloons(snapshot.balloons);
     reconcileTowers(snapshot.towers);
     if (snapshot.edges) {
-      syncLinks(snapshot.edges);
+      linkLayer.sync(viewer, snapshot.edges);
     }
-    refreshLinkPositions();
+    linkLayer.refreshPositions(resolveNodePosition);
     syncControlsFromSnapshot(snapshot);
     updateInspectorFromSnapshot(snapshot);
   });
