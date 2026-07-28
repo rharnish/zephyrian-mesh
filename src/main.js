@@ -3,7 +3,7 @@ import * as Cesium from 'cesium';
 
 import configData from './user-config.json';
 
-import { params, WIND_API_URL, SIM_SERVER_URL, SIM_SERVER_WS_URL } from './config.js';
+import { params, WIND_API_URL } from './config.js';
 import { WindField } from './windField.js';
 import { WindVectorField } from './windVectors.js';
 import { Tower } from './tower.js';
@@ -21,6 +21,15 @@ import {
   COMMS_OUTCOME_CSS,
   MUTED_CSS,
 } from './overlays.js';
+import {
+  connectSimServer,
+  fetchBalloonComms,
+  setPaused,
+  setHorizonCoeff,
+  setBalloonCount,
+  addTower,
+  removeTower,
+} from './simClient.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -122,13 +131,6 @@ async function initCesium() {
     // paused (click to resume). Title carries the word for accessibility.
     pauseToggle.innerHTML = paused ? PLAY_ICON : PAUSE_ICON;
     pauseToggle.title = paused ? 'Resume' : 'Pause';
-  }
-  function requestPause(next) {
-    fetch(`${SIM_SERVER_URL}/api/paused`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paused: next }),
-    }).catch((e) => console.error('Failed to sync pause state to sim-server:', e));
   }
 
   function syncControlsFromSnapshot(snapshot) {
@@ -403,15 +405,11 @@ async function initCesium() {
     clearCommsAnimation();
     clearCommsLogPanel();
     selectedComms = null;
-    try {
-      const res = await fetch(`${SIM_SERVER_URL}/api/balloons/${id}/comms`);
-      if (!res.ok || id !== selectedBalloonId) return; // selection moved on while fetching
-      selectedComms = await res.json();
-      renderCommsAnimation(selectedComms);
-      renderCommsLogPanel(selectedComms);
-    } catch (e) {
-      console.error('Failed to fetch balloon comms:', e);
-    }
+    const comms = await fetchBalloonComms(id);
+    if (!comms || id !== selectedBalloonId) return; // selection moved on while fetching
+    selectedComms = comms;
+    renderCommsAnimation(selectedComms);
+    renderCommsLogPanel(selectedComms);
   }
 
   // Balloon selection/inspection. Clicking a balloon selects it; the inspector
@@ -708,27 +706,18 @@ async function initCesium() {
   }
 
   // --- sim-server connection -------------------------------------------------
-  // One authoritative snapshot stream; this client only renders it.
-  function connectSimServer() {
-    const ws = new WebSocket(SIM_SERVER_WS_URL);
-    ws.onmessage = (event) => {
-      const snapshot = JSON.parse(event.data);
-      reconcileBalloons(snapshot.balloons);
-      reconcileTowers(snapshot.towers);
-      if (snapshot.edges) {
-        syncLinks(snapshot.edges);
-      }
-      refreshLinkPositions();
-      syncControlsFromSnapshot(snapshot);
-      updateInspectorFromSnapshot(snapshot);
-    };
-    ws.onerror = (e) => console.error('sim-server WebSocket error (is sim-server running?):', e);
-    ws.onclose = () => {
-      console.warn('sim-server WebSocket closed — retrying in 2s');
-      setTimeout(connectSimServer, 2000);
-    };
-  }
-  connectSimServer();
+  // One authoritative snapshot stream; this client only renders it. Every
+  // subsystem that reacts to a snapshot is fanned out from here.
+  connectSimServer((snapshot) => {
+    reconcileBalloons(snapshot.balloons);
+    reconcileTowers(snapshot.towers);
+    if (snapshot.edges) {
+      syncLinks(snapshot.edges);
+    }
+    refreshLinkPositions();
+    syncControlsFromSnapshot(snapshot);
+    updateInspectorFromSnapshot(snapshot);
+  });
 
   // --- User actions: add/remove tower, click on globe -----------------------
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -747,6 +736,7 @@ async function initCesium() {
   // explicitly, rather than however the nearest-pixel search happens to
   // order them.
   const CLICK_DRILL_LIMIT = 8;
+  const NEW_TOWER_HEIGHT_M = 30; // mast height for a tower dropped on the globe
   handler.setInputAction((click) => {
     const candidates = viewer.scene.drillPick(
       click.position,
@@ -757,12 +747,7 @@ async function initCesium() {
     const pickedTower = candidates.find((c) => c.id && c.id.__isTower);
     if (pickedTower) {
       const entry = [...towerById.entries()].find(([, tower]) => tower.entity === pickedTower.id);
-      if (entry) {
-        const [id] = entry;
-        fetch(`${SIM_SERVER_URL}/api/towers/${id}`, { method: 'DELETE' }).catch((e) =>
-          console.error('Failed to remove tower:', e)
-        );
-      }
+      if (entry) removeTower(entry[0]);
       return;
     }
     // No tower in range of the click — fall back to balloon selection.
@@ -776,11 +761,7 @@ async function initCesium() {
     const carto = Cesium.Cartographic.fromCartesian(cartesian);
     const lon = Cesium.Math.toDegrees(carto.longitude);
     const lat = Cesium.Math.toDegrees(carto.latitude);
-    fetch(`${SIM_SERVER_URL}/api/towers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lon, lat, heightM: 30 }),
-    }).catch((e) => console.error('Failed to add tower:', e));
+    addTower(lon, lat, NEW_TOWER_HEIGHT_M);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
   // --- Live control panel ------------------------------------------------
@@ -985,7 +966,7 @@ async function initCesium() {
 
   pauseToggle = panel.querySelector('#pauseToggle');
   updatePauseButton();
-  pauseToggle.addEventListener('click', () => requestPause(!paused));
+  pauseToggle.addEventListener('click', () => setPaused(!paused));
 
   // Spacebar toggles pause too — but not while typing in a form control.
   document.addEventListener('keydown', (e) => {
@@ -993,7 +974,7 @@ async function initCesium() {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
     e.preventDefault();
-    requestPause(!paused);
+    setPaused(!paused);
   });
 
   const glyphsToggle = panel.querySelector('#glyphsToggle');
@@ -1067,11 +1048,7 @@ async function initCesium() {
     // is how other tabs pick up the change (see syncControlsFromSnapshot).
     isDraggingHorizon = false;
     horizonCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
-    fetch(`${SIM_SERVER_URL}/api/horizon-coeff`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ coeff: params.horizonRefractionCoeff }),
-    }).catch((e) => console.error('Failed to sync horizon coefficient to sim-server:', e));
+    setHorizonCoeff(params.horizonRefractionCoeff);
   });
 
   meshDegreeValue = panel.querySelector('#meshDegreeValue');
@@ -1125,11 +1102,7 @@ async function initCesium() {
     numBalloonsCooldownUntil = Date.now() + REMOTE_SYNC_COOLDOWN_MS;
     const requested = parseInt(numBalloonsSlider.value, 10);
     params.numBalloons = requested;
-    fetch(`${SIM_SERVER_URL}/api/balloons/count`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ n: requested }),
-    }).catch((e) => console.error('Failed to set balloon count on sim-server:', e));
+    setBalloonCount(requested);
   });
 }
 
