@@ -125,6 +125,30 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+/// Feeds one browser, sending only the newest snapshot and never queueing
+/// ahead of what that client can actually take.
+///
+/// The subtlety is what `socket.send(..).await` means: it hands the message to
+/// this connection's write sink and returns, *not* when the browser has
+/// received or drawn anything. The previous loop therefore pulled a snapshot
+/// and pushed it at the socket as fast as the broadcast channel would yield,
+/// which for a slow client meant piling world states into that sink for ever.
+///
+/// Measured before this change, with one software-rendered browser attached:
+/// the client sat 752 ticks (~37s) behind while receiving a perfectly
+/// contiguous tick sequence — nothing dropped anywhere — and the server held
+/// 251 MB resident. Only ~3 MB of that was in the kernel socket buffer; the
+/// rest was queued in userspace here. So this was never only a latency
+/// problem: a slow client made this process grow without bound.
+///
+/// Now at most one snapshot is outstanding at a time, and before each send we
+/// skip to the newest one available. A snapshot is a complete picture of the
+/// world, so an older one still waiting to go out has no value once a newer
+/// one exists — sending it means spending bandwidth to show a state that is
+/// already wrong, and delaying the state that is right.
+///
+/// A client that keeps up sees no change: `try_recv` finds nothing waiting and
+/// every snapshot goes out as before.
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.snapshots.subscribe();
     loop {
@@ -132,7 +156,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         // end-of-stream (as `while let Ok(..)` does) hangs up on it instead,
         // and since the frontend reconnects 2s later that turns a few dropped
         // frames into a visible freeze-then-jump every ~10 seconds.
-        let json = match rx.recv().await {
+        let mut json = match rx.recv().await {
             Ok(json) => json,
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 tracing::debug!("client lagged, skipping {n} snapshots");
@@ -140,6 +164,27 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
             Err(broadcast::error::RecvError::Closed) => break,
         };
+
+        // Skip to the newest snapshot already waiting. This is what bounds the
+        // queue: whatever accumulated while the last send was in flight
+        // collapses to a single message rather than becoming a backlog.
+        let mut skipped: u64 = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(newer) => {
+                    json = newer;
+                    skipped += 1;
+                }
+                // The ring wrapped while we were busy; try again for whatever
+                // survives, which is by definition newer than what we hold.
+                Err(broadcast::error::TryRecvError::Lagged(n)) => skipped += n,
+                Err(_) => break, // Empty, or Closed and handled on the next recv
+            }
+        }
+        if skipped > 0 {
+            tracing::trace!("skipped {skipped} superseded snapshots for a slow client");
+        }
+
         if socket.send(Message::Text(json)).await.is_err() {
             break; // client actually disconnected
         }
