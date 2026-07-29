@@ -172,6 +172,7 @@ async function initCesium() {
     onBalloonCountCommit: setBalloonCount,
     onGlyphsChange: (on) => balloonLayer.setUseGlyphs(on),
     onOverlayChange: (mode) => balloonLayer.setOverlay(mode),
+    onDeliveryMarksChange: (on) => balloonLayer.setDeliveryMarks(on),
     onWindChange: ({ enabled, levelIndex, stride }) => {
       if (enabled) {
         windFieldPromise.then((windField) =>

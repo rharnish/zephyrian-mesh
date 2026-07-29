@@ -1,7 +1,7 @@
 import * as Cesium from 'cesium';
 
 import { balloonIconForAltitude, BALLOON_ICON_WIDTH, BALLOON_ICON_HEIGHT } from './balloonIcon.js';
-import { beliefKey, deliveryKey, BELIEF_CSS, DELIVERY_CSS } from './overlays.js';
+import { beliefKey, deliveryKey, BELIEF_CSS, DELIVERY_CSS, DELIVERY_MARK } from './overlays.js';
 import { toCesiumColors } from './cesiumColor.js';
 
 // ---------------------------------------------------------------------------
@@ -22,13 +22,18 @@ const DELIVERY_COLORS = toCesiumColors(DELIVERY_CSS);
 const DOT_SIZE = 6;
 const SELECTED_DOT_SIZE = 11;
 
-// Which overlay is tinting the field. A single mode rather than one boolean
-// per overlay: they are mutually exclusive (both recolor every balloon, and
-// showing two at once makes each illegible), and two booleans made that a rule
-// each toggle handler had to remember to enforce on the other.
+// Which overlay is tinting the field. Only belief tints now: delivery moved to
+// a label above each balloon, which carries its own colour and so can be read
+// at the same time as the tint rather than competing for it.
 export const OVERLAY_NONE = 'none';
 export const OVERLAY_BELIEF = 'belief';
-export const OVERLAY_DELIVERY = 'delivery';
+
+// Label geometry. The mark sits above the balloon, so the offset depends on
+// which render mode is active — a 30px billboard anchored at its base puts the
+// envelope far higher than a 6px dot does.
+const MARK_OFFSET_GLYPH = -34;
+const MARK_OFFSET_DOT = -10;
+const MARK_FONT = 'bold 13px sans-serif';
 
 export class BalloonLayer {
   constructor() {
@@ -43,6 +48,25 @@ export class BalloonLayer {
     // levels, but that's a judgement for whoever is looking, not something to
     // enforce by overriding the control.
     this.useGlyphs = false;
+    // Independent of `overlay` on purpose — that is the whole point of moving
+    // delivery onto a label.
+    this.showDeliveryMarks = false;
+  }
+
+  // The mark for one balloon, or a hidden label when the channel is unresolved
+  // or marks are switched off.
+  _applyMark(entity) {
+    const text = DELIVERY_MARK[entity.__deliveryKey] ?? '';
+    const show = this.showDeliveryMarks && text !== '';
+    entity.label.show = show;
+    if (!show) return;
+    entity.label.text = text;
+    entity.label.fillColor = DELIVERY_COLORS[entity.__deliveryKey] ?? BALLOON_COLOR;
+  }
+
+  setDeliveryMarks(on) {
+    this.showDeliveryMarks = on;
+    for (const entity of this.entities.values()) this._applyMark(entity);
   }
 
   positionOf(id) {
@@ -58,8 +82,6 @@ export class BalloonLayer {
     let color = BALLOON_COLOR;
     if (selected) {
       color = SELECTED_BALLOON_COLOR;
-    } else if (this.overlay === OVERLAY_DELIVERY) {
-      color = DELIVERY_COLORS[entity.__deliveryKey] ?? BALLOON_COLOR;
     } else if (this.overlay === OVERLAY_BELIEF) {
       color = BELIEF_COLORS[entity.__beliefKey] ?? BALLOON_COLOR;
     }
@@ -101,9 +123,11 @@ export class BalloonLayer {
   // desyncing across exactly this event, so it stays as belt-and-braces.
   refreshRenderMode() {
     const showDots = !this.useGlyphs;
+    const offset = new Cesium.Cartesian2(0, showDots ? MARK_OFFSET_DOT : MARK_OFFSET_GLYPH);
     for (const entity of this.entities.values()) {
       entity.point.show = showDots;
       entity.billboard.show = !showDots;
+      entity.label.pixelOffset = offset;
     }
   }
 
@@ -129,7 +153,7 @@ export class BalloonLayer {
         }
         if (entity.__deliveryKey !== dKey) {
           entity.__deliveryKey = dKey;
-          if (this.overlay === OVERLAY_DELIVERY) this.applyColor(b.id);
+          this._applyMark(entity);
         }
       } else {
         const newEntity = viewer.entities.add({
@@ -147,11 +171,25 @@ export class BalloonLayer {
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             show: !showDots,
           },
+          // Outlined so the mark stays readable over both the bright globe and
+          // dark space, at the few pixels it occupies when zoomed out.
+          label: {
+            text: '',
+            font: MARK_FONT,
+            fillColor: BALLOON_COLOR,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, showDots ? MARK_OFFSET_DOT : MARK_OFFSET_GLYPH),
+            show: false,
+          },
         });
         newEntity.__balloonId = b.id; // lets click-picking map back to a balloon id
         newEntity.__beliefKey = key;
         newEntity.__deliveryKey = dKey;
         this.entities.set(b.id, newEntity);
+        this._applyMark(newEntity);
         if (b.id === this.selectedId || this.overlay !== OVERLAY_NONE) this.applyColor(b.id);
       }
     }

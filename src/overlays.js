@@ -52,6 +52,54 @@ export const DELIVERY_LEGEND = {
   none: 'nothing resolved yet',
 };
 
+// Marks drawn above each balloon for its delivery channel, as a Cesium label.
+// A label carries its own fillColor, so the channel can be shown *at the same
+// time* as the belief overlay's tint — a billboard can't, because Cesium
+// multiplies the whole image by one colour.
+//
+// --- Choosing a different mark ------------------------------------------
+//
+// The hard requirement is that the glyph be a **font outline, not an emoji**.
+// Emoji render as colour bitmaps: `fillColor` is ignored entirely, so the mark
+// can no longer carry the channel, and they bring their own square background
+// that fights the globe. Measured in Chromium here, U+1F6DC WIRELESS drew 1976
+// opaque pixels of which 1788 were chromatic — an orange badge, identical
+// whichever colour was requested. U+1F4E1 and U+1F6F0 behave the same, and
+// appending U+FE0E (variation selector-15) does *not* help: with no
+// text-presentation glyph in the font it is silently ignored.
+//
+// Rule of thumb: anything at U+1F000 and above is emoji territory. Stay in the
+// BMP symbol blocks and glyphs tint cleanly:
+//   U+2190-21FF  Arrows
+//   U+2200-22FF  Mathematical Operators   (≈ lives here)
+//   U+2300-23FF  Miscellaneous Technical
+//   U+25A0-25FF  Geometric Shapes         (▲ ▼ △ ▽ ◆ ○ ● ■ live here)
+//   U+2580-259F  Block Elements           (solid, very legible when small)
+//   U+2B00-2BFF  Miscellaneous Symbols and Arrows
+//
+// Places to browse:
+//   https://shapecatcher.com/            draw a shape, get the codepoint
+//   https://www.compart.com/en/unicode/block   per-character font coverage
+//   https://www.unicode.org/charts/      official block charts
+//   https://symbl.cc/                    searchable, easy to skim
+//
+// Prefer solid shapes over fine line-work: at the ~16px these render at, a
+// filled triangle survives and thin strokes disappear.
+// One shape for both channels, distinguished by colour. The mark therefore
+// reads as "this balloon got a bundle out"; the colour says how. A solid
+// triangle also holds up far better than line-work at the few pixels these
+// occupy when zoomed out.
+//
+// Note this makes the channel a colour-only distinction, which is the one
+// thing shape-coding would have avoided — worth keeping in mind when picking
+// the two colours, since neighbouring hues would make them indistinguishable
+// to some viewers.
+export const DELIVERY_MARK = {
+  radio: '▲',      // U+25B2 BLACK UP-POINTING TRIANGLE
+  satellite: '▲',  // same shape; DELIVERY_CSS carries the difference
+  none: '',        // nothing resolved yet: no mark rather than a placeholder
+};
+
 // Used wherever a value is absent rather than meaningful — a pending ack, a
 // channel that hasn't resolved, the placeholder hash columns.
 export const MUTED_CSS = '#8a8f98';

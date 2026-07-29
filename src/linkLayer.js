@@ -67,7 +67,7 @@ export class LinkLayer {
       if (!posA || !posB) continue;
       const primitive = collection.add({
         positions: [posA, posB],
-        width: 2,
+        width: 1,
         material: Cesium.Material.fromType('Color', { color }),
       });
       this.links.set(edge.pairKey, { primitive, aKey, bKey });

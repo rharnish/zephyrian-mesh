@@ -1,6 +1,6 @@
 import { params } from '../config.js';
-import { BELIEF_CSS, BELIEF_LEGEND, DELIVERY_CSS, DELIVERY_LEGEND, deliveryMix } from '../overlays.js';
-import { OVERLAY_NONE, OVERLAY_BELIEF, OVERLAY_DELIVERY } from '../balloonLayer.js';
+import { BELIEF_CSS, BELIEF_LEGEND, DELIVERY_CSS, DELIVERY_LEGEND, DELIVERY_MARK, deliveryMix } from '../overlays.js';
+import { OVERLAY_NONE, OVERLAY_BELIEF } from '../balloonLayer.js';
 
 // ---------------------------------------------------------------------------
 // ControlPanel — the fixed overlay at top-left: pause, the two sliders, the
@@ -102,13 +102,16 @@ const CHECKBOX_ROW = 'display:flex; gap:6px; align-items:center;';
 // Legend rows are generated from the palette so a new overlay state can't be
 // coloured in one place and captioned in another. `idPrefix` names the span
 // holding each row's percentage, and is what `valueRefs` below looks up.
-function legendRows(keys, cssTable, labels, idPrefix) {
+function legendRows(keys, cssTable, labels, idPrefix, marks) {
   return keys
     .map((key) => {
       const id = `${idPrefix}${key[0].toUpperCase()}${key.slice(1)}Value`;
+      // For delivery, show the glyph actually drawn on the globe rather than a
+      // generic dot, so the legend is the key you read the map with.
+      const swatch = marks ? marks[key] || '&mdash;' : '&#9679;';
       return `
           <div style="${SPREAD}">
-            <span><span style="color:${cssTable[key]};">&#9679;</span> ${labels[key]}</span>
+            <span><span style="color:${cssTable[key]}; display:inline-block; width:11px;">${swatch}</span> ${labels[key]}</span>
             <span id="${id}">&ndash;</span>
           </div>`;
     })
@@ -137,6 +140,7 @@ export class ControlPanel {
     onBalloonCountCommit,
     onGlyphsChange,
     onOverlayChange,
+    onDeliveryMarksChange,
     onWindChange,
     windFieldPromise,
   }) {
@@ -251,7 +255,7 @@ export class ControlPanel {
           <label for="deliveryOverlayToggle" style="flex:1;">Last-delivery overlay</label>
         </div>
         <div id="deliveryLegend" style="margin-top:5px; opacity:0.85;">
-          ${legendRows(DELIVERY_KEYS, DELIVERY_CSS, DELIVERY_LEGEND, 'delivery')}
+          ${legendRows(DELIVERY_KEYS, DELIVERY_CSS, DELIVERY_LEGEND, 'delivery', DELIVERY_MARK)}
         </div>
       </div>
       <div style="${CHECKBOX_ROW} ${SECTION}">
@@ -345,29 +349,20 @@ export class ControlPanel {
     this.deliveryValues = valueRefs(panel, DELIVERY_KEYS, 'delivery');
 
     // --- overlays ---
-    // The two are mutually exclusive: both recolor every balloon, and showing
-    // two at once would just make each illegible. Driving a single mode off
-    // whichever box was ticked enforces that by construction, rather than each
-    // handler remembering to un-tick the other.
+    // These are no longer mutually exclusive. Belief owns the balloon tint;
+    // delivery is a separate mark above each balloon carrying its own colour,
+    // so both can be read at once — which is the point of the split.
     const beliefToggle = $('#beliefOverlayToggle');
     const deliveryToggle = $('#deliveryOverlayToggle');
     const beliefLegend = $('#beliefLegend');
-    const deliveryLegend = $('#deliveryLegend');
-    const applyOverlay = (mode) => {
-      beliefToggle.checked = mode === OVERLAY_BELIEF;
-      deliveryToggle.checked = mode === OVERLAY_DELIVERY;
-      beliefLegend.style.display = mode === OVERLAY_BELIEF ? 'block' : 'none';
-      // The delivery legend deliberately stays put: its percentages are a live
-      // readout of the field, useful whether or not the tint is switched on.
-      // Its coloured dots keep working as the key for when it is.
+    beliefToggle.addEventListener('change', () => {
+      const mode = beliefToggle.checked ? OVERLAY_BELIEF : OVERLAY_NONE;
+      beliefLegend.style.display = beliefToggle.checked ? 'block' : 'none';
       onOverlayChange(mode);
-    };
-    beliefToggle.addEventListener('change', () =>
-      applyOverlay(beliefToggle.checked ? OVERLAY_BELIEF : OVERLAY_NONE)
-    );
-    deliveryToggle.addEventListener('change', () =>
-      applyOverlay(deliveryToggle.checked ? OVERLAY_DELIVERY : OVERLAY_NONE)
-    );
+    });
+    // The delivery legend stays visible either way: its percentages are a live
+    // readout of the field, and its marks are the key for the globe.
+    deliveryToggle.addEventListener('change', () => onDeliveryMarksChange(deliveryToggle.checked));
 
     // --- wind vectors ---
     // These stay disabled until the (slow, backgrounded) wind field resolves.
