@@ -1,4 +1,41 @@
-## Zepheryian Dirigble Network
+# Zephyrian Mesh
+
+A simulator for a constellation of high-altitude balloons that have to get
+their telemetry to the ground without being told how.
+
+Balloons drift on real ERA5 wind fields over a Cesium globe, forming and
+losing line-of-sight radio links as they move. Each one generates telemetry
+bundles that reach a ground tower only by being carried and relayed through
+whatever neighbours happen to be in range.
+
+## The constraint
+
+No balloon is handed a picture of the network. A balloon learns who it can
+reach from beacons it actually received, and forwards bundles toward the
+tower it *believes* it has a route to — a belief that is often stale, and
+sometimes wrong. Everything interesting lives in the gap between that belief
+and the true connectivity graph, which the simulator computes separately so
+the two can be compared.
+
+Explored in [`MESH_COMMS_DESIGN.md`](MESH_COMMS_DESIGN.md); the
+belief-vs-truth divergence is plotted in
+[`experiments/protocol-results/`](experiments/protocol-results/).
+
+## Layout
+
+| Piece | What it does |
+| --- | --- |
+| `sim-server/` | Rust. Physics, link detection, the beacon and bundle protocols — the simulation's source of truth. |
+| `src/` | Browser frontend. Renders whatever `sim-server` broadcasts over a WebSocket; holds no simulation state. |
+| `weather-data-server/` | Python. Serves ERA5 wind fields to `sim-server`. |
+| `experiments/` | Offline sweep binaries and their results. |
+| `docs/` | Written-up investigations and protocol diagrams. |
+
+Design notes worth reading first:
+[`MESH_COMMS_DESIGN.md`](MESH_COMMS_DESIGN.md) (the comms protocol),
+[`TIMING_MODEL.md`](TIMING_MODEL.md) (every clock in the system, in seconds),
+and [`BALLOON_PHYSICS_VISION.md`](BALLOON_PHYSICS_VISION.md) (where the
+buoyancy model is headed).
 
 ## How to build and run
 
