@@ -1,6 +1,6 @@
 # Architecture
 
-Three processes, started together by `run-all.sh` (see [HOW-TO-RUN.md](HOW-TO-RUN.md)):
+Three processes, started together by `run-all.sh` (see [README.md](README.md#how-to-build-and-run)):
 
 ```mermaid
 flowchart TB

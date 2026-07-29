@@ -121,9 +121,9 @@ the `pole_wraparound_edges_are_not_missed` test and the comment in
 
 ## Running it
 
-See [`HOW-TO-RUN.md`](../HOW-TO-RUN.md) for the full three-process startup
-sequence (wind backend, sim-server, frontend) and troubleshooting. Short
-version, just this server:
+See [`README.md`](../README.md#how-to-build-and-run) for the full
+three-process startup sequence (wind backend, sim-server, frontend) and
+troubleshooting. Short version, just this server:
 
 ```bash
 cd sim-server
