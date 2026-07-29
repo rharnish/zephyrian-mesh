@@ -335,20 +335,26 @@
       <div class="hub">
         <span class="name">main.js</span>
         <span class="arrow">→</span>
-        <span class="role">orchestrator: inits the Cesium viewer, reconciles balloons/towers against server snapshots, wires the UI (pause/resume, click-to-inspect balloon panel). Holds no physics or link-detection logic of its own.</span>
+        <span class="role">orchestrator: inits the Cesium viewer, owns the snapshot loop, wires the layers and UI panels. Holds no physics, link-detection, or comms logic of its own.</span>
       </div>
       <div class="chips">
-        <div class="chip"><div class="name">config.js</div><div class="role">server URLs & tunable params</div></div>
-        <div class="chip"><div class="name">windField.js</div><div class="role">WindField model, client-side copy</div></div>
+        <div class="chip"><div class="name">simClient.js</div><div class="role">every sim-server conversation: snapshot stream in, REST commands out</div></div>
+        <div class="chip"><div class="name">balloonLayer.js</div><div class="role">balloon entity reconciliation</div></div>
+        <div class="chip"><div class="name">linkLayer.js</div><div class="role">radio-link polylines</div></div>
+        <div class="chip"><div class="name">commsReplay.js</div><div class="role">bundle packet animation</div></div>
         <div class="chip"><div class="name">windVectors.js</div><div class="role">wind-arrow overlay rendering</div></div>
         <div class="chip"><div class="name">tower.js / towerModel.js</div><div class="role">tower entity rendering</div></div>
-        <div class="chip"><div class="name">geo.js</div><div class="role">geo math helpers</div></div>
+        <div class="chip"><div class="name">ui/controlPanel.js</div><div class="role">controls + mesh-health readout</div></div>
+        <div class="chip"><div class="name">ui/inspectorPanel.js</div><div class="role">per-balloon inspect + comms log</div></div>
+        <div class="chip"><div class="name">overlays.js</div><div class="role">overlay classification + palette</div></div>
+        <div class="chip"><div class="name">balloonIcon.js</div><div class="role">glyph canvases</div></div>
+        <div class="chip"><div class="name">cesiumColor.js / geo.js / config.js</div><div class="role">pure helpers, unit-tested</div></div>
       </div>
     </section>
 
     <div class="connector">
-      <div class="line ws"><span class="dir">↕</span><span class="proto">WS /ws</span><span class="detail">Snapshot: balloons, towers, edges, paused, horizonRefractionCoeff — every tick</span></div>
-      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">POST/DELETE /api/towers · POST /api/balloons/count · POST /api/horizon-coeff · POST /api/paused</span></div>
+      <div class="line ws"><span class="dir">↕</span><span class="proto">WS /ws</span><span class="detail">Snapshot: balloons, towers, edges, believed connectivity, mesh health, paused, serverTimeMs — every tick</span></div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">POST/DELETE /api/towers · POST /api/balloons/count · POST /api/horizon-coeff · POST /api/paused · GET /api/balloons/:id/comms</span></div>
       <div class="line rest"><span class="dir">→</span><span class="proto">REST</span><span class="detail">GET /api/wind-levels — browser's arrows-only copy, re-served from sim-server's own fetch</span></div>
     </div>
 
@@ -365,9 +371,13 @@
       </div>
       <div class="chips">
         <div class="chip"><div class="name">balloon.rs</div><div class="role">balloon state + wind advection</div></div>
+        <div class="chip"><div class="name">atmosphere.rs</div><div class="role">ISA pressure/temperature/density by altitude</div></div>
         <div class="chip"><div class="name">tower.rs</div><div class="role">tower state</div></div>
         <div class="chip"><div class="name">wind_field.rs</div><div class="role">WindField, Rust copy</div></div>
-        <div class="chip"><div class="name">link_detection.rs</div><div class="role">compute_grid_edges + brute-force oracle for tests</div></div>
+        <div class="chip"><div class="name">beacon.rs</div><div class="role">decentralized discovery — what each balloon believes it can reach</div></div>
+        <div class="chip"><div class="name">bundle.rs</div><div class="role">store-and-forward telemetry, relay queues, tower acks</div></div>
+        <div class="chip"><div class="name">telemetry.rs</div><div class="role">the sensor block carried in each bundle</div></div>
+        <div class="chip"><div class="name">link_detection.rs</div><div class="role">true connectivity — compute_grid_edges + brute-force oracle for tests</div></div>
         <div class="chip"><div class="name">spatial_grid.rs</div><div class="role">SpatialGrid, used by link_detection</div></div>
         <div class="chip"><div class="name">union_find.rs</div><div class="role">UnionFind for network components</div></div>
         <div class="chip"><div class="name">geo.rs</div><div class="role">horizon_km, precompute</div></div>
@@ -398,16 +408,19 @@
     <h3>Field notes</h3>
     <dl>
       <dt>Authority</dt>
-      <dd>All balloon physics and radio-link detection run server-side in <span class="file">sim-server</span>. The browser is a thin renderer that reconciles Cesium entities against whatever it's sent and forwards user actions as REST commands — it computes nothing itself.</dd>
+      <dd>All balloon physics, radio-link detection, and the comms protocol run server-side in <span class="file">sim-server</span>. The browser is a thin renderer that reconciles Cesium entities against whatever it's sent and forwards user actions as REST commands — it holds no simulation state of its own.</dd>
+
+      <dt>Belief vs. truth</dt>
+      <dd><span class="file">link_detection.rs</span> computes the true connectivity graph; <span class="file">beacon.rs</span> computes what each balloon <em>believes</em> it can reach, from beacons it actually received. Both ride on every <span class="file">Snapshot</span> — the gap between them is where the interesting failures live, and it's what the belief-vs-truth overlay renders.</dd>
 
       <dt>Single wind fetch</dt>
-      <dd><span class="file">sim-server</span> is now the sole client of <span class="file">wind_backend.py</span>. It fetches the field once at startup, holds it as a shared <span class="file">Arc</span>, and re-serves it over its own <span class="file">GET /api/wind-levels</span>. The browser fetches its (arrows-only) copy from sim-server in the background, not from Python directly — one fetch to Python, one payload in memory.</dd>
+      <dd><span class="file">sim-server</span> is the sole client of <span class="file">wind_backend.py</span>. It fetches the field once at startup, holds it as a shared <span class="file">Arc</span>, and re-serves it over its own <span class="file">GET /api/wind-levels</span>. The browser fetches its (arrows-only) copy from sim-server in the background, not from Python directly — one fetch to Python, one payload in memory.</dd>
 
       <dt>Paused, synced</dt>
       <dd>Pause state and the horizon-refraction coefficient both live on <span class="file">World</span> and are broadcast in every <span class="file">Snapshot</span>, so all connected tabs stay in sync. Controls POST the desired change and wait for the server to echo it back rather than flipping optimistically, avoiding races with in-flight snapshots.</dd>
 
-      <dt>Not in the loop</dt>
-      <dd><span class="file">weather-data-server/get_wind_data.py</span> is an older, separate prototype script — not part of the running app. The live backend is <span class="file">wind_backend.py</span>.</dd>
+      <dt>Falling behind</dt>
+      <dd>Every <span class="file">Snapshot</span> carries <span class="file">serverTimeMs</span>. A client that falls behind is sent the newest snapshot rather than a growing backlog, and the frontend surfaces its own view lag rather than silently drifting.</dd>
     </dl>
   </div>
 

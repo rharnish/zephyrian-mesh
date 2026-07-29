@@ -228,20 +228,20 @@
     <div class="box client">
       <span class="tag">client</span>
       <h2>Browser — Vite + CesiumJS</h2>
-      <p>Renders the globe, balloons, towers and radio links. Computes nothing — reconciles whatever the sim-server sends and forwards user actions back to it.</p>
+      <p>Renders the globe, balloons, towers, radio links, and the belief-vs-truth overlay. Holds no simulation state — reconciles whatever sim-server sends and forwards user actions back to it.</p>
     </div>
 
     <div class="link">
       <span class="rule"></span>
       <span class="proto">WS + REST</span>
-      <span class="detail">live snapshots over WebSocket (balloons, towers, edges, paused, horizon coeff); user actions (add tower, set balloon count, pause…) over REST</span>
+      <span class="detail">live snapshots over WebSocket (balloons, towers, edges, believed connectivity, mesh health, paused, serverTimeMs); user actions (add tower, set balloon count, pause…) over REST</span>
       <span class="rule"></span>
     </div>
 
     <div class="box sim">
       <span class="tag">sim-server</span>
       <h2>Rust — Axum, authoritative</h2>
-      <p>Owns the one true simulation state: balloon physics, wind advection, radio-link detection. Broadcasts a snapshot every tick. Also re-serves its wind data to the browser.</p>
+      <p>Owns the one true simulation state: balloon physics, wind advection, true radio-link detection, and the comms protocol — beacons, believed connectivity, and store-and-forward telemetry bundles. Broadcasts a snapshot every tick. Also re-serves its wind data to the browser.</p>
     </div>
 
     <div class="link">
