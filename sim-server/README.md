@@ -3,7 +3,7 @@
 ## What this is
 
 `sim-server` is a standalone Rust binary implementing **Plan B** from
-[`../RUST_SIM_PLAN.md`](../RUST_SIM_PLAN.md): the balloon/tower simulation
+[`docs/history/RUST_SIM_PLAN.md`](../docs/history/RUST_SIM_PLAN.md): the balloon/tower simulation
 (wind advection, altitude control, radio-link detection) runs here instead
 of in the browser. It's a separate long-running process — not a library the
 browser loads directly (that would be Plan A, the WASM approach; not built).
@@ -48,7 +48,7 @@ another *client* of it, the same way the browser used to be.
    count, change horizon coefficient) go out as REST calls to `sim-server`
    (`POST /api/towers`, `DELETE /api/towers/:id`,
    `POST /api/balloons/count`, `POST /api/horizon-coeff`) rather than
-   mutating anything locally. This wiring is done (see `RUST_SIM_PLAN.md`,
+   mutating anything locally. This wiring is done (see `docs/history/RUST_SIM_PLAN.md`,
    section B6, and the "Client wiring" section below for specifics).
 
 The panel's old "Verify links now" / "Debug: catch missed brief passes"
@@ -121,7 +121,7 @@ the `pole_wraparound_edges_are_not_missed` test and the comment in
 
 ## Running it
 
-See [`../RUNNING.md`](../RUNNING.md) for the full three-process startup
+See [`HOW-TO-RUN.md`](../HOW-TO-RUN.md) for the full three-process startup
 sequence (wind backend, sim-server, frontend) and troubleshooting. Short
 version, just this server:
 

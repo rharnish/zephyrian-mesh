@@ -5,7 +5,7 @@ ground truth (groundedPct, from union-find) vs. what balloons *believe*
 (believedGroundedPct) vs. what the real decentralized protocol actually
 delivers — completion rate, raw delivered/originated, and delivered-but-
 unacknowledged/originated — all plotted against **mean node degree** rather
-than balloon count or horizon coefficient, because MESH_COMMS_DESIGN.md §1.1
+than balloon count or horizon coefficient, because docs/design/MESH_COMMS_DESIGN.md §1.1
 found degree is the real control variable: sweeps over balloon count and
 horizon coefficient collapse onto the same curve when read by degree. That
 collapse is what makes one clean chart possible instead of a grid of

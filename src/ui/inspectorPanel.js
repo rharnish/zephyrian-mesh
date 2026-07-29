@@ -13,7 +13,7 @@ import {
 
 // ---------------------------------------------------------------------------
 // InspectorPanel — the per-balloon readout shown on selection, plus the comms
-// log that sits below it (MESH_COMMS_DESIGN.md §3).
+// log that sits below it (docs/design/MESH_COMMS_DESIGN.md §3).
 //
 // No Cesium import: it renders snapshot data and the comms query response as
 // HTML, nothing more. Colors arrive from overlays.js as CSS strings for the
@@ -210,7 +210,7 @@ export class InspectorPanel {
       <div style="margin-top:6px; opacity:0.55; font-style:italic; line-height:1.4;">
         Measurements (gas, ballast, temperature, humidity) and the message log /
         tamper chain will appear here once those systems are built — see
-        MESH_COMMS_DESIGN.md.
+        docs/design/MESH_COMMS_DESIGN.md.
       </div>
     `;
   }

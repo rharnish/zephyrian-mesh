@@ -245,7 +245,7 @@ async fn set_paused(State(state): State<AppState>, Json(body): Json<SetPausedBod
     axum::http::StatusCode::ACCEPTED
 }
 
-// The first *query* endpoint (§3/C4 of MESH_COMMS_DESIGN.md) — every handler
+// The first *query* endpoint (§3/C4 of docs/design/MESH_COMMS_DESIGN.md) — every handler
 // above just fires a Command and returns 202. `World` lives entirely inside
 // the sim task (see the `tokio::spawn` in `main`), so reading it means
 // round-tripping a request through the same command channel and waiting on a

@@ -2,7 +2,7 @@
 # Launches wind_backend.py, sim-server, and the Vite frontend, in order,
 # waiting for each to be ready before starting the next. Runs the frontend
 # in the foreground so its output is visible here; Ctrl-C (or any exit)
-# stops all three together. See RUNNING.md for the manual/three-terminal
+# stops all three together. See HOW-TO-RUN.md for the manual/three-terminal
 # version of this same sequence.
 #
 # Usage: ./run-all.sh [--local] [-h|--help]

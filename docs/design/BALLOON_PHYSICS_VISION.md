@@ -2,9 +2,9 @@
 
 Design notes (thinking, not yet an implementation plan) for making balloon vertical dynamics
 physically real — buoyancy driven by ballast and lift gas, with a command uplink that acts through
-those finite actuators. Companion to `MESH_COMMS_DESIGN.md` (the comms half, which is independent
-of this one — see "Relationship to the comms track" below), `WEATHER_BACKEND_PLAN.md`, and
-`RUST_SIM_PLAN.md`. `TIMING_MODEL.md` converts the simulation's clocks into seconds — relevant
+those finite actuators. Companion to `docs/design/MESH_COMMS_DESIGN.md` (the comms half, which is independent
+of this one — see "Relationship to the comms track" below), `docs/design/WEATHER_BACKEND_PLAN.md`, and
+`docs/history/RUST_SIM_PLAN.md`. `docs/design/TIMING_MODEL.md` converts the simulation's clocks into seconds — relevant
 here because `TICK_DT_SECONDS` and `TIME_SCALE` set how fast the physics below actually runs.
 
 ## Where things stand today
@@ -66,7 +66,7 @@ lighter option remains a fallback if budget forces it.
 New per-balloon commands (extend the `Command` enum + REST, mirroring the existing
 `AddTower`/`SetHorizonRefractionCoeff` endpoints in `sim-server/src/main.rs`):
 `SetTargetAltitude{id, alt}`, `DropBallast{id, kg}`, `VentGas{id, moles}`, and `RotateKey{id}`
-(key rotation — see §2 of `MESH_COMMS_DESIGN.md`).
+(key rotation — see §2 of `docs/design/MESH_COMMS_DESIGN.md`).
 
 Two delivery channels, which the sim distinguishes (and the UI visualizes):
 - **Satellite**: always reachable (optionally with a latency), can command any balloon anytime.
@@ -92,7 +92,7 @@ beam vs. a highlighted radio path through the mesh.
 ## Relationship to the comms track
 
 **The comms track does not depend on this one, and this one does not depend on it.** The only
-coupling runs comms → physics, in two places, and `MESH_COMMS_DESIGN.md` names both:
+coupling runs comms → physics, in two places, and `docs/design/MESH_COMMS_DESIGN.md` names both:
 
 - Its telemetry bundle carries an environmental sensor block whose temperature and pressure come
   from the `atmosphere.rs` ISA model in §1 above. **This coupling is now resolved**: the comms

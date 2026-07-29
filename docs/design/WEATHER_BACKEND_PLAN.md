@@ -10,7 +10,7 @@ The Python backend serves one static ERA5 snapshot — a single hour from June 1
 downloaded from the [Copernicus CDS](https://cds.climate.copernicus.eu/) — over
 `GET /api/wind-levels` (`weather-data-server/wind_backend.py`). That payload is the whole
 global grid, all pressure levels, JSON-encoded nested float arrays: ~356MB, ~55s to serve
-(see `WIND_TRANSFER_PERF.md`).
+(see `docs/investigations/WIND_TRANSFER_PERF.md`).
 
 Two independent clients fetch that same payload:
 
@@ -72,7 +72,7 @@ individual parameterized slices on request.
 The blocking prerequisite is still the payload: one snapshot is already 356MB/55s, so N
 timepoints served the naive way is tens of GB. Fixing this = the parameterized query interface
 (§1) + a cheaper encoding (binary/typed arrays, higher stride, fewer levels, gzip). See
-`WIND_TRANSFER_PERF.md` for the encoding options.
+`docs/investigations/WIND_TRANSFER_PERF.md` for the encoding options.
 
 ### Open fork (deferred)
 

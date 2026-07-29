@@ -1,7 +1,7 @@
 # Rust simulation core — two implementation plans
 
 **Status: Plan B is built and running** — see
-[`sim-server/README.md`](sim-server/README.md) for the current
+[`sim-server/README.md`](../../sim-server/README.md) for the current
 architecture, how the pieces fit together, and how to run it. This
 document is kept for reference (the reasoning behind the two options,
 and Plan A's steps if that's ever picked up later) rather than as a

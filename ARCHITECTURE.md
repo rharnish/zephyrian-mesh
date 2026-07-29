@@ -1,81 +1,125 @@
 # Architecture
 
-Three processes, started together by `run-all.sh` (see [RUNNING.md](RUNNING.md)):
+Three processes, started together by `run-all.sh` (see [HOW-TO-RUN.md](HOW-TO-RUN.md)):
 
 ```mermaid
 flowchart TB
-    subgraph client["Browser Client — Vite + CesiumJS (src/)"]
-        main["main.js<br/>orchestrator: init Cesium viewer,<br/>reconcile balloons/towers, wire UI"]
-        config_js["config.js<br/>URLs & params"]
-        windField_js["windField.js<br/>WindField model"]
-        windVectors["windVectors.js<br/>wind arrow visualization"]
-        tower_js["tower.js / towerModel.js<br/>tower rendering"]
-        geo_js["geo.js<br/>geo math helpers"]
+    subgraph client["Browser — Vite + CesiumJS (src/)"]
+        main["main.js<br/>orchestrator: init viewer, own<br/>the snapshot loop, wire panels"]
+        simClient["simClient.js<br/>every sim-server conversation:<br/>ws stream in, REST commands out"]
 
-        main --> config_js
-        main --> windField_js
-        main --> windVectors
-        main --> tower_js
-        main --> geo_js
+        subgraph layers["Rendering layers"]
+            balloonLayer["balloonLayer.js<br/>balloon entity reconciliation"]
+            linkLayer["linkLayer.js<br/>radio-link polylines"]
+            commsReplay["commsReplay.js<br/>bundle packet animation"]
+            windVectors["windVectors.js<br/>wind arrow overlay"]
+            towerRender["tower.js / towerModel.js"]
+        end
+
+        subgraph panels["UI panels (src/ui/)"]
+            controlPanel["controlPanel.js<br/>controls + mesh health"]
+            inspectorPanel["inspectorPanel.js<br/>per-balloon inspect,<br/>comms log"]
+        end
+
+        subgraph pure["Pure helpers (unit-tested)"]
+            overlays["overlays.js<br/>overlay classification<br/>+ palette"]
+            balloonIcon["balloonIcon.js<br/>glyph canvases"]
+            cesiumColor["cesiumColor.js"]
+            geo_js["geo.js"]
+            config_js["config.js"]
+        end
+
+        main --> simClient
+        main --> layers
+        main --> panels
+        layers --> pure
+        panels --> pure
     end
 
     subgraph sim["sim-server — Rust / Axum (sim-server/src/)"]
         main_rs["main.rs<br/>owns the single World task,<br/>ws + REST routes"]
-        sim_rs["sim.rs<br/>World: tick loop, Command handling,<br/>Snapshot broadcast"]
-        balloon_rs["balloon.rs<br/>balloon state + advection"]
-        tower_rs["tower.rs<br/>tower state"]
-        wind_field_rs["wind_field.rs<br/>WindField (Rust copy)"]
-        link_detection["link_detection.rs<br/>compute_grid_edges<br/>(+ brute-force oracle for tests)"]
-        spatial_grid["spatial_grid.rs<br/>SpatialGrid"]
-        union_find["union_find.rs<br/>UnionFind"]
-        geo_rs["geo.rs<br/>horizon_km, precompute"]
-        config_rs["config.rs<br/>tunables (tick rate,<br/>balloon count, ports...)"]
+        sim_rs["sim.rs<br/>World: tick loop, Commands,<br/>Snapshot broadcast"]
+
+        subgraph physics["Physics"]
+            balloon_rs["balloon.rs<br/>advection + altitude"]
+            atmosphere["atmosphere.rs<br/>ISA pressure/temp/density"]
+            wind_field_rs["wind_field.rs"]
+            tower_rs["tower.rs"]
+        end
+
+        subgraph comms["Comms protocol"]
+            beacon["beacon.rs<br/>decentralized discovery:<br/>believed connectivity"]
+            bundle["bundle.rs<br/>store-and-forward telemetry,<br/>relay queues, tower acks"]
+            telemetry["telemetry.rs<br/>sensor block"]
+            ablation["ablation.rs<br/>protocol variants"]
+        end
+
+        subgraph topo["True topology"]
+            link_detection["link_detection.rs<br/>compute_grid_edges<br/>(+ brute-force oracle)"]
+            spatial_grid["spatial_grid.rs"]
+            union_find["union_find.rs"]
+            geo_rs["geo.rs"]
+        end
+
+        config_rs["config.rs<br/>tunables"]
 
         main_rs --> sim_rs
-        sim_rs --> balloon_rs
-        sim_rs --> tower_rs
-        sim_rs --> wind_field_rs
-        sim_rs --> link_detection
+        sim_rs --> physics
+        sim_rs --> comms
+        sim_rs --> topo
+        sim_rs --> config_rs
+        balloon_rs --> atmosphere
         link_detection --> spatial_grid
         link_detection --> geo_rs
-        sim_rs --> union_find
-        sim_rs --> config_rs
     end
 
     subgraph wind["weather-data-server — Python / FastAPI"]
         wind_backend["wind_backend.py<br/>serves ERA5 pressure-level<br/>wind data via xarray"]
     end
 
-    main -- "WebSocket /ws<br/>(Snapshot: balloons, towers, edges,<br/>paused, horizonRefractionCoeff)" --> main_rs
-    main -- "REST: POST/DELETE /api/towers,<br/>POST /api/balloons/count,<br/>POST /api/horizon-coeff,<br/>POST /api/paused" --> main_rs
-    main -- "GET /api/wind-levels<br/>(background, for arrow overlay)" --> main_rs
-    main_rs -- "GET /api/wind-levels<br/>(startup, for balloon advection)" --> wind_backend
+    simClient -- "WebSocket /ws<br/>(Snapshot: balloons, towers, edges, beliefs,<br/>mesh health, paused, serverTimeMs)" --> main_rs
+    simClient -- "REST: /api/towers, /api/balloons/count,<br/>/api/horizon-coeff, /api/paused,<br/>/api/balloons/:id/comms" --> main_rs
+    simClient -- "GET /api/wind-levels<br/>(background, for arrow overlay)" --> main_rs
+    main_rs -- "GET /api/wind-levels<br/>(startup, for advection)" --> wind_backend
 ```
 
 ## Notes
 
-- **sim-server is authoritative.** All balloon physics and radio-link detection
-  (`link_detection.rs`, ported from the original `linkDetection.js`) run
-  server-side in a single task that owns `World` exclusively — no locks.
-  Mutations arrive as `Command`s over an `mpsc` channel; state goes out as
-  JSON `Snapshot`s over a `broadcast` channel to every connected client.
-- **The browser client is a thin renderer.** `src/main.js` holds no physics
-  or link-detection logic; it reconciles Cesium entities against whatever
-  `sim-server` broadcasts and forwards user actions as REST commands. It also
-  supports click-to-inspect: clicking a balloon selects it and opens an
-  inspector panel with its live lat/lon/altitude, refreshed each snapshot.
-- **`sim-server` is the sole client of the weather backend.** It fetches the
-  wind field once at startup (for advection) and falls back to zero wind if
-  `wind_backend.py` isn't running. It holds that field as a shared `Arc` and
-  re-serves it over its own `GET /api/wind-levels`, so the browser's
-  (arrows-only) copy — slow to transfer, ~55s / 356MB, see
-  `WIND_TRANSFER_PERF.md` — comes from `sim-server`, not from Python
-  directly. One fetch to Python, one payload in memory.
-- **Pause and slider values are broadcast, not local.** A `SetPaused`
-  command and `paused` flag on `World` back a `POST /api/paused` endpoint;
-  when paused, `World::tick` freezes physics/link recomputation. Both
-  `paused` and `horizonRefractionCoeff` are included in every `Snapshot` so
-  all connected tabs stay in sync — controls POST the desired value and wait
-  for the server to echo it back rather than flipping optimistically.
-- **`weather-data-server/get_wind_data.py`** is a separate, older prototype
-  script (not part of the running app) — the live backend is `wind_backend.py`.
+- **sim-server is authoritative.** All balloon physics, radio-link detection, and
+  the comms protocol run server-side in a single task that owns `World`
+  exclusively — no locks. Mutations arrive as `Command`s over an `mpsc` channel;
+  state goes out as JSON `Snapshot`s over a `broadcast` channel to every client.
+
+- **The browser is a thin renderer.** It holds no simulation state — it reconciles
+  Cesium entities against whatever `sim-server` broadcasts and forwards user
+  actions as REST commands. Controls POST a desired value and wait for the server
+  to echo it back rather than flipping optimistically, so every connected tab
+  stays in sync.
+
+- **Belief and truth are computed separately.** `link_detection.rs` computes the
+  true connectivity graph; `beacon.rs` computes what each balloon *believes* it
+  can reach, from beacons it actually received. Both ride on every `Snapshot`,
+  which is what makes the belief-vs-truth overlay possible. See
+  [`docs/design/MESH_COMMS_DESIGN.md`](docs/design/MESH_COMMS_DESIGN.md).
+
+- **Snapshots carry `serverTimeMs`.** A client that falls behind is sent the
+  newest snapshot rather than a backlog, and the frontend surfaces its own view
+  lag. See [`docs/investigations/`](docs/investigations/) and the `diagnose-lag`
+  skill.
+
+- **`sim-server` is the sole client of the weather backend.** It fetches the wind
+  field once at startup and falls back to zero wind if `wind_backend.py` isn't
+  running. It holds that field as a shared `Arc` and re-serves it over its own
+  `GET /api/wind-levels`, so the browser's arrows-only copy — slow to transfer,
+  ~55s / 356MB, see
+  [`docs/investigations/WIND_TRANSFER_PERF.md`](docs/investigations/WIND_TRANSFER_PERF.md)
+  — comes from `sim-server`, not from Python directly.
+
+- **Offline experiment binaries** live in `sim-server/src/bin/` and share the
+  simulation code through `lib.rs`: `protocol_sweep`, `bundle_delivery`,
+  `beacon_convergence`, `mesh_depth`, `connectivity_sweep`, `telemetry_records`,
+  and `timing` (which asserts the timing model can't rot). Results land in
+  [`experiments/`](experiments/).
+
+- **`weather-data-server/get_wind_data.py`** is a separate, older prototype script
+  (not part of the running app) — the live backend is `wind_backend.py`.

@@ -1,5 +1,5 @@
 // Mirrors the constants in cesium-app/src/config.js that the sim loop needs.
-// Keep these in sync by hand for now — see RUST_SIM_PLAN.md.
+// Keep these in sync by hand for now — see docs/history/RUST_SIM_PLAN.md.
 
 pub const BALLOON_MIN_ALT: f64 = 1000.0; // meters
 pub const BALLOON_MAX_ALT: f64 = 25000.0; // meters
@@ -51,7 +51,7 @@ pub const COMMS_EVERY_N_TICKS: u64 = 8;
 /// physical durations rather than counts.
 pub const COMMS_ROUND_SIM_SECONDS: f64 = COMMS_EVERY_N_TICKS as f64 * TICK_DT_SECONDS * TIME_SCALE;
 
-// --- Beacon-based connectivity discovery (see MESH_COMMS_DESIGN.md §1).
+// --- Beacon-based connectivity discovery (see docs/design/MESH_COMMS_DESIGN.md §1).
 //
 // What makes discovery slow here is radio *duty cycling*, not propagation
 // delay: links survive for hours of sim time (a balloon drifts ~0.4% of link
@@ -82,7 +82,7 @@ pub const BELIEF_MAX_AGE_ROUNDS: u64 = 60;
 /// anyway (see mesh_depth.rs). Also bounds distance-vector count-to-infinity.
 pub const BEACON_MAX_HOPS: u32 = 20;
 
-// --- Telemetry bundles (C2, see MESH_COMMS_DESIGN.md §1 and §4) -------------
+// --- Telemetry bundles (C2, see docs/design/MESH_COMMS_DESIGN.md §1 and §4) -------------
 //
 // Bundles advance one hop per *duty-cycle slot*, not per round: a bundle moves
 // only when the balloon holding it wakes to transmit, which is the same slot it
@@ -108,7 +108,7 @@ pub const BEACON_MAX_HOPS: u32 = 20;
 /// ~5.9/round this constant offers, so the demand sweep above would come out
 /// differently today and should be re-run before being quoted. 200 is kept
 /// because it puts the mesh visibly under load without being hopeless.
-/// See docs/bundle-delivery-report.html §5–§7 and MESH_COMMS_DESIGN.md §4.
+/// See docs/investigations/bundle-delivery-report.html §5–§7 and docs/design/MESH_COMMS_DESIGN.md §4.
 pub const BUNDLE_INTERVAL_ROUNDS: u64 = 200;
 /// How long a bundle may go unresolved before it is given up on. Must exceed a
 /// deep-path traversal (14 hops x BEACON_INTERVAL_ROUNDS = 70 rounds) or bundles
@@ -173,7 +173,7 @@ pub const RELAY_QUEUE_CAPACITY: usize = 8;
 /// the measured bottleneck.
 ///
 /// Set to 1 this reproduces the old one-bundle-per-slot behaviour exactly, which
-/// is how the two were compared (see docs/bundle-delivery-report.html §5): delivery
+/// is how the two were compared (see docs/investigations/bundle-delivery-report.html §5): delivery
 /// is capped by the ~23 balloons that can hear a tower, so the last hop is the
 /// only place throughput can come from.
 ///
@@ -202,7 +202,7 @@ pub const BUNDLE_MAX_HOPS: usize = 20;
 /// rule of its own.
 pub const ACK_QUEUE_CAPACITY: usize = 4;
 
-// --- Telemetry records (see MESH_COMMS_DESIGN.md §1) -------------------------
+// --- Telemetry records (see docs/design/MESH_COMMS_DESIGN.md §1) -------------------------
 //
 /// How many telemetry records a balloon retains locally. Records are created
 /// 1:1 with bundle origination, so at BUNDLE_INTERVAL_ROUNDS = 200 a 720-round

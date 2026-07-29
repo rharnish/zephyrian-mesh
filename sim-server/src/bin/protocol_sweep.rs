@@ -108,7 +108,7 @@ struct ResultRow {
     mean_tower_adjacent: f64,
     /// The last-hop ceiling (BundleStats::delivery_capacity_per_round) — at a
     /// glance, is this combo mesh-bound or ground-link-bound? See §4 of
-    /// MESH_COMMS_DESIGN.md.
+    /// docs/design/MESH_COMMS_DESIGN.md.
     delivery_ceiling_per_round: f64,
 }
 

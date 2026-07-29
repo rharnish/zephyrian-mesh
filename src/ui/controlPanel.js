@@ -236,7 +236,7 @@ export class ControlPanel {
       </div>
       <!-- Belief vs. truth. Balloons only know what beacons told them, so
            their belief lags reality (stale) or trails behind it (unaware).
-           See MESH_COMMS_DESIGN.md §1. -->
+           See docs/design/MESH_COMMS_DESIGN.md §1. -->
       <div style="${SECTION}">
         <div style="${CHECKBOX_ROW}">
           <input id="beliefOverlayToggle" type="checkbox" />
@@ -248,7 +248,7 @@ export class ControlPanel {
       </div>
       <!-- Last-delivery overlay. Server truth about how each balloon's most
            recent bundle actually got through — radio mesh vs. satellite
-           release valve. See MESH_COMMS_DESIGN.md §3/§4. -->
+           release valve. See docs/design/MESH_COMMS_DESIGN.md §3/§4. -->
       <div style="${SECTION}">
         <div style="${CHECKBOX_ROW}">
           <input id="deliveryOverlayToggle" type="checkbox" />

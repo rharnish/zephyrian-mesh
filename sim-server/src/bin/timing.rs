@@ -2,7 +2,7 @@
 //
 // Everything is scheduled in ticks, which suits the code and defeats reasoning.
 // This binary is the arithmetic, computed from the live constants so it cannot
-// go stale the way a hand-written table does. `TIMING_MODEL.md` is the prose
+// go stale the way a hand-written table does. `docs/design/TIMING_MODEL.md` is the prose
 // version — if the two disagree, this one is right and the doc needs updating.
 //
 //   cargo run --release --bin timing

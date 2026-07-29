@@ -10,7 +10,7 @@
 // in the inspector's verdict table, and again in the panel's legend markup —
 // and could drift apart silently.
 
-// Belief-vs-truth overlay (MESH_COMMS_DESIGN.md §3). The server sends each
+// Belief-vs-truth overlay (docs/design/MESH_COMMS_DESIGN.md §3). The server sends each
 // balloon's own belief (`believedHops`, learned only from beacons that reached
 // it) alongside the union-find ground truth (`grounded`). The two disagreeing
 // is the expected behavior of a duty-cycled mesh, not an error — this overlay
@@ -37,7 +37,7 @@ export const BELIEF_VERDICT = {
   none: 'isolated, and knows it',
 };
 
-// Last-delivery overlay (MESH_COMMS_DESIGN.md §3). `lastChannel` is server
+// Last-delivery overlay (docs/design/MESH_COMMS_DESIGN.md §3). `lastChannel` is server
 // truth about how a balloon's most recently *resolved* bundle actually got
 // through — deliberately not something the balloon itself could report, since
 // satellite delivery is silent to the origin (see bundle.rs).

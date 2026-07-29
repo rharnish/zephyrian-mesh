@@ -1,4 +1,4 @@
-// Telemetry bundles — C2 of MESH_COMMS_DESIGN.md.
+// Telemetry bundles — C2 of docs/design/MESH_COMMS_DESIGN.md.
 //
 // A bundle is data a balloon wants on the ground. It gets there by being handed
 // balloon to balloon along each holder's *believed* next hop — a local, possibly
@@ -48,7 +48,7 @@
 // `Balloon::outstanding`) is deliberately poorer than what these stats can
 // see: satellite delivery is silent to the origin, so "never arrived",
 // "arrived but the ack died", and "arrived via satellite" are all
-// indistinguishable from inside, by construction. See MESH_COMMS_DESIGN.md §4.
+// indistinguishable from inside, by construction. See docs/design/MESH_COMMS_DESIGN.md §4.
 
 use crate::balloon::Balloon;
 use crate::beacon::MeshAdjacency;
@@ -209,7 +209,7 @@ pub struct BundleStats {
     pub dropped_ttl: u64,
     /// Bundles that aged past BUNDLE_MAX_AGE_ROUNDS before reaching a tower and
     /// were handed to satellite instead of dropped — the release valve for a
-    /// structurally saturated ground link (see MESH_COMMS_DESIGN.md §4).
+    /// structurally saturated ground link (see docs/design/MESH_COMMS_DESIGN.md §4).
     pub satellite: u64,
     /// Handoffs that failed because the receiver was already carrying. Not a
     /// loss — the sender keeps the bundle and retries on its next slot — so this
@@ -754,7 +754,7 @@ mod tests {
 
         // The origin's own retained record now carries the recorded path and
         // the channel it went out on — the data the C4 animated-packet view
-        // reads (MESH_COMMS_DESIGN.md §3).
+        // reads (docs/design/MESH_COMMS_DESIGN.md §3).
         let outstanding = balloons[3].outstanding.as_ref().unwrap();
         assert_eq!(outstanding.channel, Some(Channel::Radio));
         assert_eq!(outstanding.path.as_deref(), Some(&[3, 2, 1, 0][..]));

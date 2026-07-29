@@ -17,7 +17,7 @@ sometimes wrong. Everything interesting lives in the gap between that belief
 and the true connectivity graph, which the simulator computes separately so
 the two can be compared.
 
-Explored in [`MESH_COMMS_DESIGN.md`](MESH_COMMS_DESIGN.md); the
+Explored in [`docs/design/MESH_COMMS_DESIGN.md`](docs/design/MESH_COMMS_DESIGN.md); the
 belief-vs-truth divergence is plotted in
 [`experiments/protocol-results/`](experiments/protocol-results/).
 
@@ -32,9 +32,9 @@ belief-vs-truth divergence is plotted in
 | `docs/` | Written-up investigations and protocol diagrams. |
 
 Design notes worth reading first:
-[`MESH_COMMS_DESIGN.md`](MESH_COMMS_DESIGN.md) (the comms protocol),
-[`TIMING_MODEL.md`](TIMING_MODEL.md) (every clock in the system, in seconds),
-and [`BALLOON_PHYSICS_VISION.md`](BALLOON_PHYSICS_VISION.md) (where the
+[`docs/design/MESH_COMMS_DESIGN.md`](docs/design/MESH_COMMS_DESIGN.md) (the comms protocol),
+[`docs/design/TIMING_MODEL.md`](docs/design/TIMING_MODEL.md) (every clock in the system, in seconds),
+and [`docs/design/BALLOON_PHYSICS_VISION.md`](docs/design/BALLOON_PHYSICS_VISION.md) (where the
 buoyancy model is headed).
 
 ## How to build and run
@@ -45,7 +45,7 @@ never commit your real token).
 
 The app needs three processes running together (wind data backend, the
 Rust simulation server, and the Vite frontend) — see
-[`RUNNING.md`](RUNNING.md) for exact commands, startup order, and
+[`HOW-TO-RUN.md`](HOW-TO-RUN.md) for exact commands, startup order, and
 troubleshooting. Short version:
 
 ```bash
@@ -54,7 +54,7 @@ npm install   # first time only
 ```
 
 `run-all.sh` starts all three in order and stops them together on Ctrl-C.
-See `RUNNING.md` for the manual three-terminal version, if you'd rather
+See `HOW-TO-RUN.md` for the manual three-terminal version, if you'd rather
 watch each server's output separately.
 
 Opens a globe with animated balloons and towers — everything (globe,

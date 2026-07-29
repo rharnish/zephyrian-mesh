@@ -32,8 +32,8 @@ eyeballing the CSV.
 ## 2. Write — `experiments/sweep-summary-<variant>.md`
 
 Follow the structure of the existing summaries
-([`sweep-summary-js.md`](../../experiments/legacy-js/sweep-summary-js.md),
-[`sweep-summary-rust.md`](../../experiments/sweep-summary-rust.md)):
+([`sweep-summary-js.md`](../../../experiments/legacy-js/sweep-summary-js.md),
+[`sweep-summary-rust.md`](../../../experiments/sweep-summary-rust.md)):
 header with Chart/Data/Generator links, "What was measured", a headline
 finding, secondary-parameter effects, a practical takeaway, and a
 Limitations section. Use the script's tables verbatim for the numbers; write
