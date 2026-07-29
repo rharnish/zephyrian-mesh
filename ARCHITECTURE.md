@@ -120,6 +120,3 @@ flowchart TB
   `beacon_convergence`, `mesh_depth`, `connectivity_sweep`, `telemetry_records`,
   and `timing` (which asserts the timing model can't rot). Results land in
   [`experiments/`](experiments/).
-
-- **`weather-data-server/get_wind_data.py`** is a separate, older prototype script
-  (not part of the running app) — the live backend is `wind_backend.py`.
