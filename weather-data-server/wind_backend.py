@@ -130,8 +130,8 @@ def _read_source_config():
     if not os.path.exists(SOURCE_CONFIG):
         raise SourceProblem(
             f"No source config at {SOURCE_CONFIG}.\n"
-            f'Create it with at least:  {{"file": "your-data.nc"}}\n'
-            f"See README.md."
+            f"Copy wind_source_template.json to wind_source.json and edit "
+            f'"file" to point at your own data. See README.md.'
         )
     try:
         with open(SOURCE_CONFIG) as fh:

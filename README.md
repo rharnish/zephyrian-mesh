@@ -37,11 +37,33 @@ Design notes worth reading first:
 and [`docs/design/BALLOON_PHYSICS_VISION.md`](docs/design/BALLOON_PHYSICS_VISION.md) (where the
 buoyancy model is headed).
 
+## User-specific setup
+
+A few things are personal to your machine and deliberately not committed —
+each has a template checked into git that you copy and fill in yourself:
+
+| What | Template → your copy | Why it's not just committed |
+| --- | --- | --- |
+| Cesium Ion access token | `src/user-config-template.json` → `src/user-config.json` | It's a secret credential. |
+| Which ERA5 file to serve | `weather-data-server/wind_source_template.json` → `weather-data-server/wind_source.json` | It names *your* downloaded file by its opaque Copernicus hash — nobody else has that exact file. |
+
+Both real files are gitignored; only the `-template` versions are tracked.
+Without them: the frontend can't load Cesium's globe imagery/terrain (no
+token), and `wind_backend.py` serves a synthetic analytic jet stream instead
+of real reanalysis wind (no data file configured) — both fail soft with an
+explanatory message rather than crashing.
+
+One more requirement that lives outside the repo entirely: acquiring ERA5
+data in the first place needs a Copernicus Climate Data Store API key in
+`~/.cdsapirc` — see
+[`weather-data-server/README.md`](weather-data-server/README.md#acquiring-your-own-data)
+for how to get one. You don't need this at all if you're fine with synthetic
+wind.
+
 ## How to build and run
 
-copy `src/user-config-template.json` to `src/user-config.json` and add your
-own Cesium Ion access token, etc. (`src/user-config.json` is gitignored —
-never commit your real token).
+Set up your Cesium Ion token first — see
+[User-specific setup](#user-specific-setup) above.
 
 The app needs three processes running together: the wind data backend, the
 Rust simulation server, and the Vite frontend.

@@ -30,7 +30,12 @@ So on a fresh clone there is no wind data. See
 
 There's no hardcoded filename. Copernicus names your download after an opaque
 request hash (`b2436709633b357f9ec6d77da9772ea0.nc`), so the file to serve lives
-in **`wind_source.json`**, which you edit by hand:
+in **`wind_source.json`** — copy `wind_source_template.json` to
+`wind_source.json` and edit it by hand:
+
+```bash
+cp wind_source_template.json wind_source.json
+```
 
 ```json
 {
@@ -39,6 +44,12 @@ in **`wind_source.json`**, which you edit by hand:
   "spatialStride": 2
 }
 ```
+
+`wind_source.json` is gitignored — it names *your* local file, which won't
+exist on anyone else's clone. `wind_source_template.json` is the committed
+placeholder (`"file": null`, i.e. synthetic wind until you point it
+somewhere real), the same pattern as `src/user-config-template.json` at the
+repo root.
 
 - **`file`** — path to a NetCDF file, relative to `data/` (or absolute).
   `null` means "no data": the server serves synthetic wind and says so.

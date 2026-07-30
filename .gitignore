@@ -11,6 +11,10 @@ lerna-debug.log*
 # committed placeholder — only the real, filled-in file is ignored)
 src/user-config.json
 
+# points at your own local ERA5 file by name (wind_source_template.json is
+# the committed placeholder — only the real, filled-in file is ignored)
+weather-data-server/wind_source.json
+
 # Raw ERA5 wind data (hundreds of MB to ~1GB of .nc/.grib files) — too large
 # for git, not source-controllable. wind_backend.py reads from here; see
 # weather-data-server/README.md for how to obtain it.

@@ -1,8 +1,8 @@
 {
-  "_comment": "Which wind data file wind_backend.py serves. Edit 'file' by hand. Run catalog_data.py to see what's in data/ and what to put here. See README.md.",
+  "_comment": "Copy this file to wind_source.json and edit 'file' to point at your own ERA5 download. Run catalog_data.py to see what's in data/ and what to put here. See README.md.",
 
   "_fileHelp": "Path to a NetCDF file, relative to data/ (or absolute). null means no data: the server serves synthetic wind and says so.",
-  "file": "67e68497a30d3b5946ac20a319b63fd4.nc",
+  "file": null,
 
   "_timeIndexHelp": "Which time step to serve, 0-based, if the file holds more than one.",
   "timeIndex": 0,
