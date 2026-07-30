@@ -92,6 +92,16 @@ wait_for_log() {
 }
 
 # --- 1. wind_backend.py (port 8000) ---------------------------------------
+# Warn before starting anything, not after. wind_backend.py falls back to
+# synthetic wind when it can't resolve a data file, and sim-server fetches wind
+# exactly once at its own startup — so by the time you notice, the fix is
+# "restart two services", three minutes later.
+if [[ ! -f weather-data-server/data/catalog.json && -z "${WIND_NETCDF_FILE:-}" ]]; then
+  echo "NOTE: no weather-data-server/data/catalog.json — wind will be synthetic." >&2
+  echo "      Generate one with:  (cd weather-data-server && ./.venv/bin/python catalog_data.py)" >&2
+  echo "      See weather-data-server/README.md to acquire ERA5 data." >&2
+fi
+
 if port_open 8000; then
   echo "Something is already listening on :8000 — assuming wind_backend.py is up, skipping."
 else

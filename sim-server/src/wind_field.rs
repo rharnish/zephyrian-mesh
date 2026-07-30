@@ -189,4 +189,46 @@ mod tests {
         let (u, _v) = f.sample(0.0, 10.0, 7000.0); // halfway between 5000 and 9000
         assert!((u - 50.0).abs() < 1e-9);
     }
+
+    /// Guards the wire contract with wind_backend.py.
+    ///
+    /// Every other test here builds `WindField` in Rust, so none of them would
+    /// notice if the Python payload's field names drifted -- and that failure is
+    /// invisible: `fetch_wind_field` falls back to `WindField::zero()` on a parse
+    /// error with a single warn!, so the sim comes up fine and balloons simply
+    /// never move. This test parses the real JSON instead.
+    ///
+    /// The `source` object is the additive metadata wind_backend.py attaches
+    /// (which file, which time step, whether it's synthetic). Asserting it
+    /// deserializes *and is ignored* is the point: Python is free to keep adding
+    /// keys there, and must never rename the ones below.
+    #[test]
+    fn deserializes_the_python_payload_shape() {
+        let json = r#"{
+            "header": {"nx": 2, "ny": 2, "lo1": 0.0, "la1": 10.0,
+                       "lo2": 10.0, "la2": 0.0, "dx": 10.0, "dy": 10.0},
+            "levels": [
+                {"pressureHpa": 500.0, "altitudeM": 5000.0,
+                 "u_data": [[0.0, 10.0], [20.0, 30.0]],
+                 "v_data": [[0.0, 0.0], [0.0, 0.0]]},
+                {"pressureHpa": 300.0, "altitudeM": 9000.0,
+                 "u_data": [[100.0, 100.0], [100.0, 100.0]],
+                 "v_data": [[0.0, 0.0], [0.0, 0.0]]}
+            ],
+            "source": {"file": "data/era5.nc", "timeIndex": 6,
+                       "validTime": "1978-06-09T06:00:00", "timeStepCount": 24,
+                       "spatialStride": 2, "synthetic": false, "problem": null,
+                       "catalog": "data/catalog.json"}
+        }"#;
+
+        let f: WindField = serde_json::from_str(json).expect("payload shape changed");
+
+        assert_eq!(f.header.nx, 2);
+        assert_eq!(f.levels.len(), 2);
+        assert_eq!(f.levels[0].pressure_hpa, 500.0);
+        assert_eq!(f.levels[0].altitude_m, 5000.0);
+        // Levels arrive sorted ascending by altitude, which sample() relies on.
+        assert!(f.levels[0].altitude_m < f.levels[1].altitude_m);
+        assert_eq!(f.sample(0.0, 10.0, 5000.0), (0.0, 0.0));
+    }
 }

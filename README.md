@@ -69,19 +69,29 @@ output live or start just one of them.
 
 ```bash
 cd weather-data-server
+./.venv/bin/python catalog_data.py   # first time only, or after adding data
 ./run.sh
 ```
 
-Serves the static ERA5 wind grid as JSON. Start this first — both
-`sim-server` and the browser's wind-vector-arrow overlay fetch from it.
+Serves one ERA5 pressure-level wind snapshot as JSON. Start this first —
+both `sim-server` and the browser's wind-vector-arrow overlay fetch from it.
 
 `run.sh` uses a minimal venv local to this directory
 (`weather-data-server/.venv`), creating it and installing
 `requirements.txt` automatically on first run.
 
-Sanity check it's up:
+The ERA5 files aren't in git (they're up to ~8GB), and there's no hardcoded
+filename — `catalog_data.py` inventories `weather-data-server/data/` into a
+`catalog.json` that the server reads to pick a file and time step. **On a
+fresh clone you have no wind data**, and the server will serve an analytic
+jet-stream approximation while telling you so. See
+[`weather-data-server/README.md`](weather-data-server/README.md) for how to
+acquire real data from the Copernicus Climate Data Store.
+
+Sanity check it's up, and see what it resolved:
 
 ```bash
+curl http://127.0.0.1:8000/api/wind-levels/source
 curl http://127.0.0.1:8000/api/wind-levels/meta
 ```
 
@@ -144,6 +154,11 @@ pkill -f "vite --port"
   `failed to fetch wind field ... using zero wind` warning, meaning
   `wind_backend.py` wasn't up when `sim-server` started. Restart
   `sim-server` after confirming `wind_backend.py` is reachable.
+- **Balloons move, but the wind looks too clean/symmetric**: you're on the
+  synthetic fallback, not real reanalysis data.
+  `curl http://127.0.0.1:8000/api/wind-levels/source` — if `synthetic` is
+  `true`, the `problem` field says what to fix (usually: run
+  `catalog_data.py`, or you have no ERA5 file in `weather-data-server/data/`).
 - **Port already in use**: another instance is likely still running from
   a previous session — `pgrep -af "sim-server|uvicorn|vite"` to find it.
 - **Testing without opening a real browser**: see
