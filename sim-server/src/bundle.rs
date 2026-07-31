@@ -688,11 +688,21 @@ pub fn step(
 mod tests {
     use super::*;
     use crate::beacon::RouteBelief;
-    use crate::link_detection::Edge;
+    use crate::link_detection::{Edge, NodeKey};
     use crate::tower::Tower;
 
+    fn node_key(s: &str) -> NodeKey {
+        let (tag, rest) = s.split_at(1);
+        let id: u32 = rest.parse().unwrap();
+        match tag {
+            "b" => NodeKey::Balloon(id),
+            "t" => NodeKey::Tower(id),
+            _ => panic!("bad test node key {s:?}"),
+        }
+    }
+
     fn edge(a: &str, b: &str) -> Edge {
-        Edge { a_key: a.to_string(), b_key: b.to_string() }
+        Edge { a: node_key(a), b: node_key(b) }
     }
 
     /// Payload for hand-built test bundles. Routing never reads the record, so

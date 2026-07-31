@@ -7,7 +7,7 @@
 use crate::balloon::Balloon;
 use crate::config::*;
 use crate::geo::{horizon_km, random_global_position};
-use crate::link_detection::compute_grid_edges;
+use crate::link_detection::{compute_grid_edges, wire_pair_key, NodeKey};
 use crate::spatial_grid::SpatialGrid;
 use crate::tower::Tower;
 use crate::union_find::UnionFind;
@@ -336,17 +336,17 @@ impl World {
 
             self.union_find.clear();
             for t in &self.towers {
-                self.union_find.make_set(&format!("t{}", t.id));
+                self.union_find.make_set(NodeKey::Tower(t.id));
             }
             for b in &self.balloons[..self.visible_count] {
-                self.union_find.make_set(&format!("b{}", b.id));
+                self.union_find.make_set(NodeKey::Balloon(b.id));
             }
             for e in &grid_edges {
-                self.union_find.union(&e.a_key, &e.b_key);
+                self.union_find.union(e.a, e.b);
             }
             let mut grounded_roots = std::collections::HashSet::new();
             for t in &self.towers {
-                grounded_roots.insert(self.union_find.find(&format!("t{}", t.id)));
+                grounded_roots.insert(self.union_find.find(NodeKey::Tower(t.id)));
             }
 
             // Mesh-health readout. Mean degree is the quantity that actually
@@ -354,20 +354,20 @@ impl World {
             // two ways of moving the same number, and the mesh percolates
             // around degree ~4.5 (measured in bin/mesh_depth.rs). Surfacing it
             // keeps a slider drag from walking blindly across that transition.
-            let mut degree: std::collections::HashMap<String, u32> =
+            let mut degree: std::collections::HashMap<NodeKey, u32> =
                 std::collections::HashMap::new();
             for e in &grid_edges {
-                *degree.entry(e.a_key.clone()).or_insert(0) += 1;
-                *degree.entry(e.b_key.clone()).or_insert(0) += 1;
+                *degree.entry(e.a).or_insert(0) += 1;
+                *degree.entry(e.b).or_insert(0) += 1;
             }
             let mut deg_total: u64 = 0;
             let mut grounded_count: u64 = 0;
             for i in 0..self.visible_count {
-                let key = format!("b{}", self.balloons[i].id);
+                let key = NodeKey::Balloon(self.balloons[i].id);
                 deg_total += degree.get(&key).copied().unwrap_or(0) as u64;
                 // Ground truth, stamped onto the balloon for the UI only. The
                 // beacon protocol must never consult this — see beacon.rs.
-                let grounded = grounded_roots.contains(&self.union_find.find(&key));
+                let grounded = grounded_roots.contains(&self.union_find.find(key));
                 self.balloons[i].grounded = grounded;
                 if grounded {
                     grounded_count += 1;
@@ -389,13 +389,9 @@ impl World {
                 grid_edges
                     .into_iter()
                     .map(|e| {
-                        let root = self.union_find.find(&e.a_key);
+                        let root = self.union_find.find(e.a);
                         let grounded = grounded_roots.contains(&root);
-                        let pair_key = if e.a_key < e.b_key {
-                            format!("{}|{}", e.a_key, e.b_key)
-                        } else {
-                            format!("{}|{}", e.b_key, e.a_key)
-                        };
+                        let pair_key = wire_pair_key(e.a, e.b);
                         EdgeSnapshot { pair_key, grounded }
                     })
                     .collect(),

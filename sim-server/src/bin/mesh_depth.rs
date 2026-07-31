@@ -22,7 +22,7 @@ use sim_server::config::{
     INITIAL_TOWERS,
 };
 use sim_server::geo::{horizon_km, random_global_position};
-use sim_server::link_detection::compute_grid_edges;
+use sim_server::link_detection::{compute_grid_edges, NodeKey};
 use sim_server::spatial_grid::SpatialGrid;
 use sim_server::tower::Tower;
 use std::collections::{HashMap, VecDeque};
@@ -37,23 +37,23 @@ const COEFFS: &[f64] = &[2.5, 3.0, 3.57, 4.12];
 /// Multi-source BFS from every tower. Returns hop depth per balloon key,
 /// where depth 1 == balloon talks directly to a tower.
 fn depths_from_towers(
-    adj: &HashMap<String, Vec<String>>,
+    adj: &HashMap<NodeKey, Vec<NodeKey>>,
     towers: &[Tower],
-) -> HashMap<String, u32> {
-    let mut depth: HashMap<String, u32> = HashMap::new();
-    let mut q: VecDeque<String> = VecDeque::new();
+) -> HashMap<NodeKey, u32> {
+    let mut depth: HashMap<NodeKey, u32> = HashMap::new();
+    let mut q: VecDeque<NodeKey> = VecDeque::new();
     for t in towers {
-        let key = format!("t{}", t.id);
-        depth.insert(key.clone(), 0);
+        let key = NodeKey::Tower(t.id);
+        depth.insert(key, 0);
         q.push_back(key);
     }
     while let Some(cur) = q.pop_front() {
         let d = depth[&cur];
         if let Some(nbrs) = adj.get(&cur) {
-            for n in nbrs {
-                if !depth.contains_key(n) {
-                    depth.insert(n.clone(), d + 1);
-                    q.push_back(n.clone());
+            for &n in nbrs {
+                if !depth.contains_key(&n) {
+                    depth.insert(n, d + 1);
+                    q.push_back(n);
                 }
             }
         }
@@ -142,10 +142,10 @@ fn run_counts(coeff: f64, max_range_km: f64) {
             let mut grid = SpatialGrid::new(GRID_CELL_SIZE_DEG);
             let edges = compute_grid_edges(&balloons, &towers, &mut grid, max_range_km, coeff);
 
-            let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+            let mut adj: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
             for e in &edges {
-                adj.entry(e.a_key.clone()).or_default().push(e.b_key.clone());
-                adj.entry(e.b_key.clone()).or_default().push(e.a_key.clone());
+                adj.entry(e.a).or_default().push(e.b);
+                adj.entry(e.b).or_default().push(e.a);
             }
 
             let depth = depths_from_towers(&adj, &towers);
@@ -155,7 +155,7 @@ fn run_counts(coeff: f64, max_range_km: f64) {
             let mut isolated = 0u64;
             let mut deg_total = 0u64;
             for b in &balloons {
-                let key = format!("b{}", b.id);
+                let key = NodeKey::Balloon(b.id);
                 let d = adj.get(&key).map(|v| v.len()).unwrap_or(0);
                 deg_total += d as u64;
                 if d == 0 {

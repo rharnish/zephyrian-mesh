@@ -10,26 +10,63 @@ use crate::spatial_grid::SpatialGrid;
 use crate::tower::Tower;
 use std::collections::{HashMap, HashSet};
 
+/// Identifies a balloon or tower in the connectivity graph. A tagged id
+/// rather than a `format!("b{id}")` / `format!("t{id}")` string — the graph
+/// gets rebuilt every link-recompute tick, so this is a Copy value with no
+/// per-node allocation, and the balloon/tower distinction is enforced by the
+/// type rather than by convention (no risk of a typo'd prefix or a collision
+/// between a balloon id and a tower id that happen to match).
+///
+/// Converted to the `"b{id}"` / `"t{id}"` wire strings only at the snapshot
+/// boundary (`wire_pair_key`, used by sim.rs) — the JS frontend parses that
+/// format (see `parseNodeKey` in linkLayer.js), so it has to stay stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum NodeKey {
+    Balloon(u32),
+    Tower(u32),
+}
+
+impl std::fmt::Display for NodeKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeKey::Balloon(id) => write!(f, "b{id}"),
+            NodeKey::Tower(id) => write!(f, "t{id}"),
+        }
+    }
+}
+
+/// The wire-format pair key clients key their rendered links by (see
+/// linkLayer.js). Order is arbitrary but must be deterministic for a given
+/// unordered pair, since both directions of the same edge must serialize
+/// identically.
+pub fn wire_pair_key(a: NodeKey, b: NodeKey) -> String {
+    if a < b {
+        format!("{a}|{b}")
+    } else {
+        format!("{b}|{a}")
+    }
+}
+
+fn ordered_pair(a: NodeKey, b: NodeKey) -> (NodeKey, NodeKey) {
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
 struct NodeInfo {
-    key: String,
+    key: NodeKey,
     lon: f64,
     lat: f64,
     pre: Precomputed,
-}
-
-fn pair_key_for(a_key: &str, b_key: &str) -> String {
-    if a_key < b_key {
-        format!("{a_key}|{b_key}")
-    } else {
-        format!("{b_key}|{a_key}")
-    }
 }
 
 fn build_nodes(balloons: &[Balloon], towers: &[Tower], horizon_refraction_coeff: f64) -> Vec<NodeInfo> {
     let mut nodes = Vec::with_capacity(balloons.len() + towers.len());
     for b in balloons {
         nodes.push(NodeInfo {
-            key: format!("b{}", b.id),
+            key: NodeKey::Balloon(b.id),
             lon: b.lon,
             lat: b.lat,
             pre: precompute(b.lon, b.lat, b.alt, horizon_refraction_coeff),
@@ -37,7 +74,7 @@ fn build_nodes(balloons: &[Balloon], towers: &[Tower], horizon_refraction_coeff:
     }
     for t in towers {
         nodes.push(NodeInfo {
-            key: format!("t{}", t.id),
+            key: NodeKey::Tower(t.id),
             lon: t.lon,
             lat: t.lat,
             pre: precompute(t.lon, t.lat, t.height_m, horizon_refraction_coeff),
@@ -48,8 +85,8 @@ fn build_nodes(balloons: &[Balloon], towers: &[Tower], horizon_refraction_coeff:
 
 #[derive(Debug, Clone)]
 pub struct Edge {
-    pub a_key: String,
-    pub b_key: String,
+    pub a: NodeKey,
+    pub b: NodeKey,
 }
 
 /// The production edge finder: spatial grid + precomputed trig.
@@ -67,8 +104,8 @@ pub fn compute_grid_edges(
         grid.insert(i, n.lon, n.lat);
     }
 
-    let mut edges_by_pair: HashMap<String, Edge> = HashMap::new();
-    let mut seen_pairs: HashSet<String> = HashSet::new();
+    let mut edges_by_pair: HashMap<(NodeKey, NodeKey), Edge> = HashMap::new();
+    let mut seen_pairs: HashSet<(NodeKey, NodeKey)> = HashSet::new();
 
     for (i, node) in nodes.iter().enumerate() {
         let candidates = grid.neighbors(node.lon, node.lat, max_range_km);
@@ -77,17 +114,13 @@ pub fn compute_grid_edges(
                 continue;
             }
             let other = &nodes[j];
-            let pair_key = pair_key_for(&node.key, &other.key);
-            if seen_pairs.contains(&pair_key) {
+            let pair = ordered_pair(node.key, other.key);
+            if !seen_pairs.insert(pair) {
                 continue;
             }
-            seen_pairs.insert(pair_key.clone());
 
             if in_radio_range_precomputed(&node.pre, &other.pre) {
-                edges_by_pair.insert(
-                    pair_key,
-                    Edge { a_key: node.key.clone(), b_key: other.key.clone() },
-                );
+                edges_by_pair.insert(pair, Edge { a: node.key, b: other.key });
             }
         }
     }
@@ -97,13 +130,17 @@ pub fn compute_grid_edges(
 
 /// Ground truth: O(n^2), no spatial grid — checks every pair. Slow, but
 /// correct by construction; used as a test oracle against compute_grid_edges.
-pub fn brute_force_edge_keys(balloons: &[Balloon], towers: &[Tower], horizon_refraction_coeff: f64) -> HashSet<String> {
+pub fn brute_force_edge_keys(
+    balloons: &[Balloon],
+    towers: &[Tower],
+    horizon_refraction_coeff: f64,
+) -> HashSet<(NodeKey, NodeKey)> {
     let nodes = build_nodes(balloons, towers, horizon_refraction_coeff);
     let mut keys = HashSet::new();
     for i in 0..nodes.len() {
         for j in (i + 1)..nodes.len() {
             if in_radio_range_precomputed(&nodes[i].pre, &nodes[j].pre) {
-                keys.insert(pair_key_for(&nodes[i].key, &nodes[j].key));
+                keys.insert(ordered_pair(nodes[i].key, nodes[j].key));
             }
         }
     }
@@ -286,10 +323,8 @@ mod tests {
         let max_range_km = 2.0 * crate::geo::horizon_km(25000.0, horizon_coeff);
         let mut grid = SpatialGrid::new(6.0);
         let grid_edges = compute_grid_edges(&balloons, &towers, &mut grid, max_range_km, horizon_coeff);
-        let grid_keys: HashSet<String> = grid_edges
-            .iter()
-            .map(|e| pair_key_for(&e.a_key, &e.b_key))
-            .collect();
+        let grid_keys: HashSet<(NodeKey, NodeKey)> =
+            grid_edges.iter().map(|e| ordered_pair(e.a, e.b)).collect();
         let ground_truth = brute_force_edge_keys(&balloons, &towers, horizon_coeff);
 
         let missed: Vec<_> = ground_truth.difference(&grid_keys).collect();
@@ -323,8 +358,8 @@ mod tests {
         let max_range_km = 2.0 * crate::geo::horizon_km(25000.0, horizon_coeff);
         let mut grid = SpatialGrid::new(6.0);
         let grid_edges = compute_grid_edges(&balloons, &towers, &mut grid, max_range_km, horizon_coeff);
-        let grid_keys: HashSet<String> =
-            grid_edges.iter().map(|e| pair_key_for(&e.a_key, &e.b_key)).collect();
+        let grid_keys: HashSet<(NodeKey, NodeKey)> =
+            grid_edges.iter().map(|e| ordered_pair(e.a, e.b)).collect();
         let ground_truth = brute_force_edge_keys(&balloons, &towers, horizon_coeff);
         let missed: Vec<_> = ground_truth.difference(&grid_keys).collect();
         assert!(missed.is_empty(), "reproduces the polar gap: {missed:?}");

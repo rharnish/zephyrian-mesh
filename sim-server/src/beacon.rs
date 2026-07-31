@@ -19,7 +19,7 @@
 
 use crate::balloon::Balloon;
 use crate::config::*;
-use crate::link_detection::Edge;
+use crate::link_detection::{Edge, NodeKey};
 use crate::tower::Tower;
 use rand::Rng;
 use std::collections::HashMap;
@@ -70,16 +70,6 @@ pub struct MeshAdjacency {
     balloon_tower: Vec<Option<u32>>,
 }
 
-fn parse_key(key: &str) -> Option<(bool, u32)> {
-    let (tag, rest) = key.split_at(1);
-    let id: u32 = rest.parse().ok()?;
-    match tag {
-        "b" => Some((true, id)),
-        "t" => Some((false, id)),
-        _ => None,
-    }
-}
-
 impl MeshAdjacency {
     pub fn rebuild(&mut self, edges: &[Edge], n_balloons: usize, towers: &[Tower]) {
         self.balloon_adj.clear();
@@ -93,11 +83,8 @@ impl MeshAdjacency {
             towers.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
 
         for e in edges {
-            let (Some(a), Some(b)) = (parse_key(&e.a_key), parse_key(&e.b_key)) else {
-                continue;
-            };
-            match (a, b) {
-                ((true, x), (true, y)) => {
+            match (e.a, e.b) {
+                (NodeKey::Balloon(x), NodeKey::Balloon(y)) => {
                     // Balloon-to-balloon: symmetric, both directions.
                     if let Some(v) = self.balloon_adj.get_mut(x as usize) {
                         v.push(y);
@@ -108,7 +95,8 @@ impl MeshAdjacency {
                 }
                 // Tower-to-balloon is only ever used in the tower->balloon
                 // direction: towers originate beacons, they don't relay them.
-                ((true, b_id), (false, t_id)) | ((false, t_id), (true, b_id)) => {
+                (NodeKey::Balloon(b_id), NodeKey::Tower(t_id))
+                | (NodeKey::Tower(t_id), NodeKey::Balloon(b_id)) => {
                     if let Some(&slot) = tower_slot.get(&t_id) {
                         self.tower_adj[slot].push(b_id);
                         if let Some(e) = self.balloon_tower.get_mut(b_id as usize) {
@@ -116,7 +104,7 @@ impl MeshAdjacency {
                         }
                     }
                 }
-                _ => {}
+                (NodeKey::Tower(_), NodeKey::Tower(_)) => {}
             }
         }
     }
@@ -270,12 +258,22 @@ pub fn step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::link_detection::Edge;
+    use crate::link_detection::{Edge, NodeKey};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
+    fn node_key(s: &str) -> NodeKey {
+        let (tag, rest) = s.split_at(1);
+        let id: u32 = rest.parse().unwrap();
+        match tag {
+            "b" => NodeKey::Balloon(id),
+            "t" => NodeKey::Tower(id),
+            _ => panic!("bad test node key {s:?}"),
+        }
+    }
+
     fn edge(a: &str, b: &str) -> Edge {
-        Edge { a_key: a.to_string(), b_key: b.to_string() }
+        Edge { a: node_key(a), b: node_key(b) }
     }
 
     /// A chain t0 - b0 - b1 - b2 should light up one hop at a time, not all at
