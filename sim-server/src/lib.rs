@@ -2,6 +2,7 @@ pub mod atmosphere;
 pub mod balloon;
 pub mod beacon;
 pub mod bundle;
+pub mod bundle_stats;
 pub mod config;
 pub mod ablation;
 pub mod geo;
