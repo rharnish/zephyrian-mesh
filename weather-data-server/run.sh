@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Launches wind_backend.py using the minimal venv in this directory (.venv),
-# not the reginald conda env. Creates the venv and installs
-# requirements.txt on first run if it doesn't exist yet.
+# Creates the venv and installs requirements.txt on first run if it doesn't exist yet.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

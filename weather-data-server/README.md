@@ -4,12 +4,8 @@ static ERA5 NetCDF file, for the balloon mesh simulator frontend.
 TO START SERVER:
     ./run.sh
 
-`run.sh` uses a minimal venv local to this directory (`.venv/`, not the
-`reginald` conda env) — creates it and installs `requirements.txt`
-automatically on first run. Prefer conda instead? This still works the
-same way:
-    conda activate reginald
-    uvicorn wind_backend:app --reload
+`run.sh` uses a minimal venv local to this directory (`.venv/`) — creates
+it and installs `requirements.txt` automatically on first run.
 
 Frontend usage: GET /api/wind-levels returns wind on every available
 pressure level, each converted to an approximate altitude in meters, so the

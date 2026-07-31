@@ -32,9 +32,7 @@ another *client* of it, the same way the browser used to be.
 ```
 
 1. **`weather-data-server/wind_backend.py`** (unchanged) parses the static
-   ERA5 NetCDF file and serves it as JSON. Still runs via
-   `uvicorn wind_backend:app --reload` in the `reginald` conda env, same as
-   before — just from its renamed directory (was `WeatherData/`).
+   ERA5 NetCDF file and serves it as JSON. Still started via `./run.sh`.
 2. **`sim-server`** fetches that JSON once at startup, then owns the live
    simulation state (`World` in `src/sim.rs`): balloon positions, wind
    advection, altitude control, and radio-link/cluster detection. It ticks
