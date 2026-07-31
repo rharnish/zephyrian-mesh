@@ -1,5 +1,8 @@
 // Mirrors the constants in cesium-app/src/config.js that the sim loop needs.
-// Keep these in sync by hand for now — see RUST_SIM_PLAN.md.
+// Most of this file has no JS counterpart anymore (physics moved server-side —
+// see RUST_SIM_PLAN.md). BALLOON_MIN_ALT, BALLOON_MAX_ALT, and EARTH_RADIUS_M
+// are the exception: config.js still reads matching values for rendering, kept
+// in sync by hand and checked by cesium-app/src/config.sync.test.js.
 
 pub const BALLOON_MIN_ALT: f64 = 1000.0; // meters
 pub const BALLOON_MAX_ALT: f64 = 25000.0; // meters
