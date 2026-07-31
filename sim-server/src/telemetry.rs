@@ -1,4 +1,4 @@
-// What a balloon actually measured — the payload half of MESH_COMMS_DESIGN.md
+// What a balloon actually measured — the payload half of docs/design/MESH_COMMS_DESIGN.md
 // §1's telemetry bundle. Until now a `Bundle` was pure routing metadata with
 // the payload explicitly left out, because the environmental sensor block needs
 // the ISA model that `atmosphere.rs` now provides.

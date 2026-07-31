@@ -4,9 +4,9 @@ Design notes for having balloons send **tamper-evident** telemetry to ground tow
 balloon mesh. The organizing principle is that balloons must **discover** their own connectivity
 from signals they actually receive, rather than being handed a globally-computed answer — and that
 real cryptography is demonstrated **on demand** for a selected balloon, so the live sim stays
-cheap. Companion to `BALLOON_PHYSICS_VISION.md` (the physics half, independent of this one — see
-§1 for the two places this document depends on it), `WEATHER_BACKEND_PLAN.md`, and
-`RUST_SIM_PLAN.md`.
+cheap. Companion to `docs/design/BALLOON_PHYSICS_VISION.md` (the physics half, independent of this one — see
+§1 for the two places this document depends on it), `docs/design/WEATHER_BACKEND_PLAN.md`, and
+`docs/history/RUST_SIM_PLAN.md`.
 
 ## Where things stand today
 
@@ -32,10 +32,10 @@ demand for the inspected balloon so cost stays bounded.
 **Data model.** Each balloon periodically emits a **telemetry bundle**: `{origin_id, seq,
 created_at, position, alt, gas, ballast, health, ttl}` plus an **environmental sensor block**
 `{temperature, pressure, humidity}`. Temperature and pressure come straight from the
-`atmosphere.rs` ISA model at the balloon's current altitude (§1 of `BALLOON_PHYSICS_VISION.md`
+`atmosphere.rs` ISA model at the balloon's current altitude (§1 of `docs/design/BALLOON_PHYSICS_VISION.md`
 computes them for the physics); humidity is synthesized (a decreasing-with-altitude profile with
 spatial variation, since ERA5 humidity isn't in the current wind-only dataset — a natural future
-tie-in to the "extra variables" idea in `WEATHER_BACKEND_PLAN.md`).
+tie-in to the "extra variables" idea in `docs/design/WEATHER_BACKEND_PLAN.md`).
 
 **Built.** `atmosphere.rs` and `telemetry.rs` now exist, so the sensor block is real rather than
 stubbed — see the note under C3 in the phasing section. Two departures from the paragraph above,
@@ -135,7 +135,7 @@ rather than a fudge factor, and it is the parameter that makes belief lag truth.
 ### 1.2 The comms clock — why the protocol has its own
 
 *(For the whole timing model converted to seconds, plus the levers and their costs, see
-`TIMING_MODEL.md`. This section is the rationale; that document is the arithmetic.)*
+`docs/design/TIMING_MODEL.md`. This section is the rationale; that document is the arithmetic.)*
 
 Comms constants are denominated in **rounds**, not ticks. A round is `COMMS_EVERY_N_TICKS`
 world ticks, exactly the pattern `LINK_UPDATE_EVERY_N_TICKS` already uses for link detection.
@@ -176,7 +176,7 @@ registered in a ground-side directory). Towers/ground know every balloon's publi
 
 **Key rotation (periodic or on demand).** Keys are not fixed for the mission — a balloon can roll
 its keypair on a schedule *or* when commanded (the `RotateKey{id}` uplink command, §2 of
-`BALLOON_PHYSICS_VISION.md`). Rotation is an authenticated handover so trust survives the change:
+`docs/design/BALLOON_PHYSICS_VISION.md`). Rotation is an authenticated handover so trust survives the change:
 the balloon generates a new keypair and emits a **rotation certificate** — the *new* public key
 signed by the *old* private key — which propagates to the ground directory. The directory keeps a
 per-balloon **key history (epochs)**; every telemetry record notes the key epoch that signed it, so
@@ -318,7 +318,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   which is already modelled as the duty cycle.
 
   **Closed: the limit is the last hop, not the mesh.** Full write-up with plots in
-  `docs/bundle-delivery-report.html`; raw output in `docs/measurements/`. Instrumenting every
+  `docs/investigations/bundle-delivery-report.html`; raw output in `docs/investigations/measurements/`. Instrumenting every
   held-bundle wake slot by stall cause, and every bundle by hop count, ruled out the remaining
   mesh-side explanations and found the real one:
 
@@ -404,7 +404,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
 
 ## Suggested phasing
 
-**This track does not depend on the physics track** (`BALLOON_PHYSICS_VISION.md`). The only
+**This track does not depend on the physics track** (`docs/design/BALLOON_PHYSICS_VISION.md`). The only
 couplings are the environmental sensor block in §1's telemetry bundle, which can carry stubbed
 temperature/pressure until `atmosphere.rs` exists, and the `RotateKey` command §2 borrows. So the
 two can be done in either order, or interleaved.

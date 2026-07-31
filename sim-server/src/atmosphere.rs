@@ -1,5 +1,5 @@
 // International Standard Atmosphere as a function of altitude — P1 of
-// BALLOON_PHYSICS_VISION.md, and the model MESH_COMMS_DESIGN.md §1's telemetry
+// docs/design/BALLOON_PHYSICS_VISION.md, and the model docs/design/MESH_COMMS_DESIGN.md §1's telemetry
 // sensor block reads from.
 //
 // The constants below are copied **verbatim** from
@@ -18,7 +18,7 @@
 // and this drifts, which is fine for a simulator and not fine for navigation.
 //
 // Scope: this is the ISA half of P1 only. Buoyancy, gas, ballast and the force
-// integration in BALLOON_PHYSICS_VISION.md §1 are not here — `density_kg_m3` is
+// integration in docs/design/BALLOON_PHYSICS_VISION.md §1 are not here — `density_kg_m3` is
 // provided because that work will need it, not because telemetry uses it.
 
 use crate::config::{RH_SCALE_HEIGHT_M, RH_SPATIAL_AMPLITUDE, RH_SURFACE_PCT};
@@ -66,7 +66,7 @@ pub fn pressure_hpa(alt_m: f64) -> f64 {
 }
 
 /// Air density at altitude, from the ideal gas law. Unused by telemetry; the
-/// buoyancy model in BALLOON_PHYSICS_VISION.md §1 is what needs it.
+/// buoyancy model in docs/design/BALLOON_PHYSICS_VISION.md §1 is what needs it.
 pub fn density_kg_m3(alt_m: f64) -> f64 {
     let p_pa = pressure_hpa(alt_m) * 100.0;
     p_pa * M_AIR / (R * temperature_k(alt_m))
@@ -91,9 +91,9 @@ pub fn altitude_m_from_pressure_hpa(p_hpa: f64) -> f64 {
 ///
 /// **Synthesized, not ISA.** The ISA has nothing to say about humidity, and the
 /// ERA5 dataset behind the wind field is wind-only, so there is no measurement
-/// to read — MESH_COMMS_DESIGN.md §1 calls for exactly this: "a
+/// to read — docs/design/MESH_COMMS_DESIGN.md §1 calls for exactly this: "a
 /// decreasing-with-altitude profile with noise". Swapping in real humidity is
-/// the natural tie-in if the "extra variables" idea in WEATHER_BACKEND_PLAN.md
+/// the natural tie-in if the "extra variables" idea in docs/design/WEATHER_BACKEND_PLAN.md
 /// ever lands.
 ///
 /// The "noise" is a smooth function of position rather than an RNG draw, on

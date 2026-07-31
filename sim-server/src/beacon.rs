@@ -1,4 +1,4 @@
-// Decentralized connectivity discovery — C1 of MESH_COMMS_DESIGN.md.
+// Decentralized connectivity discovery — C1 of docs/design/MESH_COMMS_DESIGN.md.
 //
 // The rule this module exists to enforce: **a balloon is never told whether it
 // can reach a tower.** It has no access to the edge list, the union-find, or
@@ -167,7 +167,7 @@ pub fn initial_slot(rng: &mut impl Rng) -> u64 {
 /// Returns the indices of balloons that woke and transmitted this round. Bundle
 /// forwarding reuses that set rather than keeping its own schedule: a radio that
 /// is awake is awake for both, which is what makes BEACON_INTERVAL_ROUNDS the
-/// forwarding rate as well (see MESH_COMMS_DESIGN.md §4).
+/// forwarding rate as well (see docs/design/MESH_COMMS_DESIGN.md §4).
 pub fn step(
     balloons: &mut [Balloon],
     towers: &mut [Tower],

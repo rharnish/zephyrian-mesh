@@ -42,5 +42,5 @@ export const SIM_SERVER_WS_URL = `ws://${BACKEND_HOST}:8080/ws`;
 // re-serves it here, so it's the sole client of the weather backend and the
 // browser fetches wind over the same origin it already uses for everything
 // else. (The browser's copy drives only the wind-vector arrows; balloon
-// physics runs server-side.) See WEATHER_BACKEND_PLAN.md.
+// physics runs server-side.) See docs/design/WEATHER_BACKEND_PLAN.md.
 export const WIND_API_URL = `${SIM_SERVER_URL}/api/wind-levels`;

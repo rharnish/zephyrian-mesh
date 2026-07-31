@@ -5,7 +5,7 @@ import { toCesiumColors } from './cesiumColor.js';
 
 // ---------------------------------------------------------------------------
 // CommsReplay — animates one balloon's most recently *resolved* bundle
-// (MESH_COMMS_DESIGN.md §3/C4).
+// (docs/design/MESH_COMMS_DESIGN.md §3/C4).
 //
 // A dot travels the bundle's actual recorded path — not a recomputed shortest
 // path — and then the ack's fate plays out: all the way back if acked, partway

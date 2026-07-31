@@ -1,4 +1,4 @@
-// Telemetry bundles — C2 of MESH_COMMS_DESIGN.md.
+// Telemetry bundles — C2 of docs/design/MESH_COMMS_DESIGN.md.
 //
 // The counters/histograms this logic reports into (`BundleStats`, `bump`,
 // `hist_mean`) live in bundle_stats.rs, re-exported here — kept separate so
@@ -53,7 +53,7 @@
 // `Balloon::outstanding`) is deliberately poorer than what these stats can
 // see: satellite delivery is silent to the origin, so "never arrived",
 // "arrived but the ack died", and "arrived via satellite" are all
-// indistinguishable from inside, by construction. See MESH_COMMS_DESIGN.md §4.
+// indistinguishable from inside, by construction. See docs/design/MESH_COMMS_DESIGN.md §4.
 
 use crate::balloon::Balloon;
 use crate::beacon::MeshAdjacency;
@@ -627,7 +627,7 @@ mod tests {
 
         // The origin's own retained record now carries the recorded path and
         // the channel it went out on — the data the C4 animated-packet view
-        // reads (MESH_COMMS_DESIGN.md §3).
+        // reads (docs/design/MESH_COMMS_DESIGN.md §3).
         let outstanding = balloons[3].outstanding.as_ref().unwrap();
         assert_eq!(outstanding.channel, Some(Channel::Radio));
         assert_eq!(outstanding.path.as_deref(), Some(&[3, 2, 1, 0][..]));

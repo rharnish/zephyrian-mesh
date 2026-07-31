@@ -112,7 +112,7 @@ fn report_slots(st: &sim_server::bundle::BundleStats) {
     }
     println!();
     // Every delivered bundle's ack independently either completes the reverse
-    // path, or doesn't — the two-state model from MESH_COMMS_DESIGN.md §4.
+    // path, or doesn't — the two-state model from docs/design/MESH_COMMS_DESIGN.md §4.
     // `still owed` is delivered bundles whose ack hasn't resolved either way
     // yet, same censoring caveat as delivered/originated above.
     let owed = st.delivered.saturating_sub(st.acked + st.ack_lost);
@@ -164,7 +164,7 @@ fn main() {
 
     // --- Phase 1: delivery vs. mesh density ---------------------------------
     //
-    // The prediction from MESH_COMMS_DESIGN.md §4: round-trip delivery only
+    // The prediction from docs/design/MESH_COMMS_DESIGN.md §4: round-trip delivery only
     // works above the percolation threshold (degree ~4.5). Below it, paths are
     // long, beliefs expire mid-flight, and bundles should strand rather than
     // arrive. Delivery ought to collapse sharply, not gracefully.

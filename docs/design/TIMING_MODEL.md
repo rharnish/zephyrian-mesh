@@ -31,7 +31,7 @@ The three clocks exist because they answer different questions. **Real time** is
 **Simulated time** is what the physics believes, and the only clock in which "a 10-minute radio
 duty cycle" is a meaningful claim. **Comms rounds** are what the protocol counts, and exist so the
 protocol's pace can be tuned without disturbing either of the other two — see §1.2 of
-`MESH_COMMS_DESIGN.md` for why that separation was necessary.
+`docs/design/MESH_COMMS_DESIGN.md` for why that separation was necessary.
 
 ## Everything in seconds
 
@@ -92,7 +92,7 @@ client-side interpolation would free this lever up — a real option, but not a 
 
 **Do not touch `BELIEF_MAX_AGE_ROUNDS` for pacing.** It is pinned from below by measured
 convergence: a belief must survive long enough to cross the mesh, or deep balloons expire it on
-arrival and can never hold a route. See §1.2 of `MESH_COMMS_DESIGN.md`.
+arrival and can never hold a route. See §1.2 of `docs/design/MESH_COMMS_DESIGN.md`.
 
 ## Tuning reference
 

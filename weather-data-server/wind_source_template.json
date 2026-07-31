@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to wind_source.json and edit 'file' to point at your own ERA5 download. Run catalog_data.py to see what's in data/ and what to put here. See README.md.",
+
+  "_fileHelp": "Path to a NetCDF file, relative to data/ (or absolute). null means no data: the server serves synthetic wind and says so.",
+  "file": null,
+
+  "_timeIndexHelp": "Which time step to serve, 0-based, if the file holds more than one.",
+  "timeIndex": 0,
+
+  "_spatialStrideHelp": "Keep every Nth grid point in lat/lon. 2 is the default; raise it to trade resolution for speed (8 turns a ~350MB payload into ~22MB).",
+  "spatialStride": 2
+}

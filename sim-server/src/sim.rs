@@ -24,7 +24,7 @@ pub enum Command {
     SetHorizonRefractionCoeff(f64),
     SetPaused(bool),
     /// The first *query* (not mutation) command — every other variant is
-    /// fire-and-forget. GET /api/balloons/:id/comms (MESH_COMMS_DESIGN.md
+    /// fire-and-forget. GET /api/balloons/:id/comms (docs/design/MESH_COMMS_DESIGN.md
     /// §3/C4) needs a read of live `World` state, and `World` is only ever
     /// touched from the single task that owns it (see main.rs), so a request
     /// has to round-trip through the same command channel and get its answer
