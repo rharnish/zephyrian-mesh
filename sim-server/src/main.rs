@@ -199,8 +199,14 @@ struct AddTowerBody {
     height_m: f64,
 }
 
+impl From<AddTowerBody> for Command {
+    fn from(body: AddTowerBody) -> Self {
+        Command::AddTower { lon: body.lon, lat: body.lat, height_m: body.height_m }
+    }
+}
+
 async fn add_tower(State(state): State<AppState>, Json(body): Json<AddTowerBody>) -> impl IntoResponse {
-    let _ = state.commands.send(Command::AddTower { lon: body.lon, lat: body.lat, height_m: body.height_m });
+    let _ = state.commands.send(body.into());
     axum::http::StatusCode::ACCEPTED
 }
 
@@ -214,11 +220,17 @@ struct SetBalloonCountBody {
     n: u32,
 }
 
+impl From<SetBalloonCountBody> for Command {
+    fn from(body: SetBalloonCountBody) -> Self {
+        Command::SetBalloonCount(body.n)
+    }
+}
+
 async fn set_balloon_count(
     State(state): State<AppState>,
     Json(body): Json<SetBalloonCountBody>,
 ) -> impl IntoResponse {
-    let _ = state.commands.send(Command::SetBalloonCount(body.n));
+    let _ = state.commands.send(body.into());
     axum::http::StatusCode::ACCEPTED
 }
 
@@ -227,11 +239,17 @@ struct SetHorizonCoeffBody {
     coeff: f64,
 }
 
+impl From<SetHorizonCoeffBody> for Command {
+    fn from(body: SetHorizonCoeffBody) -> Self {
+        Command::SetHorizonRefractionCoeff(body.coeff)
+    }
+}
+
 async fn set_horizon_coeff(
     State(state): State<AppState>,
     Json(body): Json<SetHorizonCoeffBody>,
 ) -> impl IntoResponse {
-    let _ = state.commands.send(Command::SetHorizonRefractionCoeff(body.coeff));
+    let _ = state.commands.send(body.into());
     axum::http::StatusCode::ACCEPTED
 }
 
@@ -240,8 +258,14 @@ struct SetPausedBody {
     paused: bool,
 }
 
+impl From<SetPausedBody> for Command {
+    fn from(body: SetPausedBody) -> Self {
+        Command::SetPaused(body.paused)
+    }
+}
+
 async fn set_paused(State(state): State<AppState>, Json(body): Json<SetPausedBody>) -> impl IntoResponse {
-    let _ = state.commands.send(Command::SetPaused(body.paused));
+    let _ = state.commands.send(body.into());
     axum::http::StatusCode::ACCEPTED
 }
 
