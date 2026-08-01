@@ -78,6 +78,10 @@ fn main() {
         ("dv-dtn (shipped)", "dv-dtn".parse().unwrap()),
         ("dv-dtn digest+batch", "dv-dtn:ack=digest,mesh=4".parse().unwrap()),
         ("dv-dtn reactive (AODV)", "dv-dtn:discovery=reactive".parse().unwrap()),
+        (
+            "dv-dtn reactive, tower-only replies",
+            "dv-dtn:discovery=reactive,reply=tower".parse().unwrap(),
+        ),
         ("spray-and-wait L=4", "epidemic:copies=4".parse().unwrap()),
         ("spray-and-wait L=16", "epidemic:copies=16".parse().unwrap()),
     ];

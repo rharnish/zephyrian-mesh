@@ -34,7 +34,7 @@
 // that latency is hops × the wake interval, in each direction.
 
 use super::beacon::RouteBelief;
-use super::params::DvDtnParams;
+use super::params::{DvDtnParams, ReplyPolicy};
 use super::DvNode;
 use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
@@ -201,23 +201,39 @@ pub fn step(
 
             // Can this balloon answer? Either it can hear a tower itself, or
             // it already holds a live route to one.
+            //
             // A reply carries the *answering* node's own distance to the
             // tower; the +1 for the final hop is added by whoever receives it
             // (see below). Adding it at both ends inflates every route by one
             // and gets worse each time a reply is relayed.
+            //
+            // It also carries the age of the knowledge it was built on, not
+            // the moment it was sent. Only a node hearing a tower right now
+            // may stamp the current round. **This is the anti-laundering rule
+            // the proactive side already enforces**, and skipping it here was
+            // a bug rather than a simplification: with freshness-first
+            // adoption, a node answering from a 40-round-old 12-hop route
+            // restamped it as news-of-this-instant, and it then beat a
+            // genuinely current 2-hop reply arriving alongside it. Routes
+            // inflated instead of converging, which is what real AODV's
+            // destination sequence numbers exist to prevent.
             let answer = if let Some(tower_id) = adj.tower_in_range(nb_idx) {
-                Some((tower_id, 1u32)) // adjacent: one hop from the ground
+                Some((tower_id, 1u32, round)) // adjacent: one hop, first-hand
+            } else if params.reply_policy == ReplyPolicy::Intermediate {
+                nodes[nb_idx].belief.map(|b| (b.tower_id, b.hop_count, b.emitted_at_round))
             } else {
-                nodes[nb_idx].belief.map(|b| (b.tower_id, b.hop_count))
+                None
             };
             match answer {
-                Some((tower_id, hops)) => state.nodes[nb_idx].replies.push(Rrep {
-                    requester: req.requester,
-                    id: req.id,
-                    tower_id,
-                    hops,
-                    emitted_at_round: round,
-                }),
+                Some((tower_id, hops, emitted_at_round)) => {
+                    state.nodes[nb_idx].replies.push(Rrep {
+                        requester: req.requester,
+                        id: req.id,
+                        tower_id,
+                        hops,
+                        emitted_at_round,
+                    })
+                }
                 None => state.nodes[nb_idx].to_forward.push(req),
             }
         }
@@ -357,6 +373,88 @@ mod tests {
         }
         assert_eq!(requests, 0, "nothing to send, so nothing should be asked");
         assert!(d.nodes[2].belief.is_none(), "and b2 should still know no route");
+    }
+
+    /// A node answering from its own route must pass on the age of the news it
+    /// holds, not the moment it happened to answer. Restamping is *laundering*:
+    /// it turns second-hand knowledge into apparent first-hand knowledge, and
+    /// with freshness-first adoption that stale-but-fresh-looking route then
+    /// beats a genuinely current one. Route lengths inflate instead of
+    /// converging, and beliefs stop draining when the towers go away.
+    ///
+    /// This is exactly the invariant the proactive mode gets by relaying
+    /// `emitted_at_round` verbatim, and it was broken here until replies
+    /// started carrying it. Real AODV solves the same problem with destination
+    /// sequence numbers.
+    ///
+    /// b0 - b1, with neither in range of a tower. b1 already holds an old
+    /// route; b0 has a bundle and no route, so it asks and b1 answers.
+    #[test]
+    fn an_answer_from_a_stale_route_does_not_pass_it_off_as_current() {
+        const NEWS: u64 = 40;
+        let mut p = DvDtnParams::default();
+        p.discovery = Discovery::Reactive;
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..2).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..2 {
+            d.spawn_node();
+        }
+        // No tower edge: the only route in the system is the one b1 is holding,
+        // so whatever b0 ends up with came from b1's answer.
+        let towers = vec![Tower::new(0, -50.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(&[edge("b0", "b1")], 2, &towers);
+
+        d.nodes[1].belief = Some(RouteBelief {
+            tower_id: 0,
+            hop_count: 3,
+            next_hop: None,
+            epoch: 1,
+            emitted_at_round: NEWS,
+        });
+        d.nodes[1].next_bundle_round = u64::MAX; // only b0 originates, so only b0 asks
+        d.nodes[0].next_bundle_round = NEWS;
+
+        for round in NEWS..(NEWS + 50) {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+        }
+
+        let b0 = d.nodes[0].belief.expect("b0 should have been answered by b1");
+        assert_eq!(b0.hop_count, 4, "b1 is 3 hops out, so b0 is 4");
+        assert_eq!(
+            b0.emitted_at_round, NEWS,
+            "b0's route must carry the age of b1's news ({NEWS}), not the round b1 \
+             answered on — restamping it would make a stale route immortal"
+        );
+    }
+
+    /// Tower-adjacent gating is the strict version: no node may answer from
+    /// second-hand knowledge, so every route is as short as the flood that
+    /// found it. Cheap to state, and it keeps the parameter honest.
+    #[test]
+    fn tower_adjacent_gating_still_finds_the_route() {
+        let mut p = DvDtnParams::default();
+        p.discovery = Discovery::Reactive;
+        p.reply_policy = ReplyPolicy::TowerAdjacent;
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..3).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..3 {
+            d.spawn_node();
+        }
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2")], 3, &towers);
+
+        for round in 0..400u64 {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+        }
+        let b2 = d.nodes[2].belief.expect("b2 should still discover a route");
+        assert_eq!(b2.next_hop, Some(1));
+        assert_eq!(b2.hop_count, 3, "and it must be the true distance, not an inflated one");
     }
 
     /// The digest rides tower beacons, which reactive discovery doesn't send.

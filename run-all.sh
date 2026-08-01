@@ -43,7 +43,7 @@ PROTOCOLS
   SPEC is a protocol name, optionally followed by ':' and comma-separated
   key=value overrides. An unknown name or key is an error, not a fallback.
 
-  dv-dtn   (the default, and currently the only one)
+  dv-dtn   (the default)
            Distance-vector discovery feeding store-and-forward delivery.
            Towers periodically flood hop-counted beacons; a balloon that hears
            one records a route belief and passes it on one hop further on its
@@ -52,7 +52,17 @@ PROTOCOLS
            may be stale, and may be wrong. Nothing consults the true topology
            on a balloon's behalf; that is the point of the exercise.
 
-  Overrides, and what they are for:
+  epidemic Binary spray-and-wait: no routes at all. A bundle starts with a
+           copy budget, and each handoff gives half of it away, so the number
+           of copies is bounded network-wide. Delivery is whichever copy
+           happens to drift within earshot of a tower.
+           Measured at 11-23% against dv-dtn's 72% — but that is replication
+           run in the regime it suits worst, since links here are quasi-static
+           and a maintained route stays valid. Included as the contrast.
+           The UI degrades accordingly: no belief overlay, no comms replay,
+           because the protocol declares it has no concept of either.
+
+  Overrides, and what they are for (dv-dtn unless noted):
 
     ack=source-routed|digest      (default source-routed)
         How a delivery is acknowledged. source-routed sends a receipt back
@@ -60,14 +70,19 @@ PROTOCOLS
         with ordinary forwarding for those slots. digest instead has towers
         announce recent deliveries inside beacons they were already sending,
         so the receipt costs no extra transmissions at all.
-        Measured (single seed, n=1200): completion 66% -> 80%, and ack loss
-        to zero by construction.
+        Measured over 24 seeds at n=1200: +11.1 +/- 1.8 points of completion,
+        and ack loss to zero by construction. The second half matters more
+        than the first: under source-routed acks at mesh=8, 55% of bundles
+        that *did* arrive left their origin believing they had not.
 
     mesh=N                        (default 1)
         Bundles carried per balloon-to-balloon hop. 1 treats a wake as one
         transmission. Raising it asks whether the mesh is limited by airtime
-        or by opportunity. Measured: with ack=digest, mesh=4 reaches ~96%
-        completion, against 66% for the shipped defaults.
+        or by opportunity. The larger of the two aggregation levers: worth
+        +24.8 +/- 3.8 points over 24 seeds. With ack=digest, mesh=4 reaches
+        94% completion against 63% for the shipped defaults. The two levers
+        are substitutes, not complements — each is worth less once the other
+        is in place, because both buy back the same wake slots.
 
     tower=N                       (default 4)
         Bundles handed over per tower contact. The measured last-hop lever:
@@ -92,21 +107,49 @@ PROTOCOLS
     digest_entries=N              (default 16)
         With ack=digest, how many deliveries a tower announces per beacon.
 
+    discovery=proactive|reactive  (default proactive)
+        When routes are found. proactive maintains them continuously via
+        tower beacons, so a balloon usually has a route already and it may be
+        stale. reactive (AODV-style) spends nothing until there is a bundle
+        to send, then floods a request and waits for a reply — under a duty
+        cycle that is hops x the wake interval in each direction.
+        Measured at 57% against proactive's 72%: the cost is waiting, not
+        route quality. Incompatible with ack=digest, which needs tower
+        beacons to ride on.
+
+    reply=intermediate|tower      (default intermediate)
+        With discovery=reactive, who may answer a request. intermediate lets
+        any node holding a live route answer, which is what AODV does.
+        tower restricts it to nodes that can hear a tower directly, so every
+        route is built from first-hand knowledge. Worth only ~3 points here,
+        and it makes requests travel further.
+
+    copies=N                      (epidemic only, default 4)
+        Starting copy budget per bundle, halved at each handoff. Raising it
+        buys reach at the cost of congesting the queues the copies need.
+
   Examples:
 
     ./run-all.sh --protocol dv-dtn:ack=digest
     ./run-all.sh --protocol dv-dtn:ack=digest,mesh=4
     ./run-all.sh --protocol dv-dtn:metric=nearest,queue=lifo
+    ./run-all.sh --protocol dv-dtn:discovery=reactive
+    ./run-all.sh --protocol epidemic:copies=16
+
+  The measured figures above come from experiments/aggregation-summary.md.
 EOF
 }
 
 MODE="dev"
 # Explicit rather than empty, so a bare ./run-all.sh still prints what it is
-# running. This is the *shipped* configuration, deliberately: the digest and
-# batching variants measure better (see --help) but only at a single seed so
-# far, and the default should be the honest baseline until that is confirmed
-# across seeds. It is also the more interesting thing to watch — belief drift
-# and satellite fallback are both plainly visible at these settings.
+# running. This is the *shipped* configuration, deliberately. The digest and
+# batching variants now measure better across 24 seeds rather than one, so the
+# earlier reason for holding back is gone — but the default stays here because
+# it is the honest baseline every experiment is quoted against, and because it
+# is the more interesting thing to watch: belief drift and satellite fallback
+# are both plainly visible at these settings and largely vanish at 94%
+# completion. Changing the default would quietly re-baseline every figure in
+# experiments/.
 PROTOCOL="dv-dtn"
 while [[ $# -gt 0 ]]; do
   case "$1" in

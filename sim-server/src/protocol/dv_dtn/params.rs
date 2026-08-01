@@ -27,6 +27,26 @@ pub enum Discovery {
     Reactive,
 }
 
+/// Who is allowed to answer a route request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplyPolicy {
+    /// Any node that already holds a live route answers on the requester's
+    /// behalf, which is what AODV does and why it is cheap: most requests die
+    /// a hop or two out instead of reaching the destination.
+    ///
+    /// It relies on the requester being able to tell a good answer from a bad
+    /// one. Real AODV does that with destination sequence numbers. Here the
+    /// equivalent is that a reply carries the age of the news it is built on
+    /// (see `Rrep::emitted_at_round`) rather than the moment it was sent.
+    #[default]
+    Intermediate,
+    /// Only nodes that can hear a tower directly may answer. Every route is
+    /// then built from first-hand knowledge and cannot be longer than the
+    /// flood that found it, at the cost of every request having to reach the
+    /// edge of the mesh.
+    TowerAdjacent,
+}
+
 /// Which route a balloon prefers when two offers compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Metric {
@@ -150,6 +170,9 @@ pub struct DvDtnParams {
     pub metric: Metric,
     /// Whether routes are maintained continuously or fetched on demand.
     pub discovery: Discovery,
+    /// Who may answer a route request. Only consulted under
+    /// `Discovery::Reactive`.
+    pub reply_policy: ReplyPolicy,
 
     // --- Telemetry bundles (C2, design doc §1 and §4) ------------------------
     //
@@ -286,6 +309,7 @@ impl Default for DvDtnParams {
             beacon_max_hops: 20,
             metric: Metric::default(),
             discovery: Discovery::default(),
+            reply_policy: ReplyPolicy::default(),
             bundle_interval_rounds: 200,
             bundle_max_age_rounds: 150,
             relay_queue_capacity: 8,

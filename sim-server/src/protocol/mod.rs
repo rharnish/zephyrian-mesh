@@ -225,7 +225,9 @@ impl std::str::FromStr for ProtocolSpec {
     /// are measured constants that want a code change and a comment, not a
     /// command line.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use dv_dtn::params::{AckPolicy, Discovery, DvDtnParams, Metric, QueueDiscipline};
+        use dv_dtn::params::{
+            AckPolicy, Discovery, DvDtnParams, Metric, QueueDiscipline, ReplyPolicy,
+        };
 
         let (name, rest) = match s.split_once(':') {
             Some((n, r)) => (n, Some(r)),
@@ -279,6 +281,17 @@ impl std::str::FromStr for ProtocolSpec {
                         }
                     }
                 }
+                "reply" => {
+                    p.reply_policy = match v {
+                        "intermediate" | "any" => ReplyPolicy::Intermediate,
+                        "tower" | "tower-adjacent" => ReplyPolicy::TowerAdjacent,
+                        _ => {
+                            return Err(format!(
+                                "reply: expected intermediate|tower, got {v:?}"
+                            ))
+                        }
+                    }
+                }
                 "mesh" => p.batch.mesh_hop = num()?.max(1),
                 "tower" => p.batch.tower_contact = num()?.max(1),
                 "digest_entries" => p.ack_digest_entries = num()?,
@@ -286,7 +299,7 @@ impl std::str::FromStr for ProtocolSpec {
                 other => {
                     return Err(format!(
                         "unknown parameter {other:?} (known: metric, queue, ack, mesh, tower, \
-                         digest_entries, originate, discovery)"
+                         digest_entries, originate, discovery, reply)"
                     ))
                 }
             }

@@ -149,8 +149,10 @@ balloon fields (4 seeds, n = 1200, 400 rounds):
 |---|---|
 | dv-dtn (shipped) | 72.3 ± 7.7% |
 | dv-dtn, digest + mesh=4 | **95.0 ± 1.4%** |
-| binary spray-and-wait, L=4 | 10.9 ± 1.1% |
-| binary spray-and-wait, L=16 | 23.5 ± 3.8% |
+| dv-dtn, reactive discovery (AODV-style) | 57.3 ± 5.0% |
+| dv-dtn, reactive, tower-only replies | 60.0 ± 5.8% |
+| binary spray-and-wait, L=4 | 11.0 ± 1.8% |
+| binary spray-and-wait, L=16 | 23.4 ± 4.5% |
 
 Blind replication does badly here, and the protocol-specific counters say why:
 `handoffs_per_delivery` runs 40–58, and `no_candidate` — wake slots where a
@@ -164,6 +166,38 @@ established that links here are quasi-static — a balloon drifts ~0.4% of link
 range per link round — which is precisely the regime where maintaining a route
 is cheap and worth it. Replication earns its keep when that is false: when
 contacts are brief and a route cannot be kept current long enough to use.
+
+### Reactive discovery, and a bug worth recording
+
+The reactive rows cost 15 points against maintaining routes continuously, and
+the counters say the cost is exactly what the mechanism predicts:
+`stall_no_belief` is **23,259** against proactive's **1,118** — balloons sitting
+on a bundle with nowhere to send it, waiting out a flood in each direction at
+one hop per wake slot. Believed depth is *shorter* than proactive (5.63 hops
+vs 7.12), because an on-demand route is built fresh rather than inherited.
+
+That is the honest reading only after a fix. Reactive first measured **23.2%**
+with a believed depth of **13.6 hops** and 586 loop drops, and the tempting
+story was "reactive is simply worse under a duty cycle." It wasn't. A node
+answering a request from its own route stamped the reply with the *current
+round* rather than the age of the news it held. Under freshness-first adoption
+that made a stale twelve-hop route look like this instant's knowledge, so it
+beat a genuinely current two-hop reply arriving beside it. Routes inflated
+instead of converging. Carrying the age through — the same anti-laundering rule
+the proactive side already had — moved it 23.2% → 57.3% and 13.6 → 5.63 hops.
+Real AODV prevents this with destination sequence numbers; this is the same
+defect those exist to close.
+
+Gating replies to tower-adjacent nodes only (`reply=tower`) was the fix I
+expected to need, and it turns out to be worth almost nothing once the ages are
+honest: +2.7 points, inside the spread, and it *raises* `stall_no_belief` to
+29,482 because every request now has to reach the edge of the mesh. Worth
+keeping as a parameter, not as a finding.
+
+The general lesson is the one this simulator keeps producing: **a protocol
+comparison measures the implementation, not the family.** A 34-point result was
+sitting inside a five-line bug, and it looked like a plausible mechanism the
+whole time.
 
 So this is **not** "routing beats replication". It is spray-and-wait run in the
 regime it is worst suited to, at parameters that were not tuned (L=16 against a
@@ -188,6 +222,10 @@ retargeting rate.
   every effect. More seeds would help there specifically.
 - **The coda's spray-and-wait rows are untuned**, and 4 seeds rather than 24.
   They establish an ordering in this regime, not a bound on the protocol.
+- **The reactive rows are not tuned either.** No route caching between
+  requests, no expanding-ring search, no destination sequence numbers (the age
+  field stands in for them). Given the laundering bug found above, treat 57.3%
+  as a floor for the family rather than a measurement of AODV.
 
 ## Reproducing
 
