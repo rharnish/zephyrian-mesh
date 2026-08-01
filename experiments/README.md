@@ -1,5 +1,13 @@
 # Connectivity sweep — how to run it, and how to run it again with different parameters
 
+> This file is about the **connectivity sweep** specifically. Other
+> experiments living in this directory:
+>
+> | Experiment | Write-up | Generator |
+> |---|---|---|
+> | Real C1+C2 protocol vs. omniscient connectivity | [`protocol-results/`](protocol-results/) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
+> | Batching and ack-digest aggregation | [`aggregation-summary.md`](aggregation-summary.md) | [`aggregation_sweep.rs`](../sim-server/src/bin/aggregation_sweep.rs) |
+
 **The Rust version (`connectivity_sweep.rs`) is the live implementation —
 use it for new sweeps.** The original JS implementation has been archived to
 [`legacy-js/`](legacy-js/) (kept runnable for reference/comparison, not
