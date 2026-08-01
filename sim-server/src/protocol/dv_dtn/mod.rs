@@ -28,7 +28,8 @@ use beacon::RouteBelief;
 use bundle::{Ack, Bundle, Channel, OutstandingBundle, ResolvedBundle};
 use bundle_stats::BundleStats;
 use params::DvDtnParams;
-use rand::{Rng, RngCore};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, VecDeque};
 
 /// One balloon's protocol state. Indexed in parallel with the visible balloon
@@ -79,6 +80,9 @@ pub struct TowerBeacon {
 
 pub struct DvDtn {
     pub params: DvDtnParams,
+    /// The protocol's own randomness — duty-cycle phases and slot jitter.
+    /// Separate from the world's stream on purpose; see `MeshProtocol::reseed`.
+    rng: StdRng,
     pub nodes: Vec<DvNode>,
     /// Keyed by tower id, not by slot: tower ids are never reused, but slots
     /// shift whenever a tower is removed.
@@ -90,6 +94,7 @@ impl Default for DvDtn {
     fn default() -> Self {
         DvDtn {
             params: DvDtnParams::default(),
+            rng: StdRng::from_entropy(),
             nodes: Vec::new(),
             towers: HashMap::new(),
             stats: BundleStats::default(),
@@ -118,20 +123,20 @@ impl MeshProtocol for DvDtn {
         "dv-dtn"
     }
 
+    fn reseed(&mut self, seed: u64) {
+        self.rng = StdRng::seed_from_u64(seed);
+    }
+
     fn clear_nodes(&mut self) {
         self.nodes.clear();
     }
 
     /// The two draws here are the balloon's beacon and bundle duty-cycle
-    /// phases, staggered so the fleet doesn't transmit in unison. Their order
-    /// is load-bearing for seeded sweeps — see the note in
-    /// `World::spawn_balloon_pool`.
-    fn spawn_node(&mut self, rng: &mut dyn RngCore) {
-        self.nodes.push(DvNode {
-            next_beacon_round: beacon::initial_slot(&self.params, rng),
-            next_bundle_round: rng.gen_range(0..self.params.bundle_interval_rounds),
-            ..Default::default()
-        });
+    /// phases, staggered so the fleet doesn't transmit in unison.
+    fn spawn_node(&mut self) {
+        let next_beacon_round = beacon::initial_slot(&self.params, &mut self.rng);
+        let next_bundle_round = self.rng.gen_range(0..self.params.bundle_interval_rounds);
+        self.nodes.push(DvNode { next_beacon_round, next_bundle_round, ..Default::default() });
     }
 
     fn add_tower(&mut self, id: u32) {
@@ -146,7 +151,7 @@ impl MeshProtocol for DvDtn {
     /// freshest belief rather than one a round old, and bundles reuse the
     /// beacon's `awake` set rather than keeping a schedule of their own: a
     /// radio that is awake is awake for both.
-    fn step(&mut self, ctx: StepCtx<'_>, rng: &mut dyn RngCore) -> Vec<CommsEvent> {
+    fn step(&mut self, ctx: StepCtx<'_>) -> Vec<CommsEvent> {
         let n = ctx.balloons.len();
         let result = beacon::step(
             &mut self.nodes[..n],
@@ -156,7 +161,7 @@ impl MeshProtocol for DvDtn {
             ctx.adj,
             &self.params,
             ctx.round,
-            rng,
+            &mut self.rng,
         );
         bundle::step(
             &mut self.nodes[..n],

@@ -99,6 +99,13 @@ pub struct BeaconHopWire {
     pub epoch: u64,
 }
 
+/// Derives the protocol's RNG seed from the world's. Any fixed bijection
+/// works; this is the golden-ratio constant used as a bit-mixer, chosen so
+/// adjacent world seeds don't produce adjacent protocol seeds.
+fn protocol_seed(world_seed: u64) -> u64 {
+    world_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x5DEE_CE66_D3F1_A5B7
+}
+
 /// Milliseconds since the Unix epoch. Saturates rather than panicking on a
 /// clock before 1970, which is not a real case but is not worth a panic path.
 fn now_ms() -> u64 {
@@ -190,6 +197,9 @@ pub struct World {
     grid: SpatialGrid,
     union_find: UnionFind,
     rng: StdRng,
+    /// The seed `with_seed` was given, so a later `with_protocol` can derive
+    /// the protocol's stream from it regardless of call order.
+    seed: u64,
     tick_count: u64,
 }
 
@@ -214,6 +224,7 @@ impl World {
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
             union_find: UnionFind::new(),
             rng: StdRng::from_entropy(),
+            seed: rand::random(),
             tick_count: 0,
         }
     }
@@ -223,6 +234,7 @@ impl World {
     /// are created, so swapping afterwards would leave it empty.
     pub fn with_protocol(mut self, spec: ProtocolSpec) -> Self {
         self.protocol = spec.build();
+        self.protocol.reseed(protocol_seed(self.seed));
         for t in &self.towers {
             self.protocol.add_tower(t.id);
         }
@@ -233,8 +245,14 @@ impl World {
     /// defaults to entropy (right for a live server); offline harnesses that
     /// want a reproducible run per parameter combo should call this before
     /// `spawn_balloon_pool` so spawn positions/altitudes/jitter are pinned too.
+    ///
+    /// The protocol gets a derived but *independent* stream, so that swapping
+    /// protocols at a fixed seed leaves the balloon field identical — see
+    /// `MeshProtocol::reseed`.
     pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
         self.rng = StdRng::seed_from_u64(seed);
+        self.protocol.reseed(protocol_seed(seed));
         self
     }
 
@@ -250,7 +268,7 @@ impl World {
             // unison. Drawn here, inside the same iteration that builds the
             // balloon, so the RNG stream stays exactly as it was — see
             // DvDtn::spawn_node.
-            self.protocol.spawn_node(&mut self.rng);
+            self.protocol.spawn_node();
             self.balloons.push(b);
             self.next_balloon_id += 1;
         }
@@ -456,15 +474,12 @@ impl World {
             // Beacons first, so a bundle forwarded this round uses the freshest
             // belief available rather than one a round old. `awake` is the set
             // of radios that transmitted; bundles ride the same duty cycle.
-            let events = self.protocol.step(
-                StepCtx {
-                    round,
-                    balloons: &self.balloons[..self.visible_count],
-                    towers: &self.towers,
-                    adj: &self.adjacency,
-                },
-                &mut self.rng,
-            );
+            let events = self.protocol.step(StepCtx {
+                round,
+                balloons: &self.balloons[..self.visible_count],
+                towers: &self.towers,
+                adj: &self.adjacency,
+            });
             if !events.is_empty() {
                 beacon_hops = Some(
                     events
@@ -539,6 +554,48 @@ mod tests {
         world.spawn_balloon_pool(10);
         world.set_visible_count(10);
         world
+    }
+
+    /// The reason the protocol has its own RNG stream: comparing two
+    /// protocols at a fixed seed is only meaningful if they are compared over
+    /// the *same* balloon field. Drawing duty-cycle phases from the world's
+    /// stream broke that — a protocol taking one more draw per balloon shifted
+    /// every subsequent position, so the two runs differed in topology as well
+    /// as in routing, and any delivery difference was uninterpretable.
+    #[test]
+    fn protocol_choice_does_not_perturb_the_balloon_field() {
+        use crate::protocol::dv_dtn::params::{DvDtnParams, Metric, QueueDiscipline};
+
+        let variant = DvDtnParams {
+            metric: Metric::NearestFirst,
+            queue_discipline: QueueDiscipline::Lifo,
+            bundle_interval_rounds: 37,
+            beacon_interval_rounds: 9,
+            ..Default::default()
+        };
+
+        let run = |spec: ProtocolSpec| {
+            let mut w = World::new(Arc::new(WindField::zero()))
+                .with_protocol(spec)
+                .with_seed(4242);
+            for &(lon, lat, h) in INITIAL_TOWERS {
+                w.add_tower(lon, lat, h);
+            }
+            w.spawn_balloon_pool(60);
+            w.set_visible_count(60);
+            for _ in 0..200 {
+                w.tick(TICK_DT_SECONDS * TIME_SCALE);
+            }
+            w.balloons.iter().map(|b| (b.lon, b.lat, b.alt)).collect::<Vec<_>>()
+        };
+
+        let shipped = run(ProtocolSpec::default());
+        let tweaked = run(ProtocolSpec::DvDtn(variant));
+        assert_eq!(
+            shipped, tweaked,
+            "changing protocol parameters moved the balloons; the two RNG \
+             streams are not actually independent"
+        );
     }
 
     #[test]

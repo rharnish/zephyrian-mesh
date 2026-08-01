@@ -26,7 +26,6 @@ use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
 use crate::telemetry::TelemetryRecord;
 use crate::tower::Tower;
-use rand::RngCore;
 
 /// Everything a protocol may read to advance one comms round. Read-only: a
 /// protocol may not move a balloon or change the topology, which is enforced
@@ -103,16 +102,20 @@ pub trait MeshProtocol: Send {
     fn spec_name(&self) -> &'static str;
 
     // --- Lifecycle ----------------------------------------------------------
+    /// Pin the protocol's own randomness. Deliberately a *separate* stream
+    /// from the world's: a protocol that draws more or fewer numbers than
+    /// another would otherwise shift every subsequent physics draw, so two
+    /// protocols run at "the same seed" would not even see the same balloon
+    /// field — confounding the comparison this whole seam exists to enable.
+    fn reseed(&mut self, seed: u64);
     fn clear_nodes(&mut self);
-    /// Add state for one newly spawned balloon. Called inside the spawn loop,
-    /// so any RNG draws here interleave with the balloon's own — see
-    /// `World::spawn_balloon_pool`.
-    fn spawn_node(&mut self, rng: &mut dyn RngCore);
+    /// Add state for one newly spawned balloon.
+    fn spawn_node(&mut self);
     fn add_tower(&mut self, id: u32);
     fn remove_tower(&mut self, id: u32);
 
     // --- The round ----------------------------------------------------------
-    fn step(&mut self, ctx: StepCtx<'_>, rng: &mut dyn RngCore) -> Vec<CommsEvent>;
+    fn step(&mut self, ctx: StepCtx<'_>) -> Vec<CommsEvent>;
 
     // --- Published state ----------------------------------------------------
     fn node_view(&self, i: usize) -> NodeCommsView;
