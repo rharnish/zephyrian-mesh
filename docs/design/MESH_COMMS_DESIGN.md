@@ -19,8 +19,8 @@ per-hop routing, message identity, or signing. There is no log/message/tamper UI
 Groundwork that already exists: `sim-server/src/bin/mesh_depth.rs` (offline probe measuring the
 mesh's graph statistics — see §1.1), a live **mesh-health readout** in the Controls panel (mean
 node degree + % grounded, computed in `sim.rs`'s link-recompute block and carried on every
-`Snapshot`), and **C1** — the beacon protocol itself, in `sim-server/src/beacon.rs` with the
-belief-vs-truth overlay in `src/main.js`.
+`Snapshot`), and **C1** — the beacon protocol itself, now at
+`sim-server/src/protocol/dv_dtn/beacon.rs`, with the belief-vs-truth overlay in `src/main.js`.
 
 The vision below adds: (1) a **decentralized** store-and-forward mesh comms protocol in which
 balloons learn their own connectivity, (2) tamper-evident message integrity via real crypto with
@@ -326,7 +326,8 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
     measuring against resolved bundles adds only 1.4–3.0 points. Both are now reported.
   - *Path inflation is not happening.* The suspicion that freshness-first `should_adopt` sends
     bundles the long way round is wrong — believed depth tracks `bin/mesh_depth`'s omniscient
-    median within a hop. An ablation routing on hop count first (`ablation::prefer_nearer`)
+    median within a hop. An ablation routing on hop count first (now `Metric::NearestFirst`; still
+    reachable as `PREFER_NEARER=1` in `bin/bundle_delivery.rs`, or `metric=nearest` in a spec)
     helps *below* percolation (32.1% → 39.3%) and **hurts above it** (56.0% → 50.5%), which is
     where the mesh ships. Not a fix.
   - *Stale next hops are almost never exercised* — under 0.3% of slots at any density. Links
@@ -430,14 +431,31 @@ two can be done in either order, or interleaved.
   tamper-demo, last-delivery glyph.
 
 Each phase is independently reviewable and visually demonstrable. **C1 is done** — beacon
-protocol, belief expiry, and the belief-vs-truth overlay are in `sim-server/src/beacon.rs` and the
-Controls panel. **C2 is now done too** — bundle forwarding, relay queues, the tower-contact
-window, tower acks, and satellite fallback are all in `sim-server/src/bundle.rs`, exercised by
-`bin/bundle_delivery.rs`. One addition beyond what §1/§4 specify: an ack competes with ordinary
+protocol, belief expiry, and the belief-vs-truth overlay are in
+`sim-server/src/protocol/dv_dtn/beacon.rs` and the Controls panel. **C2 is now done too** —
+bundle forwarding, relay queues, the tower-contact window, tower acks, and satellite fallback are
+all in `sim-server/src/protocol/dv_dtn/bundle.rs`, exercised by `bin/bundle_delivery.rs`. One addition beyond what §1/§4 specify: an ack competes with ordinary
 bundle-forwarding for the same one-transmission wake slot at non-tower-adjacent relays (ack wins),
 since letting both ride the same wake for free would have quietly doubled a balloon's per-slot
 throughput and undermined the last-hop scarcity findings in §4 — tower contacts are exempt, for
 the same reason `TOWER_CONTACT_BUNDLES` already is. C3 is the next step.
+
+**Since this was written, the protocol became pluggable.** What §1–§4 describe is now one
+implementation of a `MeshProtocol` trait rather than *the* protocol: `protocol/dv_dtn/` holds it,
+with proactive beacons, AODV-style reactive discovery and gossiped link-state as three
+interchangeable discovery modes over one shared forwarding half, and `protocol/epidemic/` holds
+binary spray-and-wait, which has no routes at all. A balloon keeps only physics plus a small
+published view; everything else belongs to whichever protocol is loaded. Nothing in this document's
+findings changed — the golden fingerprint is byte-identical across the refactor — but the file
+layout it names did, and the constants it treats as global are now fields on `DvDtnParams`.
+
+Two axes were added that §1–§4 do not cover, both measured in
+[`experiments/aggregation-summary.md`](../../experiments/aggregation-summary.md): **aggregation**
+(bundles per transmission, and an ack digest riding tower beacons instead of source-routed receipt
+packets), which is the direct answer to the last-hop scarcity §4 measures; and **wind**, since
+every number here was taken on a frozen topology. Real weather quadruples link turnover and moves
+delivery not at all — store-carry-forward absorbs churn as delay rather than loss — which is worth
+reading before trusting the zero-wind framing anywhere above.
 
 **Verification convention (learned the hard way in C1).** Every comms phase needs an offline
 harness under `sim-server/src/bin/`, not just a look at the globe. `sim-server` is a library, so a

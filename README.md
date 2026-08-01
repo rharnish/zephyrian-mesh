@@ -25,7 +25,7 @@ belief-vs-truth divergence is plotted in
 
 | Piece | What it does |
 | --- | --- |
-| `sim-server/` | Rust. Physics, link detection, the beacon and bundle protocols — the simulation's source of truth. |
+| `sim-server/` | Rust. Physics, link detection, and the pluggable comms protocols — the simulation's source of truth. |
 | `src/` | Browser frontend. Renders whatever `sim-server` broadcasts over a WebSocket; holds no simulation state. |
 | `weather-data-server/` | Python. Serves ERA5 wind fields to `sim-server`. |
 | `experiments/` | Offline sweep binaries and their results. |
@@ -117,12 +117,23 @@ cargo run --release
 First build takes a minute or so; after that it's fast (cached). Owns
 balloon/tower state, physics, and radio-link detection — see
 [`sim-server/README.md`](sim-server/README.md) for how it fits together.
-Wind data is fetched from `WIND_API_URL` in `src/config.js`
-(`http://127.0.0.1:8000/api/wind-levels` by default). If
-`wind_backend.py` isn't reachable yet, `sim-server` logs a warning and
-falls back to zero wind rather than failing to start — start
-`wind_backend.py` first to avoid that, or just restart `sim-server` once
-it is up.
+Wind is loaded from an on-disk cache when one exists, and fetched from
+`wind_backend.py` only on a miss (then cached). So the ~100s that startup
+used to spend building and transferring a ~350MB grid is paid once rather
+than every run, and `run-all.sh` doesn't start the Python backend at all
+once the cache is warm. Choose a field with `--wind` — `auto` (default)
+means cache-then-fetch, `none` means zero wind, and anything else names a
+cached field by its observation time:
+
+```bash
+cd sim-server
+cargo run --release --bin wind_cache -- steps   # what the .nc holds
+cargo run --release --bin wind_cache -- fetch   # cache it (backend must be up)
+cargo run --release --bin wind_cache -- list
+```
+
+With neither cache nor backend, `sim-server` logs a warning and falls back
+to zero wind rather than failing to start.
 
 Sanity check it's up (should hang open, printing snapshot JSON — Ctrl-C
 to stop):
@@ -143,8 +154,9 @@ Cesium's terrain load — sim-server seeds balloons/towers fresh on each of
 its own restarts, not on frontend reloads, so reloading the browser just
 reconnects to whatever state sim-server already has. The "Wind vectors"
 toggle stays disabled a bit longer (shows "Loading wind data..."): it
-fetches the full wind grid from `wind_backend.py` in the background —
-nothing else waits on that fetch.
+fetches the full wind grid from `sim-server` in the background (which
+serves it from whatever field it loaded) — nothing else waits on that
+fetch.
 
 ### Stopping everything
 

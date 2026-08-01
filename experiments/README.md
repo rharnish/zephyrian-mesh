@@ -7,6 +7,14 @@
 > |---|---|---|
 > | Real C1+C2 protocol vs. omniscient connectivity | [`protocol-results/`](protocol-results/) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
 > | Batching and ack-digest aggregation | [`aggregation-summary.md`](aggregation-summary.md) | [`aggregation_sweep.rs`](../sim-server/src/bin/aggregation_sweep.rs) |
+> | Every protocol over identical fields (incl. the wind coda) | [`aggregation-summary.md`](aggregation-summary.md) | [`protocol_compare.rs`](../sim-server/src/bin/protocol_compare.rs) |
+> | Protocols crossed with real weather fields | [`aggregation-summary.md`](aggregation-summary.md) | [`wind_sweep.rs`](../sim-server/src/bin/wind_sweep.rs) |
+> | Does wind actually churn the topology? | (in the above) | [`link_churn.rs`](../sim-server/src/bin/link_churn.rs) |
+>
+> Anything taking a `--wind` flag reads a **cached** field rather than
+> fetching one, so runs are reproducible and need no Python backend. See
+> [`wind_cache.rs`](../sim-server/src/bin/wind_cache.rs) and the "Wind" note
+> in the root [README](../README.md).
 
 **The Rust version (`connectivity_sweep.rs`) is the live implementation —
 use it for new sweeps.** The original JS implementation has been archived to
