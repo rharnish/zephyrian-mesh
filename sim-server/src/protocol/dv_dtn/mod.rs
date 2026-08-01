@@ -87,7 +87,7 @@ static CAPABILITIES: Capabilities = Capabilities {
     next_hop_paths: true,
     acks: true,
     satellite_fallback: true,
-    event_kinds: &[EventKind::RouteAd],
+    event_kinds: &[EventKind::RouteAd, EventKind::Bundle, EventKind::Ack],
 };
 
 pub struct DvDtn {
@@ -179,7 +179,7 @@ impl MeshProtocol for DvDtn {
             ctx.round,
             &mut self.rng,
         );
-        bundle::step(
+        let mut events: Vec<CommsEvent> = bundle::step(
             &mut self.nodes[..n],
             ctx.balloons,
             ctx.adj,
@@ -188,19 +188,16 @@ impl MeshProtocol for DvDtn {
             ctx.round,
             &mut self.stats,
         );
-        result
-            .hops
-            .into_iter()
-            .map(|h| CommsEvent {
-                kind: EventKind::RouteAd,
-                from: h.from,
-                to: crate::link_detection::NodeKey::Balloon(ctx.balloons[h.to_balloon].id),
-                payload: 1,
-                tower_id: Some(h.tower_id),
-                hop_count: Some(h.hop_count),
-                epoch: Some(h.epoch),
-            })
-            .collect()
+        events.extend(result.hops.into_iter().map(|h| CommsEvent {
+            kind: EventKind::RouteAd,
+            from: h.from,
+            to: crate::link_detection::NodeKey::Balloon(ctx.balloons[h.to_balloon].id),
+            payload: 1,
+            tower_id: Some(h.tower_id),
+            hop_count: Some(h.hop_count),
+            epoch: Some(h.epoch),
+        }));
+        events
     }
 
     fn node_view(&self, i: usize) -> NodeCommsView {

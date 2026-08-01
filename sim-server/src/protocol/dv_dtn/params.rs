@@ -29,6 +29,34 @@ pub enum Metric {
     NearestFirst,
 }
 
+/// How many bundles ride one transmission, per kind of link.
+///
+/// Aggregation here is a *transmission-time* decision, not a change to bundle
+/// identity: one wake slot carries K bundles, each keeping its own path,
+/// origin and seq. That matters — it leaves per-record provenance (what C3's
+/// signing will need) untouched, and every existing counter keeps its meaning,
+/// since `delivered` still counts records either way.
+///
+/// This generalizes what tower contacts already did. `{ mesh_hop: 1,
+/// tower_contact: 4 }` is exactly the shipped behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchPolicy {
+    /// Bundles per balloon-to-balloon hop. One is the conservative reading of
+    /// a duty-cycled radio: a wake is one transmission. Raising it asks
+    /// whether the mesh is limited by airtime or by opportunity.
+    pub mesh_hop: usize,
+    /// Bundles per tower contact. Already 4 rather than 1, because a
+    /// point-to-point link to a mains-powered ground station is a different
+    /// event from a broadcast beacon — see the measurements below.
+    pub tower_contact: usize,
+}
+
+impl Default for BatchPolicy {
+    fn default() -> Self {
+        BatchPolicy { mesh_hop: 1, tower_contact: 4 }
+    }
+}
+
 /// Which held bundle a balloon transmits when its slot comes up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QueueDiscipline {
@@ -151,7 +179,8 @@ pub struct DvDtnParams {
     /// with delivered/round at r = 0.94, which swamps any queue effect at
     /// single-seed. Blocking is the unconfounded signal, and it is monotone.
     pub relay_queue_capacity: usize,
-    /// How many bundles a balloon may hand to a tower in a single contact.
+    /// How many bundles ride one transmission, per link kind. The
+    /// `tower_contact` half is the measured last-hop lever:
     ///
     /// One transmission per wake slot is the right rule for a *beacon*: it is a
     /// broadcast to no one in particular, rationed by the duty cycle. A tower
@@ -172,7 +201,7 @@ pub struct DvDtnParams {
     /// being the binding constraint (ceiling 16.6/round against 5.9/round
     /// offered) and the limit moves back into the mesh, to bundles expiring
     /// before they ever reach a tower-adjacent balloon.
-    pub tower_contact_bundles: usize,
+    pub batch: BatchPolicy,
     /// Hop budget. A bundle whose recorded path reaches this length is dropped.
     /// Sized against p95 mesh depth (see mesh_depth.rs); deeper paths only
     /// exist near percolation, where satellite is the right answer anyway.
@@ -208,7 +237,7 @@ impl Default for DvDtnParams {
             bundle_interval_rounds: 200,
             bundle_max_age_rounds: 150,
             relay_queue_capacity: 8,
-            tower_contact_bundles: 4,
+            batch: BatchPolicy::default(),
             bundle_max_hops: 20,
             ack_queue_capacity: 4,
             queue_discipline: QueueDiscipline::default(),

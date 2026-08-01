@@ -121,12 +121,12 @@ impl BundleStats {
     }
 
     /// Ceiling on deliveries per round, from the last hop alone: each
-    /// tower-adjacent balloon can pass `tower_contact_bundles` per
+    /// tower-adjacent balloon can pass `batch.tower_contact` per
     /// `beacon_interval_rounds`. Nothing about mesh depth, queue depth, or
     /// routing quality can raise it — only the tower-adjacent population or the
     /// size of a contact.
     pub fn delivery_capacity_per_round(&self, params: &DvDtnParams) -> f64 {
-        self.mean_tower_adjacent() * params.tower_contact_bundles as f64
+        self.mean_tower_adjacent() * params.batch.tower_contact as f64
             / params.beacon_interval_rounds as f64
     }
 

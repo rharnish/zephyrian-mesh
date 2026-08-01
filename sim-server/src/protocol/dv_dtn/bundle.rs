@@ -45,7 +45,7 @@
 // balloon's own bundle-forwarding this slot — letting both ride the same wake
 // would quietly double a balloon's per-slot throughput and undermine the
 // scarce-slot model the last-hop saturation findings depend on. Tower
-// contacts are unaffected: draining params.tower_contact_bundles already runs on a
+// contacts are unaffected: draining a tower-contact batch already runs on a
 // separate, higher-capacity link, which is why it's allowed to break the
 // one-per-slot rule in the first place.
 //
@@ -59,6 +59,8 @@ use crate::balloon::Balloon;
 use crate::mesh_adjacency::MeshAdjacency;
 use super::bundle_stats::bump;
 use super::params::{DvDtnParams, QueueDiscipline};
+use crate::link_detection::NodeKey;
+use crate::protocol::{CommsEvent, EventKind};
 use super::DvNode;
 
 pub use super::bundle_stats::{hist_mean, BundleStats};
@@ -236,6 +238,38 @@ fn take(q: &mut std::collections::VecDeque<Bundle>, d: QueueDiscipline) -> Optio
     }
 }
 
+/// The `k`th bundle a balloon would transmit, counting from whichever end its
+/// discipline serves. `k = 0` is the head this slot; higher `k` is what a
+/// batched transmission would take next.
+fn peek_nth(
+    q: &std::collections::VecDeque<Bundle>,
+    d: QueueDiscipline,
+    k: usize,
+) -> Option<&Bundle> {
+    match d {
+        QueueDiscipline::Fifo => q.get(k),
+        QueueDiscipline::Lifo => q.len().checked_sub(1 + k).and_then(|i| q.get(i)),
+    }
+}
+
+fn remove_nth(
+    q: &mut std::collections::VecDeque<Bundle>,
+    d: QueueDiscipline,
+    k: usize,
+) -> Option<Bundle> {
+    let idx = match d {
+        QueueDiscipline::Fifo => k,
+        QueueDiscipline::Lifo => q.len().checked_sub(1 + k)?,
+    };
+    q.remove(idx)
+}
+
+/// Finds a specific bundle by identity. `(origin_id, seq)` is unique — one
+/// origin, monotonic seq, and this protocol never duplicates a bundle.
+fn position_of(q: &std::collections::VecDeque<Bundle>, origin_id: u32, seq: u64) -> Option<usize> {
+    q.iter().position(|b| b.origin_id == origin_id && b.seq == seq)
+}
+
 /// Advance bundles by one comms round.
 ///
 /// `awake` is the set of balloon indices that transmitted this round, taken
@@ -253,7 +287,9 @@ pub fn step(
     awake: &[usize],
     round: u64,
     stats: &mut BundleStats,
-) {
+) -> Vec<CommsEvent> {
+    let mut events: Vec<CommsEvent> = Vec::new();
+
     // 1. Expire bundles. One that's aged past its budget wherever it currently
     //    sits is handed to satellite rather than dropped.
     let mut satellite_origins: Vec<(u32, u64, Vec<u32>)> = Vec::new(); // (origin_id, seq, path)
@@ -328,7 +364,7 @@ pub fn step(
     //    an ack ride alongside a bundle-forward would quietly double a
     //    balloon's per-slot throughput there. This does NOT compete with tower
     //    draining below — the tower link is a separate, higher-capacity
-    //    channel (same reason params.tower_contact_bundles already breaks the
+    //    channel (same reason a tower contact already breaks the
     //    one-per-slot rule), and a tower-adjacent balloon's belief never
     //    points at a mesh peer anyway (hop_count == 1, next_hop == None), so it
     //    was never a candidate for the bundle-forward branch this contends
@@ -336,7 +372,7 @@ pub fn step(
     //    someone else. Two-phase gather/apply, same reason as bundle-forwarding
     //    below.
     let mut ack_used: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut ack_moves: Vec<(u32, Ack)> = Vec::new();
+    let mut ack_moves: Vec<(usize, u32, Ack)> = Vec::new(); // (from index, to id, ack)
     let mut ack_resolved: Vec<(u32, u64)> = Vec::new(); // (origin_id, seq)
 
     for &i in awake {
@@ -351,15 +387,24 @@ pub fn step(
         if ack.remaining.is_empty() {
             ack_resolved.push((ack.origin_id, ack.seq));
         } else {
-            ack_moves.push((next, ack));
+            ack_moves.push((i, next, ack));
         }
     }
 
-    for (to, ack) in ack_moves {
+    for (from_idx, to, ack) in ack_moves {
         let to_idx = to as usize;
         let has_room =
             nodes.get(to_idx).is_some_and(|b| b.ack_queue.len() < params.ack_queue_capacity);
         if has_room {
+            events.push(CommsEvent {
+                kind: EventKind::Ack,
+                from: NodeKey::Balloon(balloons[from_idx].id),
+                to: NodeKey::Balloon(to),
+                payload: 1,
+                tower_id: None,
+                hop_count: None,
+                epoch: None,
+            });
             nodes[to_idx].ack_queue.push_back(ack);
         } else {
             stats.ack_lost += 1;
@@ -390,17 +435,41 @@ pub fn step(
     //    reason as beacon::step — applying in place would let a bundle race
     //    along several hops within one round depending on iteration order,
     //    collapsing exactly the delay being modelled.
-    let mut moves: Vec<(usize, u32)> = Vec::new(); // (from index, to balloon id)
+    // The bundles travel *with* the move rather than being re-taken in phase 4.
+    // That is not just tidier: under LIFO the sender's queue can grow during
+    // phase 4 (it may be someone else's receiver), and re-taking by discipline
+    // would then send a bundle that was never loop- or TTL-checked.
+    struct Move {
+        from: usize,
+        to: u32,
+        /// Identities, not the bundles themselves. They stay in the sender's
+        /// queue until phase 4 actually hands them over, which matters: a
+        /// bundle merely *scheduled* to leave still occupies a slot, so it
+        /// still counts against other senders' capacity checks this round.
+        /// Taking them out early quietly reduced blocking.
+        ///
+        /// Identity rather than position, because under LIFO the sender's
+        /// queue can grow during phase 4 (it may be someone else's receiver),
+        /// and re-taking by discipline would then send a bundle that was never
+        /// loop- or TTL-checked.
+        ids: Vec<(u32, u64)>,
+        tower_id: u32,
+        hop_count: u32,
+    }
+    let mut moves: Vec<Move> = Vec::new();
 
-    // One transmission per awake radio, so only the head of the queue moves.
-    // Tower draining below is never in contention with an ack this balloon is
-    // relaying — see the note on `ack_used` above — so it isn't gated on it;
-    // only the mesh-forward arm (`Some(next)`) is.
+    // One transmission per awake radio — but a transmission may carry more
+    // than one bundle (see BatchPolicy). Tower draining below is never in
+    // contention with an ack this balloon is relaying — see the note on
+    // `ack_used` above — so it isn't gated on it; only the mesh-forward arm
+    // (`Some(next)`) is.
     for &i in awake {
         if let Some(bel) = nodes[i].belief {
             bump(&mut stats.belief_hops, bel.hop_count as usize);
         }
-        let Some(bundle) = peek(&nodes[i].queue, params.queue_discipline) else { continue };
+        if peek(&nodes[i].queue, params.queue_discipline).is_none() {
+            continue;
+        }
 
         // A balloon with no belief has nowhere to send it. Hold.
         let Some(belief) = nodes[i].belief else {
@@ -415,12 +484,23 @@ pub fn step(
             None => {
                 stats.slots_with_bundle += 1;
                 if let Some(tower_id) = adj.tower_in_range(i) {
-                    // A tower contact drains up to params.tower_contact_bundles, not
+                    // A tower contact drains a batch, not
                     // one. The one-per-slot rule rations *beacon* airtime; a
                     // point-to-point link to a ground station is a different
                     // event, and this is the only lever that acts on the last
                     // hop, which is where the throughput limit actually lives.
-                    let n = params.tower_contact_bundles.min(nodes[i].queue.len());
+                    let n = params.batch.tower_contact.min(nodes[i].queue.len());
+                    if n > 0 {
+                        events.push(CommsEvent {
+                            kind: EventKind::Bundle,
+                            from: NodeKey::Balloon(balloons[i].id),
+                            to: NodeKey::Tower(tower_id),
+                            payload: n as u32,
+                            tower_id: Some(tower_id),
+                            hop_count: Some(0),
+                            epoch: None,
+                        });
+                    }
                     for _ in 0..n {
                         let bd = take(&mut nodes[i].queue, params.queue_discipline)
                             .expect("checked non-empty");
@@ -494,21 +574,42 @@ pub fn step(
                     stats.stall_stale_next_hop += 1;
                     continue; // stale next hop — hold, don't drop
                 }
-                if bundle.path.contains(&next) {
-                    let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
-                    take(&mut nodes[i].queue, params.queue_discipline);
-                    stats.dropped_loop += 1;
-                    record_dead_end(nodes, origin_id, seq, path);
-                    continue;
+                // Fill the transmission up to the mesh batch size. A bundle
+                // that would loop or is out of hop budget is dropped and ends
+                // the batch, which at mesh_hop = 1 is exactly the old
+                // one-bundle-per-slot behaviour.
+                let mut ids: Vec<(u32, u64)> = Vec::new();
+                while ids.len() < params.batch.mesh_hop {
+                    let k = ids.len();
+                    let Some(bd) = peek_nth(&nodes[i].queue, params.queue_discipline, k) else {
+                        break;
+                    };
+                    let (origin_id, seq) = (bd.origin_id, bd.seq);
+                    if bd.path.contains(&next) {
+                        let path = bd.path.clone();
+                        remove_nth(&mut nodes[i].queue, params.queue_discipline, k);
+                        stats.dropped_loop += 1;
+                        record_dead_end(nodes, origin_id, seq, path);
+                        break;
+                    }
+                    if bd.path.len() >= params.bundle_max_hops {
+                        let path = bd.path.clone();
+                        remove_nth(&mut nodes[i].queue, params.queue_discipline, k);
+                        stats.dropped_ttl += 1;
+                        record_dead_end(nodes, origin_id, seq, path);
+                        break;
+                    }
+                    ids.push((origin_id, seq));
                 }
-                if bundle.path.len() >= params.bundle_max_hops {
-                    let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
-                    take(&mut nodes[i].queue, params.queue_discipline);
-                    stats.dropped_ttl += 1;
-                    record_dead_end(nodes, origin_id, seq, path);
-                    continue;
+                if !ids.is_empty() {
+                    moves.push(Move {
+                        from: i,
+                        to: next,
+                        ids,
+                        tower_id: belief.tower_id,
+                        hop_count: belief.hop_count,
+                    });
                 }
-                moves.push((i, next));
             }
         }
     }
@@ -519,18 +620,33 @@ pub fn step(
     //    majority of traffic the moment the mesh is busy, which is what the
     //    first run of bundle_delivery.rs showed: 18270 of 21634 bundles
     //    destroyed by congestion alone.
-    let discipline = params.queue_discipline;
-    for (from, to) in moves {
-        let to_idx = to as usize;
-        let has_room =
-            nodes.get(to_idx).is_some_and(|r| r.queue.len() < params.relay_queue_capacity);
-        if !has_room {
-            stats.blocked += 1;
-            continue;
+    for mv in moves {
+        let to_idx = mv.to as usize;
+        let mut sent = 0u32;
+        for (origin_id, seq) in mv.ids {
+            let has_room =
+                nodes.get(to_idx).is_some_and(|r| r.queue.len() < params.relay_queue_capacity);
+            if !has_room {
+                stats.blocked += 1;
+                continue; // hold — the sender still has it, untouched
+            }
+            let Some(pos) = position_of(&nodes[mv.from].queue, origin_id, seq) else { continue };
+            let mut bundle = nodes[mv.from].queue.remove(pos).expect("just located");
+            bundle.path.push(mv.to);
+            nodes[to_idx].queue.push_back(bundle);
+            sent += 1;
         }
-        let Some(mut bundle) = take(&mut nodes[from].queue, discipline) else { continue };
-        bundle.path.push(to);
-        nodes[to_idx].queue.push_back(bundle);
+        if sent > 0 {
+            events.push(CommsEvent {
+                kind: EventKind::Bundle,
+                from: NodeKey::Balloon(balloons[mv.from].id),
+                to: NodeKey::Balloon(mv.to),
+                payload: sent,
+                tower_id: Some(mv.tower_id),
+                hop_count: Some(mv.hop_count),
+                epoch: None,
+            });
+        }
     }
 
     // 5. Originate. Two independent limits: the queue must have room (shared
@@ -574,12 +690,14 @@ pub fn step(
         b.next_bundle_round = round + params.bundle_interval_rounds;
         stats.originated += 1;
     }
+
+    events
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::params::{DvDtnParams, QueueDiscipline};
+    use super::super::params::{BatchPolicy, DvDtnParams, QueueDiscipline};
     use crate::protocol::dv_dtn::beacon::RouteBelief;
     use crate::link_detection::{Edge, NodeKey};
     use crate::tower::Tower;
@@ -838,7 +956,7 @@ mod tests {
 
         step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], 1, &mut stats);
 
-        let expected = DvDtnParams::default().tower_contact_bundles.min(DvDtnParams::default().relay_queue_capacity);
+        let expected = DvDtnParams::default().batch.tower_contact.min(DvDtnParams::default().relay_queue_capacity);
         assert_eq!(stats.delivered, expected as u64, "stats: {stats:?}");
         assert_eq!(nodes[0].queue.len(), DvDtnParams::default().relay_queue_capacity - expected);
     }
@@ -896,6 +1014,84 @@ mod tests {
         // And the oldest are the ones left behind to age out.
         let left: Vec<u64> = nodes[2].queue.iter().map(|b| b.seq).collect();
         assert_eq!(left, vec![0, 1]);
+    }
+
+    /// Batching is the aggregation axis: one wake slot, several bundles, each
+    /// keeping its own identity and path. Contrast with the default, where the
+    /// same setup moves exactly one.
+    #[test]
+    fn a_batched_mesh_hop_moves_several_bundles_in_one_slot() {
+        let params = DvDtnParams {
+            batch: BatchPolicy { mesh_hop: 3, ..Default::default() },
+            ..Default::default()
+        };
+        let (balloons, mut nodes, _t, adj) = line(3);
+        seed_beliefs(&mut nodes, 0);
+        let mut stats = BundleStats::default();
+        for b in nodes.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        for seq in 0..4u64 {
+            nodes[2].queue.push_back(Bundle {
+                origin_id: 2,
+                seq,
+                created_at_round: 0,
+                record: test_record(2, seq),
+                path: vec![2],
+            });
+        }
+
+        step(&mut nodes, &balloons, &adj, &params, &[2], 1, &mut stats);
+
+        assert_eq!(nodes[1].queue.len(), 3, "the batch size, not one and not all four");
+        assert_eq!(nodes[2].queue.len(), 1, "the fourth stays with the sender");
+        // Each keeps its own identity and its own recorded path — batching is a
+        // transmission-time grouping, not a merge.
+        let moved: Vec<u64> = nodes[1].queue.iter().map(|b| b.seq).collect();
+        assert_eq!(moved, vec![0, 1, 2]);
+        for b in nodes[1].queue.iter() {
+            assert_eq!(b.path, vec![2, 1], "each bundle records its own hop");
+        }
+    }
+
+    /// Regression: the sender's queue can grow during the apply phase, because
+    /// it may be someone else's receiver. Under LIFO that moves the "newest"
+    /// end, so taking by discipline at apply time could send a bundle that was
+    /// never loop- or TTL-checked. Moves therefore carry identities.
+    #[test]
+    fn lifo_sends_the_bundle_it_checked_even_if_the_queue_grew_meanwhile() {
+        let params = DvDtnParams { queue_discipline: QueueDiscipline::Lifo, ..Default::default() };
+        // b2 -> b1 -> b0 -> tower. b2 forwards to b1 while b1 forwards to b0,
+        // so b1 is both a sender and a receiver in the same round.
+        let (balloons, mut nodes, _t, adj) = line(3);
+        seed_beliefs(&mut nodes, 0);
+        let mut stats = BundleStats::default();
+        for b in nodes.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        nodes[1].queue.push_back(Bundle {
+            origin_id: 1,
+            seq: 100,
+            created_at_round: 0,
+            record: test_record(1, 100),
+            path: vec![1],
+        });
+        nodes[2].queue.push_back(Bundle {
+            origin_id: 2,
+            seq: 200,
+            created_at_round: 0,
+            record: test_record(2, 200),
+            path: vec![2],
+        });
+
+        step(&mut nodes, &balloons, &adj, &params, &[1, 2], 1, &mut stats);
+
+        // b1 must have forwarded its *own* bundle — the one it checked — not
+        // b2's, which only arrived during the same apply phase.
+        let at_zero: Vec<u64> = nodes[0].queue.iter().map(|b| b.seq).collect();
+        assert_eq!(at_zero, vec![100], "b1 sent the bundle it actually checked");
+        let at_one: Vec<u64> = nodes[1].queue.iter().map(|b| b.seq).collect();
+        assert_eq!(at_one, vec![200], "b2's bundle landed and stayed");
     }
 
     #[test]
