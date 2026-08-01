@@ -19,6 +19,7 @@ pub mod aodv;
 pub mod beacon;
 pub mod bundle;
 pub mod bundle_stats;
+pub mod linkstate;
 pub mod params;
 
 use crate::protocol::{
@@ -114,11 +115,26 @@ static CAPABILITIES_REACTIVE: Capabilities = Capabilities {
     ],
 };
 
+/// A balloon here holds a map rather than a distance, but the map still
+/// resolves to one route with one next hop, so everything downstream of
+/// discovery — and therefore everything the UI shows — is unchanged.
+static CAPABILITIES_LINK_STATE: Capabilities = Capabilities {
+    name: "dv-dtn-link-state",
+    label: "Gossiped link-state + store-and-forward",
+    route_belief: true,
+    next_hop_paths: true,
+    acks: true,
+    satellite_fallback: true,
+    event_kinds: &[EventKind::Gossip, EventKind::Bundle, EventKind::Ack],
+};
+
 pub struct DvDtn {
     pub params: DvDtnParams,
-    /// Only populated under `Discovery::Reactive`; the proactive mode carries
-    /// none of this state.
+    /// Only populated under `Discovery::Reactive`; the other modes carry none
+    /// of this state.
     aodv: aodv::State,
+    /// Likewise, only populated under `Discovery::LinkState`.
+    linkstate: linkstate::State,
     /// The protocol's own randomness — duty-cycle phases and slot jitter.
     /// Separate from the world's stream on purpose; see `MeshProtocol::reseed`.
     rng: StdRng,
@@ -134,6 +150,7 @@ impl Default for DvDtn {
         DvDtn {
             params: DvDtnParams::default(),
             aodv: aodv::State::default(),
+            linkstate: linkstate::State::default(),
             rng: StdRng::from_entropy(),
             nodes: Vec::new(),
             towers: HashMap::new(),
@@ -215,6 +232,7 @@ impl MeshProtocol for DvDtn {
         match self.params.discovery {
             Discovery::Proactive => &CAPABILITIES,
             Discovery::Reactive => &CAPABILITIES_REACTIVE,
+            Discovery::LinkState => &CAPABILITIES_LINK_STATE,
         }
     }
 
@@ -265,6 +283,18 @@ impl MeshProtocol for DvDtn {
                     &mut self.rng,
                 );
                 (r.awake, Vec::new(), r.hops, r.digest_acks)
+            }
+            Discovery::LinkState => {
+                let (awake, ev) = linkstate::step(
+                    &mut self.nodes[..n],
+                    &mut self.linkstate,
+                    ctx.balloons,
+                    ctx.adj,
+                    &self.params,
+                    ctx.round,
+                    &mut self.rng,
+                );
+                (awake, ev, Vec::new(), Vec::new())
             }
             Discovery::Reactive => {
                 let (awake, ev) = aodv::step(

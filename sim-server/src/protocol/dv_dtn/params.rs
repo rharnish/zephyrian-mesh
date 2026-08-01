@@ -25,6 +25,12 @@ pub enum Discovery {
     /// waits for a flood out and a reply back — under a duty cycle, that is
     /// hops x the wake interval in each direction.
     Reactive,
+    /// Balloons gossip *observations* — who they can hear — and each computes
+    /// its own route from the map it assembles. The only variant where a
+    /// balloon holds a picture of the mesh rather than a single distance, and
+    /// so the only one that can tell "no path exists" from "nothing heard
+    /// lately".
+    LinkState,
 }
 
 /// Who is allowed to answer a route request.
@@ -173,6 +179,13 @@ pub struct DvDtnParams {
     /// Who may answer a route request. Only consulted under
     /// `Discovery::Reactive`.
     pub reply_policy: ReplyPolicy,
+    /// Under `Discovery::LinkState`, how many observations ride one
+    /// transmission — this balloon's own, plus relayed ones. The same
+    /// information-per-transmission dial as `BatchPolicy`, applied to gossip
+    /// rather than to bundles: a wake is still one transmission, and this
+    /// says how much it carries. 1 would mean a balloon never relays anyone
+    /// else's observation and no map could form.
+    pub lsa_per_transmission: usize,
 
     // --- Telemetry bundles (C2, design doc §1 and §4) ------------------------
     //
@@ -310,6 +323,7 @@ impl Default for DvDtnParams {
             metric: Metric::default(),
             discovery: Discovery::default(),
             reply_policy: ReplyPolicy::default(),
+            lsa_per_transmission: 4,
             bundle_interval_rounds: 200,
             bundle_max_age_rounds: 150,
             relay_queue_capacity: 8,

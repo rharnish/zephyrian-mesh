@@ -151,6 +151,7 @@ balloon fields (4 seeds, n = 1200, 400 rounds):
 | dv-dtn, digest + mesh=4 | **95.0 ± 1.4%** |
 | dv-dtn, reactive discovery (AODV-style) | 57.3 ± 5.0% |
 | dv-dtn, reactive, tower-only replies | 60.0 ± 5.8% |
+| dv-dtn, gossiped link-state | 52.4 ± 5.7% |
 | binary spray-and-wait, L=4 | 11.0 ± 1.8% |
 | binary spray-and-wait, L=16 | 23.4 ± 4.5% |
 
@@ -199,6 +200,60 @@ comparison measures the implementation, not the family.** A 34-point result was
 sitting inside a five-line bug, and it looked like a plausible mechanism the
 whole time.
 
+### Link-state: excellent routes, hardly any of them
+
+The gossip variant is the most interesting row in the table, because its
+failure is entirely on one side of the ledger. Balloons exchange *observations*
+— who they can hear — and each computes its own route by searching the map it
+assembles. Against proactive dv-dtn:
+
+| | link-state | proactive |
+|---|---|---|
+| believed depth | **3.15 hops** | 7.12 |
+| `dropped_loop` | **0.5** | 72.3 |
+| `stall_stale_next_hop` | **0.0** | 50.0 |
+| `stall_no_belief` | **34,212** | 1,118 |
+| completion | 52.4% | 72.3% |
+
+Every quality measure is better and by a wide margin — the routes it finds are
+less than half as long, it never forwards to a dead next hop, and it essentially
+cannot form a loop, all of which is exactly what computing a path from a map
+should buy. It loses anyway, because **most balloons have no route at all**.
+
+The mechanism is gossip bandwidth, and the `lsa` dial confirms it directly.
+`lsa` is how many observations ride one transmission — the same
+information-per-transmission lever as `mesh`, applied to discovery instead of
+to payload:
+
+| lsa | completion | believed depth | `stall_no_belief` |
+|---|---|---|---|
+| 2 | 41.0 ± 4.3% | 2.67 | 40,547 |
+| 4 (default) | 52.3 ± 5.7% | 3.15 | 34,207 |
+| 16 | 68.0 ± 6.4% | 4.13 | 22,363 |
+| 64 | 71.6 ± 6.9% | 5.57 | 8,067 |
+
+Monotone in both directions at once: more gossip per slot means fewer balloons
+stranded without a map, *and* longer routes, because a fuller map can see paths
+that a partial one simply did not contain. At `lsa = 64` link-state converges on
+proactive dv-dtn's 72.3% — it needs 64 records per transmission to match what a
+hop count achieves with one number.
+
+**This is the classical objection to link-state routing, arrived at from the
+other end.** The textbook version is an asymptotic argument about flooding
+overhead scaling with network size. Here it is a duty-cycled radio with a finite
+slot, and the constraint bites at 1200 nodes: the map cannot be kept current
+across the fleet from the airtime available, so what a balloon holds is a small,
+accurate, local picture that usually contains no tower. Distance-vector wins
+this regime not by being smarter but by being *cheap enough to run everywhere* —
+a hop count is a summary, and summarising is what fits in the slot.
+
+Worth noting for the project's central theme: link-state's `stall_no_belief` is
+an *honest* stall. A balloon whose map shows no path knows there is no path,
+which is a strictly stronger statement than the distance-vector variants can
+make — there, no belief is indistinguishable from having heard nothing lately.
+Link-state trades delivery for self-knowledge. The simulator does not currently
+score that trade, and arguably should.
+
 So this is **not** "routing beats replication". It is spray-and-wait run in the
 regime it is worst suited to, at parameters that were not tuned (L=16 against a
 queue capacity of 8 is self-inflicted congestion). The honest claim is
@@ -226,6 +281,11 @@ retargeting rate.
   requests, no expanding-ring search, no destination sequence numbers (the age
   field stands in for them). Given the laundering bug found above, treat 57.3%
   as a floor for the family rather than a measurement of AODV.
+- **Link-state has no topology reduction.** Real deployments cut exactly the
+  cost measured above with areas, designated relays (OLSR's MPRs), and
+  incremental rather than whole-neighbour-list updates. Any of those would move
+  the `lsa` ladder, and MPR-style relay selection is the obvious next
+  experiment, since it targets the measured constraint directly.
 
 ## Reproducing
 

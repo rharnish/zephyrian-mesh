@@ -274,13 +274,15 @@ impl std::str::FromStr for ProtocolSpec {
                     p.discovery = match v {
                         "proactive" => Discovery::Proactive,
                         "reactive" => Discovery::Reactive,
+                        "link-state" | "linkstate" | "gossip" => Discovery::LinkState,
                         _ => {
                             return Err(format!(
-                                "discovery: expected proactive|reactive, got {v:?}"
+                                "discovery: expected proactive|reactive|link-state, got {v:?}"
                             ))
                         }
                     }
                 }
+                "lsa" => p.lsa_per_transmission = num()?.max(2),
                 "reply" => {
                     p.reply_policy = match v {
                         "intermediate" | "any" => ReplyPolicy::Intermediate,
@@ -299,21 +301,24 @@ impl std::str::FromStr for ProtocolSpec {
                 other => {
                     return Err(format!(
                         "unknown parameter {other:?} (known: metric, queue, ack, mesh, tower, \
-                         digest_entries, originate, discovery, reply)"
+                         digest_entries, originate, discovery, reply, lsa)"
                     ))
                 }
             }
         }
-        // The digest rides tower beacons. Reactive discovery doesn't send any,
-        // so the combination would silently never acknowledge anything —
+        // The digest rides tower beacons. Only the proactive mode sends any,
+        // so any other combination would silently never acknowledge anything —
         // which would look like a protocol result rather than a missing
         // mechanism. Refuse it instead.
-        if p.discovery == Discovery::Reactive && p.ack_policy == AckPolicy::Digest {
-            return Err(
-                "ack=digest needs tower beacons to ride on, which discovery=reactive \
-                 does not send; use ack=source-routed with reactive discovery"
-                    .to_string(),
-            );
+        if p.discovery != Discovery::Proactive && p.ack_policy == AckPolicy::Digest {
+            return Err(format!(
+                "ack=digest needs tower beacons to ride on, which discovery={} \
+                 does not send; use ack=source-routed with it",
+                match p.discovery {
+                    Discovery::Reactive => "reactive",
+                    _ => "link-state",
+                }
+            ));
         }
         Ok(ProtocolSpec::DvDtn(p))
     }

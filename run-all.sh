@@ -107,15 +107,32 @@ PROTOCOLS
     digest_entries=N              (default 16)
         With ack=digest, how many deliveries a tower announces per beacon.
 
-    discovery=proactive|reactive  (default proactive)
-        When routes are found. proactive maintains them continuously via
-        tower beacons, so a balloon usually has a route already and it may be
-        stale. reactive (AODV-style) spends nothing until there is a bundle
-        to send, then floods a request and waits for a reply — under a duty
-        cycle that is hops x the wake interval in each direction.
-        Measured at 57% against proactive's 72%: the cost is waiting, not
-        route quality. Incompatible with ack=digest, which needs tower
-        beacons to ride on.
+    discovery=proactive|reactive|link-state       (default proactive)
+        How routes are found. All three end at the same place — a next hop a
+        balloon believes in — so the UI is identical across them. Only
+        proactive works with ack=digest, which needs tower beacons to ride on.
+
+        proactive   Towers flood hop-counted beacons continuously. A balloon
+                    usually has a route already, and it may be stale. 72%.
+        reactive    AODV-style: nothing is spent until there is a bundle to
+                    send, then a request floods out and a reply comes back —
+                    under a duty cycle that is hops x the wake interval in
+                    each direction. 57%, and the cost is the waiting rather
+                    than the route quality.
+        link-state  Balloons gossip who they can hear, and each computes its
+                    own route from the map it assembles. 52% — but with less
+                    than half the route length, no loops at all, and never a
+                    stale next hop. It loses on coverage, not quality: the
+                    map cannot be kept current across 1200 balloons from the
+                    airtime available, so most of them hold an accurate local
+                    picture with no tower in it. See lsa= below.
+
+    lsa=N                         (link-state only, default 4)
+        Observations carried per transmission. The dial that decides how much
+        of the mesh a balloon can see. Measured: 2 -> 41%, 4 -> 52%,
+        16 -> 68%, 64 -> 72%, at which point link-state has caught proactive
+        by spending 64 records per slot against its one hop count. This is
+        the textbook link-state scaling limit, as a duty-cycle constraint.
 
     reply=intermediate|tower      (default intermediate)
         With discovery=reactive, who may answer a request. intermediate lets
@@ -134,6 +151,7 @@ PROTOCOLS
     ./run-all.sh --protocol dv-dtn:ack=digest,mesh=4
     ./run-all.sh --protocol dv-dtn:metric=nearest,queue=lifo
     ./run-all.sh --protocol dv-dtn:discovery=reactive
+    ./run-all.sh --protocol dv-dtn:discovery=link-state,lsa=16
     ./run-all.sh --protocol epidemic:copies=16
 
   The measured figures above come from experiments/aggregation-summary.md.
