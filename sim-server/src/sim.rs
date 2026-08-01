@@ -8,6 +8,8 @@ use crate::balloon::Balloon;
 use crate::config::*;
 use crate::geo::{horizon_km, random_global_position};
 use crate::link_detection::{compute_grid_edges, wire_pair_key, NodeKey};
+use crate::mesh_adjacency::MeshAdjacency;
+use crate::protocol::{MeshProtocol, ProtocolSpec, StepCtx};
 use crate::spatial_grid::SpatialGrid;
 use crate::tower::Tower;
 use crate::union_find::UnionFind;
@@ -55,8 +57,8 @@ pub struct BalloonComms {
 #[serde(rename_all = "camelCase")]
 pub struct LastBundleView {
     pub seq: u64,
-    pub state: crate::bundle::AckState,
-    pub channel: Option<crate::bundle::Channel>,
+    pub state: crate::protocol::dv_dtn::bundle::AckState,
+    pub channel: Option<crate::protocol::dv_dtn::bundle::Channel>,
     /// The tower that took delivery. `None` for satellite delivery, dead
     /// ends, and while the bundle is still Pending.
     pub tower_id: Option<u32>,
@@ -181,8 +183,8 @@ pub struct World {
     believed_grounded_pct: f64,
     belief_stale_pct: f64,
     belief_unaware_pct: f64,
-    protocol: crate::dv_dtn::DvDtn,
-    adjacency: crate::beacon::MeshAdjacency,
+    protocol: Box<dyn MeshProtocol>,
+    adjacency: MeshAdjacency,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
@@ -205,7 +207,7 @@ impl World {
             believed_grounded_pct: 0.0,
             belief_stale_pct: 0.0,
             belief_unaware_pct: 0.0,
-            protocol: Default::default(),
+            protocol: ProtocolSpec::default().build(),
             adjacency: Default::default(),
             next_balloon_id: 0,
             next_tower_id: 0,
@@ -264,16 +266,21 @@ impl World {
         self.protocol.stranded(self.visible_count)
     }
 
-    /// Cumulative bundle outcomes, for offline harnesses.
-    pub fn bundle_stats(&self) -> crate::bundle::BundleStats {
-        self.protocol.stats
+    /// Cumulative bundle outcomes, for offline harnesses. Panics if the world
+    /// isn't running dv-dtn — these counters are that protocol's own, and a
+    /// harness asking for them has already assumed which protocol it drives.
+    pub fn bundle_stats(&self) -> crate::protocol::dv_dtn::bundle::BundleStats {
+        self.dv_dtn().stats
     }
 
-    /// Read-only access to protocol state, for offline harnesses that need to
-    /// inspect queues/logs directly (see bin/telemetry_records.rs). Node `i`
-    /// here is the same node as `balloons[i]`.
-    pub fn protocol(&self) -> &crate::dv_dtn::DvDtn {
-        &self.protocol
+    /// Read-only access to dv-dtn's internals, for offline harnesses that need
+    /// to inspect queues/logs directly (see bin/telemetry_records.rs). Node
+    /// `i` here is the same node as `balloons[i]`.
+    pub fn dv_dtn(&self) -> &crate::protocol::dv_dtn::DvDtn {
+        self.protocol
+            .as_any()
+            .downcast_ref::<crate::protocol::dv_dtn::DvDtn>()
+            .expect("world is not running the dv-dtn protocol")
     }
 
     /// Stop all origination — for offline drain-phase checks (see
@@ -300,20 +307,12 @@ impl World {
                 // originates, which would make the query flash back to
                 // "nothing to show" between originations. See
                 // `Balloon::last_resolved`.
-                let node = self.protocol.nodes.get(id as usize);
-                let comms = self.balloons.get(id as usize).zip(node).map(|(b, n)| BalloonComms {
+                let comms = self.balloons.get(id as usize).map(|b| BalloonComms {
                     id: b.id,
                     believed_hops: b.believed_hops,
                     grounded: b.grounded,
-                    last_bundle: n.last_resolved.as_ref().map(|r| LastBundleView {
-                        seq: r.seq,
-                        state: r.state,
-                        channel: r.channel,
-                        tower_id: r.tower_id,
-                        path: Some(r.path.clone()),
-                        ack_hops_completed: r.ack_hops_completed,
-                    }),
-                    log: n.log.iter().rev().cloned().collect(),
+                    last_bundle: self.protocol.last_bundle(id as usize),
+                    log: self.protocol.log(id as usize),
                 });
                 // Best-effort: a dropped receiver just means the HTTP request
                 // that asked was already cancelled (client disconnected).
@@ -344,8 +343,8 @@ impl World {
                 believed_grounded_pct: self.believed_grounded_pct,
                 belief_stale_pct: self.belief_stale_pct,
                 belief_unaware_pct: self.belief_unaware_pct,
-                bundles_delivered: self.protocol.stats.delivered,
-                bundles_lost: self.protocol.stats.resolved() - self.protocol.stats.delivered,
+                bundles_delivered: self.protocol.delivered(),
+                bundles_lost: self.protocol.resolved() - self.protocol.delivered(),
                 bundles_in_flight: self.count_carrying(),
                 bundles_stranded: self.count_stranded(),
             };
@@ -446,22 +445,25 @@ impl World {
             // Beacons first, so a bundle forwarded this round uses the freshest
             // belief available rather than one a round old. `awake` is the set
             // of radios that transmitted; bundles ride the same duty cycle.
-            let hops = self.protocol.step(
-                &self.balloons[..self.visible_count],
-                &self.towers,
-                &self.adjacency,
-                round,
+            let events = self.protocol.step(
+                StepCtx {
+                    round,
+                    balloons: &self.balloons[..self.visible_count],
+                    towers: &self.towers,
+                    adj: &self.adjacency,
+                },
                 &mut self.rng,
             );
-            if !hops.is_empty() {
+            if !events.is_empty() {
                 beacon_hops = Some(
-                    hops.iter()
-                        .map(|h| BeaconHopWire {
-                            from: h.from.to_string(),
-                            to: NodeKey::Balloon(self.balloons[h.to_balloon].id).to_string(),
-                            tower_id: h.tower_id,
-                            hop_count: h.hop_count,
-                            epoch: h.epoch,
+                    events
+                        .iter()
+                        .map(|e| BeaconHopWire {
+                            from: e.from.to_string(),
+                            to: e.to.to_string(),
+                            tower_id: e.tower_id.unwrap_or(0),
+                            hop_count: e.hop_count.unwrap_or(0),
+                            epoch: e.epoch.unwrap_or(0),
                         })
                         .collect(),
                 );
@@ -477,8 +479,9 @@ impl World {
         for (i, b) in self.balloons[..self.visible_count].iter_mut().enumerate() {
             // Copy the protocol's published view onto the balloon, which is
             // what actually gets serialized to clients.
-            b.believed_hops = self.protocol.believed_hops(i);
-            b.last_channel = self.protocol.nodes[i].last_channel;
+            let view = self.protocol.node_view(i);
+            b.believed_hops = view.route_hops;
+            b.last_channel = view.last_channel;
             match (b.believed_hops.is_some(), b.grounded) {
                 (true, true) => believes += 1,
                 (true, false) => {
@@ -508,8 +511,8 @@ impl World {
             believed_grounded_pct: self.believed_grounded_pct,
             belief_stale_pct: self.belief_stale_pct,
             belief_unaware_pct: self.belief_unaware_pct,
-            bundles_delivered: self.protocol.stats.delivered,
-            bundles_lost: self.protocol.stats.resolved() - self.protocol.stats.delivered,
+            bundles_delivered: self.protocol.delivered(),
+            bundles_lost: self.protocol.resolved() - self.protocol.delivered(),
             bundles_in_flight: self.count_carrying(),
             bundles_stranded: self.count_stranded(),
         }

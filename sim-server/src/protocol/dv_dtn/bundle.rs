@@ -56,12 +56,12 @@
 // indistinguishable from inside, by construction. See docs/design/MESH_COMMS_DESIGN.md §4.
 
 use crate::balloon::Balloon;
-use crate::beacon::MeshAdjacency;
-use crate::bundle_stats::bump;
+use crate::mesh_adjacency::MeshAdjacency;
+use super::bundle_stats::bump;
 use crate::config::*;
-use crate::dv_dtn::DvNode;
+use super::DvNode;
 
-pub use crate::bundle_stats::{hist_mean, BundleStats};
+pub use super::bundle_stats::{hist_mean, BundleStats};
 
 /// One unit of telemetry in transit.
 #[derive(Debug, Clone)]
@@ -559,7 +559,7 @@ pub fn step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::beacon::RouteBelief;
+    use crate::protocol::dv_dtn::beacon::RouteBelief;
     use crate::link_detection::{Edge, NodeKey};
     use crate::tower::Tower;
 

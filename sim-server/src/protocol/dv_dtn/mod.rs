@@ -15,14 +15,19 @@
 // swapping protocols swaps the whole struct rather than reinterpreting
 // shared fields.
 
-use crate::balloon::Balloon;
-use crate::beacon::{self, BeaconHop, MeshAdjacency, RouteBelief};
-use crate::bundle::{self, Ack, Bundle, Channel, OutstandingBundle, ResolvedBundle};
-use crate::bundle_stats::BundleStats;
+pub mod beacon;
+pub mod bundle;
+pub mod bundle_stats;
+
 use crate::config::BUNDLE_INTERVAL_ROUNDS;
+use crate::protocol::{
+    CommsEvent, EventKind, LastBundleView, MeshProtocol, NodeCommsView, StepCtx,
+};
 use crate::telemetry::TelemetryRecord;
-use crate::tower::Tower;
-use rand::Rng;
+use beacon::RouteBelief;
+use bundle::{Ack, Bundle, Channel, OutstandingBundle, ResolvedBundle};
+use bundle_stats::BundleStats;
+use rand::{Rng, RngCore};
 use std::collections::{HashMap, VecDeque};
 
 /// One balloon's protocol state. Indexed in parallel with the visible balloon
@@ -90,16 +95,27 @@ impl DvDtn {
         Self::default()
     }
 
-    pub fn clear_nodes(&mut self) {
+    /// Acks currently in transit anywhere in the mesh.
+    pub fn acks_in_flight(&self) -> u64 {
+        self.nodes.iter().map(|n| n.ack_queue.len() as u64).sum()
+    }
+
+}
+
+impl MeshProtocol for DvDtn {
+    fn spec_name(&self) -> &'static str {
+        "dv-dtn"
+    }
+
+    fn clear_nodes(&mut self) {
         self.nodes.clear();
     }
 
-    /// Adds one node's state, drawing its duty-cycle phases. Called from
-    /// `World::spawn_balloon_pool` inside the same loop iteration that builds
-    /// the balloon, so the RNG draw order — position, altitude, beacon phase,
-    /// bundle phase — stays exactly as it was when this lived on `Balloon`.
-    /// Changing that order reseeds every balloon in every seeded sweep.
-    pub fn spawn_node(&mut self, rng: &mut impl Rng) {
+    /// The two draws here are the balloon's beacon and bundle duty-cycle
+    /// phases, staggered so the fleet doesn't transmit in unison. Their order
+    /// is load-bearing for seeded sweeps — see the note in
+    /// `World::spawn_balloon_pool`.
+    fn spawn_node(&mut self, rng: &mut dyn RngCore) {
         self.nodes.push(DvNode {
             next_beacon_round: beacon::initial_slot(rng),
             next_bundle_round: rng.gen_range(0..BUNDLE_INTERVAL_ROUNDS),
@@ -107,70 +123,112 @@ impl DvDtn {
         });
     }
 
-    pub fn add_tower(&mut self, id: u32) {
+    fn add_tower(&mut self, id: u32) {
         self.towers.insert(id, TowerBeacon::default());
     }
 
-    pub fn remove_tower(&mut self, id: u32) {
+    fn remove_tower(&mut self, id: u32) {
         self.towers.remove(&id);
     }
 
-    /// Advance the protocol by one comms round over the visible slice.
-    /// `balloons` is read-only — the protocol reads identity and position, and
-    /// may not write physics. Returns this round's beacon transmissions, for
-    /// the frontend's wavefront animation.
-    ///
     /// Beacons run before bundles so a bundle forwarded this round acts on the
     /// freshest belief rather than one a round old, and bundles reuse the
     /// beacon's `awake` set rather than keeping a schedule of their own: a
     /// radio that is awake is awake for both.
-    pub fn step(
-        &mut self,
-        balloons: &[Balloon],
-        towers: &[Tower],
-        adj: &MeshAdjacency,
-        round: u64,
-        rng: &mut impl Rng,
-    ) -> Vec<BeaconHop> {
-        let n = balloons.len();
-        let result =
-            beacon::step(&mut self.nodes[..n], balloons, &mut self.towers, towers, adj, round, rng);
-        bundle::step(&mut self.nodes[..n], balloons, adj, &result.awake, round, &mut self.stats);
-        result.hops
+    fn step(&mut self, ctx: StepCtx<'_>, rng: &mut dyn RngCore) -> Vec<CommsEvent> {
+        let n = ctx.balloons.len();
+        let result = beacon::step(
+            &mut self.nodes[..n],
+            ctx.balloons,
+            &mut self.towers,
+            ctx.towers,
+            ctx.adj,
+            ctx.round,
+            rng,
+        );
+        bundle::step(
+            &mut self.nodes[..n],
+            ctx.balloons,
+            ctx.adj,
+            &result.awake,
+            ctx.round,
+            &mut self.stats,
+        );
+        result
+            .hops
+            .into_iter()
+            .map(|h| CommsEvent {
+                kind: EventKind::RouteAd,
+                from: h.from,
+                to: crate::link_detection::NodeKey::Balloon(ctx.balloons[h.to_balloon].id),
+                payload: 1,
+                tower_id: Some(h.tower_id),
+                hop_count: Some(h.hop_count),
+                epoch: Some(h.epoch),
+            })
+            .collect()
     }
 
-    /// Stop every balloon originating new bundles, so what is already in the
-    /// mesh can be watched to completion. Used by the drain-phase conservation
-    /// checks in bin/bundle_delivery.rs — the ones that caught both C1's and
-    /// C2's "never actually resolves" bugs.
-    pub fn halt_origination(&mut self) {
-        for n in self.nodes.iter_mut() {
-            n.next_bundle_round = u64::MAX;
+    fn node_view(&self, i: usize) -> NodeCommsView {
+        match self.nodes.get(i) {
+            Some(n) => NodeCommsView {
+                route_hops: n.belief.map(|b| b.hop_count),
+                last_channel: n.last_channel,
+            },
+            None => NodeCommsView::default(),
         }
     }
 
-    /// Acks currently in transit anywhere in the mesh.
-    pub fn acks_in_flight(&self) -> u64 {
-        self.nodes.iter().map(|n| n.ack_queue.len() as u64).sum()
-    }
-
-    /// Hops to a tower as node `i` believes, for publication onto the wire.
-    pub fn believed_hops(&self, i: usize) -> Option<u32> {
-        self.nodes.get(i).and_then(|n| n.belief).map(|b| b.hop_count)
-    }
-
-    /// Bundles currently held across the visible slice.
-    pub fn carrying(&self, visible: usize) -> u64 {
+    fn carrying(&self, visible: usize) -> u64 {
         self.nodes[..visible.min(self.nodes.len())].iter().map(|n| n.queue.len() as u64).sum()
     }
 
     /// Bundles held by a balloon that believes it has no route — waiting
     /// rather than lost. This is the delay-tolerant part, made countable.
-    pub fn stranded(&self, visible: usize) -> u64 {
+    fn stranded(&self, visible: usize) -> u64 {
         self.nodes[..visible.min(self.nodes.len())]
             .iter()
             .filter(|n| !n.queue.is_empty() && n.belief.is_none())
             .map(|n| n.queue.len() as u64)
             .sum()
+    }
+
+    fn delivered(&self) -> u64 {
+        self.stats.delivered
+    }
+
+    fn resolved(&self) -> u64 {
+        self.stats.resolved()
+    }
+
+    /// Reads `last_resolved`, not the live `outstanding` — the latter resets
+    /// to `Pending` the instant a new bundle originates, which would make the
+    /// query flash back to "nothing to show" between originations.
+    fn last_bundle(&self, i: usize) -> Option<LastBundleView> {
+        let r = self.nodes.get(i)?.last_resolved.as_ref()?;
+        Some(LastBundleView {
+            seq: r.seq,
+            state: r.state,
+            channel: r.channel,
+            tower_id: r.tower_id,
+            path: Some(r.path.clone()),
+            ack_hops_completed: r.ack_hops_completed,
+        })
+    }
+
+    fn log(&self, i: usize) -> Vec<TelemetryRecord> {
+        self.nodes.get(i).map(|n| n.log.iter().rev().cloned().collect()).unwrap_or_default()
+    }
+
+    /// Used by the drain-phase conservation checks in bin/bundle_delivery.rs —
+    /// the ones that caught both C1's and C2's "never actually resolves" bugs.
+    fn halt_origination(&mut self) {
+        for n in self.nodes.iter_mut() {
+            n.next_bundle_round = u64::MAX;
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

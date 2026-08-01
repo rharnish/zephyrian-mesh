@@ -1,13 +1,11 @@
 pub mod atmosphere;
 pub mod balloon;
-pub mod beacon;
-pub mod bundle;
-pub mod bundle_stats;
 pub mod config;
-pub mod dv_dtn;
 pub mod ablation;
 pub mod geo;
 pub mod link_detection;
+pub mod mesh_adjacency;
+pub mod protocol;
 pub mod sim;
 pub mod spatial_grid;
 pub mod telemetry;

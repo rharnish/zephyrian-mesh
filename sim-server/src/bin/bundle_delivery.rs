@@ -30,7 +30,7 @@ fn advance_round(world: &mut World) -> Snapshot {
 /// The slot budget, broken down. A bundle only ever gets
 /// BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS wake slots, so where the
 /// wasted ones go decides whether it arrives.
-fn report_slots(st: &sim_server::bundle::BundleStats) {
+fn report_slots(st: &sim_server::protocol::dv_dtn::bundle::BundleStats) {
     let budget = BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS;
     let pct = |x: u64| {
         if st.slots_with_bundle == 0 {
@@ -86,9 +86,9 @@ fn report_slots(st: &sim_server::bundle::BundleStats) {
     );
     println!(
         "    mean believed depth {:.2} hops  |  delivered at {:.2} hops  |  satellite after {:.2} hops",
-        sim_server::bundle::hist_mean(&st.belief_hops),
-        sim_server::bundle::hist_mean(&st.delivered_hops),
-        sim_server::bundle::hist_mean(&st.satellite_hops),
+        sim_server::protocol::dv_dtn::bundle::hist_mean(&st.belief_hops),
+        sim_server::protocol::dv_dtn::bundle::hist_mean(&st.delivered_hops),
+        sim_server::protocol::dv_dtn::bundle::hist_mean(&st.satellite_hops),
     );
     print!("    belief-depth histogram:");
     for (h, &c) in st.belief_hops.iter().enumerate().take(21) {
@@ -239,7 +239,7 @@ fn main() {
         s.bundles_in_flight
     });
 
-    let acks_in_flight = |w: &World| -> u64 { w.protocol().acks_in_flight() };
+    let acks_in_flight = |w: &World| -> u64 { w.dv_dtn().acks_in_flight() };
 
     println!(
         "\n{:>7}  {:>10}  {:>10}  {:>9}  {:>9}",

@@ -22,7 +22,7 @@
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sim_server::bundle::BundleStats;
+use sim_server::protocol::dv_dtn::bundle::BundleStats;
 use sim_server::config::*;
 use sim_server::sim::World;
 use sim_server::wind_field::WindField;

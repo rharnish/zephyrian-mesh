@@ -44,9 +44,9 @@ pub struct TelemetryRecord {
     // `bundle::snapshot_resolved`) — `None`/`Pending` at creation. This is
     // what turns the retained log into the C4 comms-log panel (§3): a
     // per-record history, not just the single most recent outcome.
-    pub channel: Option<crate::bundle::Channel>,
+    pub channel: Option<crate::protocol::dv_dtn::bundle::Channel>,
     pub tower_id: Option<u32>,
-    pub ack_state: crate::bundle::AckState,
+    pub ack_state: crate::protocol::dv_dtn::bundle::AckState,
     pub hops: Option<u32>,
     pub ack_hops_completed: Option<u32>,
 }
@@ -75,7 +75,7 @@ impl TelemetryRecord {
             humidity_pct: atmosphere::humidity_pct(balloon.lon, balloon.lat, balloon.alt),
             channel: None,
             tower_id: None,
-            ack_state: crate::bundle::AckState::Pending,
+            ack_state: crate::protocol::dv_dtn::bundle::AckState::Pending,
             hops: None,
             ack_hops_completed: None,
         }

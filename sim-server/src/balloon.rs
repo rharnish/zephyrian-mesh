@@ -37,7 +37,7 @@ pub struct Balloon {
     /// deliberately something the balloon itself could never know. `None`
     /// until its first bundle resolves. Published from the protocol each tick,
     /// same as `believed_hops`.
-    pub last_channel: Option<crate::bundle::Channel>,
+    pub last_channel: Option<crate::protocol::dv_dtn::bundle::Channel>,
 }
 
 impl Balloon {

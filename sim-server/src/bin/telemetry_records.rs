@@ -88,7 +88,7 @@ fn main() {
     let sampled: Vec<usize> = (0..world.visible_count).step_by(world.visible_count.max(1) / 3 + 1).collect();
     for i in sampled.iter().take(3) {
         let b = &world.balloons[*i];
-        let node = &world.protocol().nodes[*i];
+        let node = &world.dv_dtn().nodes[*i];
         println!("balloon {} — {} record(s) retained, alt now {:.0} m", b.id, node.log.len(), b.alt);
         for r in node.log.iter().take(4) {
             println!(
@@ -107,7 +107,7 @@ fn main() {
     let mut total_records = 0u64;
     let mut checked_bundles = 0u64;
     for (i, b) in world.balloons[..world.visible_count].iter().enumerate() {
-        let node = &world.protocol().nodes[i];
+        let node = &world.dv_dtn().nodes[i];
         assert!(
             node.log.len() <= COMMS_LOG_CAPACITY,
             "balloon {} log overflowed: {} > {COMMS_LOG_CAPACITY}",
@@ -155,7 +155,7 @@ fn main() {
     }
 
     let with_records =
-        world.protocol().nodes[..world.visible_count].iter().filter(|n| !n.log.is_empty()).count();
+        world.dv_dtn().nodes[..world.visible_count].iter().filter(|n| !n.log.is_empty()).count();
     println!(
         "\n{total_records} record(s) across {with_records}/{} balloons; \
          {checked_bundles} in-flight bundle(s) cross-checked against their origin's log.",

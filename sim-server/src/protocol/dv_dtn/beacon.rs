@@ -19,8 +19,9 @@
 
 use crate::balloon::Balloon;
 use crate::config::*;
-use crate::dv_dtn::{DvNode, TowerBeacon};
-use crate::link_detection::{Edge, NodeKey};
+use super::{DvNode, TowerBeacon};
+use crate::link_detection::NodeKey;
+use crate::mesh_adjacency::MeshAdjacency;
 use crate::tower::Tower;
 use rand::Rng;
 use std::collections::HashMap;
@@ -57,74 +58,6 @@ impl RouteBelief {
     }
 }
 
-/// Who can hear whom. Rebuilt from the edge list whenever links are
-/// recomputed. Balloon slots are indexed by position in the visible slice
-/// (== balloon id, since ids are assigned sequentially and never reused);
-/// tower slots by position in the tower vec, since tower ids *can* be removed.
-#[derive(Default)]
-pub struct MeshAdjacency {
-    balloon_adj: Vec<Vec<u32>>,
-    tower_adj: Vec<Vec<u32>>,
-    /// A tower this balloon can currently hear directly, if any. Maintained
-    /// alongside `tower_adj` so bundle forwarding can test "can I hand this
-    /// straight to the ground?" without scanning every tower.
-    balloon_tower: Vec<Option<u32>>,
-}
-
-impl MeshAdjacency {
-    pub fn rebuild(&mut self, edges: &[Edge], n_balloons: usize, towers: &[Tower]) {
-        self.balloon_adj.clear();
-        self.balloon_adj.resize(n_balloons, Vec::new());
-        self.tower_adj.clear();
-        self.tower_adj.resize(towers.len(), Vec::new());
-        self.balloon_tower.clear();
-        self.balloon_tower.resize(n_balloons, None);
-
-        let tower_slot: HashMap<u32, usize> =
-            towers.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-
-        for e in edges {
-            match (e.a, e.b) {
-                (NodeKey::Balloon(x), NodeKey::Balloon(y)) => {
-                    // Balloon-to-balloon: symmetric, both directions.
-                    if let Some(v) = self.balloon_adj.get_mut(x as usize) {
-                        v.push(y);
-                    }
-                    if let Some(v) = self.balloon_adj.get_mut(y as usize) {
-                        v.push(x);
-                    }
-                }
-                // Tower-to-balloon is only ever used in the tower->balloon
-                // direction: towers originate beacons, they don't relay them.
-                (NodeKey::Balloon(b_id), NodeKey::Tower(t_id))
-                | (NodeKey::Tower(t_id), NodeKey::Balloon(b_id)) => {
-                    if let Some(&slot) = tower_slot.get(&t_id) {
-                        self.tower_adj[slot].push(b_id);
-                        if let Some(e) = self.balloon_tower.get_mut(b_id as usize) {
-                            *e = Some(t_id);
-                        }
-                    }
-                }
-                (NodeKey::Tower(_), NodeKey::Tower(_)) => {}
-            }
-        }
-    }
-
-    /// Balloons this one can currently hear. Empty if it has no live links.
-    pub fn neighbors(&self, i: usize) -> &[u32] {
-        self.balloon_adj.get(i).map_or(&[], |v| v.as_slice())
-    }
-
-    pub fn is_neighbor(&self, i: usize, id: u32) -> bool {
-        self.neighbors(i).contains(&id)
-    }
-
-    /// A tower this balloon can hand a bundle straight to, if any.
-    pub fn tower_in_range(&self, i: usize) -> Option<u32> {
-        self.balloon_tower.get(i).copied().flatten()
-    }
-}
-
 /// Should `new` replace `cur`? This is the rebroadcast-suppression rule: a
 /// beacon that doesn't improve the belief is dropped rather than relayed,
 /// which is what stops a flood from becoming a broadcast storm.
@@ -149,7 +82,7 @@ fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
     new.hop_count < cur.hop_count
 }
 
-fn next_slot(round: u64, rng: &mut impl Rng) -> u64 {
+fn next_slot(round: u64, rng: &mut (impl Rng + ?Sized)) -> u64 {
     let jitter = rng.gen_range(0..=(2 * BEACON_JITTER_ROUNDS)) as i64 - BEACON_JITTER_ROUNDS as i64;
     let interval = (BEACON_INTERVAL_ROUNDS as i64 + jitter).max(1) as u64;
     round + interval
@@ -157,7 +90,7 @@ fn next_slot(round: u64, rng: &mut impl Rng) -> u64 {
 
 /// Randomized initial beacon phase, so the whole fleet doesn't transmit on the
 /// same round. Called at spawn.
-pub fn initial_slot(rng: &mut impl Rng) -> u64 {
+pub fn initial_slot(rng: &mut (impl Rng + ?Sized)) -> u64 {
     rng.gen_range(0..BEACON_INTERVAL_ROUNDS)
 }
 
@@ -199,7 +132,7 @@ pub fn step(
     towers: &[Tower],
     adj: &MeshAdjacency,
     round: u64,
-    rng: &mut impl Rng,
+    rng: &mut (impl Rng + ?Sized),
 ) -> BeaconStepResult {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
     for n in nodes.iter_mut() {
@@ -224,7 +157,7 @@ pub fn step(
         ts.next_round = next_slot(round, rng);
         ts.epoch += 1;
         let epoch = ts.epoch;
-        for &b_id in adj.tower_adj.get(slot).into_iter().flatten() {
+        for &b_id in adj.tower_neighbors(slot) {
             let belief = RouteBelief {
                 tower_id: t.id,
                 hop_count: 1,
@@ -258,7 +191,7 @@ pub fn step(
             continue;
         }
         let id = balloons[i].id;
-        for &n_id in adj.balloon_adj.get(i).into_iter().flatten() {
+        for &n_id in adj.neighbors(i) {
             // `emitted_at_round` is inherited untouched via `..belief` —
             // relaying does not make the news any newer.
             let offer = RouteBelief {
@@ -299,6 +232,7 @@ pub fn step(
 mod tests {
     use super::*;
     use crate::link_detection::{Edge, NodeKey};
+use crate::mesh_adjacency::MeshAdjacency;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
