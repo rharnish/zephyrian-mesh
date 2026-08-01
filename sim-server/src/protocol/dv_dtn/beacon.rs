@@ -18,7 +18,7 @@
 // Neither is a bug to fix.
 
 use crate::balloon::Balloon;
-use super::params::{DvDtnParams, Metric};
+use super::params::{AckPolicy, DvDtnParams, Metric};
 use super::{DvNode, TowerBeacon};
 use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
@@ -107,6 +107,14 @@ pub struct BeaconHop {
     pub epoch: u64,
 }
 
+/// An origin learning, from a digest that reached it, that its bundle landed.
+/// Returned rather than applied in place because resolving it also has to
+/// touch stats and the retained telemetry record, which live with bundles.
+pub struct DigestAck {
+    pub node: usize,
+    pub seq: u64,
+}
+
 pub struct BeaconStepResult {
     /// Indices of balloons that woke and transmitted this round. Bundle
     /// forwarding reuses this set rather than keeping its own schedule: a
@@ -115,8 +123,10 @@ pub struct BeaconStepResult {
     /// docs/design/MESH_COMMS_DESIGN.md §4).
     pub awake: Vec<usize>,
     /// Every offer made this round, for whichever tower(s) a client wants to
-    /// animate. Not filtered here — see Snapshot::beacon_hops.
+    /// animate. Not filtered here — see Snapshot::comms_events.
     pub hops: Vec<BeaconHop>,
+    /// Origins that heard their own delivery announced (AckPolicy::Digest).
+    pub digest_acks: Vec<DigestAck>,
 }
 
 /// Advance discovery by one round. `nodes` and `balloons` must be the visible
@@ -148,8 +158,14 @@ pub fn step(
     //    applying immediately would let a beacon race across many hops within
     //    a single round depending on iteration order, collapsing exactly the
     //    propagation delay we're modelling.
-    let mut offers: Vec<(usize, RouteBelief)> = Vec::new();
+    // (target, belief, index into `digests`). The digest is shared by every
+    // offer one transmitter makes this round, so it is stored once and
+    // referenced — a beacon is a broadcast, and cloning it per neighbour would
+    // be both wasteful and a poor model of one.
+    let mut offers: Vec<(usize, RouteBelief, usize)> = Vec::new();
+    let mut digests: Vec<Vec<(u32, u64)>> = Vec::new();
     let mut hops: Vec<BeaconHop> = Vec::new();
+    let digest_on = params.ack_policy == AckPolicy::Digest;
 
     for (slot, t) in towers.iter().enumerate() {
         let ts = tower_state.entry(t.id).or_default();
@@ -159,6 +175,21 @@ pub fn step(
         ts.next_round = next_slot(round, params, rng);
         ts.epoch += 1;
         let epoch = ts.epoch;
+        // Announce the newest deliveries this tower has taken. Older than a
+        // belief lifetime and the origin has already given up, so saying so
+        // tells it nothing it can act on.
+        let d_idx = digests.len();
+        digests.push(if digest_on {
+            ts.recent
+                .iter()
+                .rev()
+                .filter(|(_, _, at)| round.saturating_sub(*at) <= params.belief_max_age_rounds)
+                .take(params.ack_digest_entries)
+                .map(|(o, s, _)| (*o, *s))
+                .collect()
+        } else {
+            Vec::new()
+        });
         for &b_id in adj.tower_neighbors(slot) {
             let belief = RouteBelief {
                 tower_id: t.id,
@@ -174,7 +205,7 @@ pub fn step(
                 hop_count: belief.hop_count,
                 epoch: belief.epoch,
             });
-            offers.push((b_id as usize, belief));
+            offers.push((b_id as usize, belief, d_idx));
         }
     }
 
@@ -193,6 +224,11 @@ pub fn step(
             continue;
         }
         let id = balloons[i].id;
+        // A relay repeats the announcement it heard, verbatim, exactly as it
+        // repeats `emitted_at_round` — that is what makes the digest flood
+        // outward for free rather than only reaching the tower's neighbours.
+        let d_idx = digests.len();
+        digests.push(if digest_on { nodes[i].ack_digest.clone() } else { Vec::new() });
         for &n_id in adj.neighbors(i) {
             // `emitted_at_round` is inherited untouched via `..belief` —
             // relaying does not make the news any newer.
@@ -208,14 +244,31 @@ pub fn step(
                 hop_count: offer.hop_count,
                 epoch: offer.epoch,
             });
-            offers.push((n_id as usize, offer));
+            offers.push((n_id as usize, offer, d_idx));
         }
     }
 
     // 3. Apply.
-    for (idx, offer) in offers {
+    let mut digest_acks: Vec<DigestAck> = Vec::new();
+    for (idx, offer, d_idx) in offers {
         let Some(id) = balloons.get(idx).map(|b| b.id) else { continue };
         let Some(n) = nodes.get_mut(idx) else { continue };
+
+        // Hearing a delivery announced is independent of whether the route it
+        // arrived on is worth adopting — the balloon received the
+        // transmission either way. Checked before the adoption rules for that
+        // reason, and skipped entirely for the overwhelming majority of
+        // balloons, which have nothing outstanding.
+        if digest_on {
+            if let Some(out) = n.outstanding.as_ref() {
+                if out.state == crate::protocol::dv_dtn::bundle::AckState::Pending
+                    && digests[d_idx].iter().any(|&(o, s)| o == id && s == out.seq)
+                {
+                    digest_acks.push(DigestAck { node: idx, seq: out.seq });
+                }
+            }
+        }
+
         if offer.next_hop == Some(id) {
             continue; // never learn a route to the ground from yourself
         }
@@ -224,10 +277,13 @@ pub fn step(
         }
         if should_adopt(n.belief.as_ref(), &offer, params) {
             n.belief = Some(offer);
+            if digest_on {
+                n.ack_digest = digests[d_idx].clone();
+            }
         }
     }
 
-    BeaconStepResult { awake, hops }
+    BeaconStepResult { awake, hops, digest_acks }
 }
 
 #[cfg(test)]

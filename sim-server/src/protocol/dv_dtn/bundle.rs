@@ -58,7 +58,7 @@
 use crate::balloon::Balloon;
 use crate::mesh_adjacency::MeshAdjacency;
 use super::bundle_stats::bump;
-use super::params::{DvDtnParams, QueueDiscipline};
+use super::params::{AckPolicy, DvDtnParams, QueueDiscipline};
 use crate::link_detection::NodeKey;
 use crate::protocol::{CommsEvent, EventKind};
 use super::DvNode;
@@ -287,8 +287,10 @@ pub fn step(
     awake: &[usize],
     round: u64,
     stats: &mut BundleStats,
-) -> Vec<CommsEvent> {
+) -> StepOutput {
     let mut events: Vec<CommsEvent> = Vec::new();
+    let mut deliveries: Vec<Delivery> = Vec::new();
+    let digest_acks = params.ack_policy == AckPolicy::Digest;
 
     // 1. Expire bundles. One that's aged past its budget wherever it currently
     //    sits is handed to satellite rather than dropped.
@@ -517,6 +519,19 @@ pub fn step(
                             }
                         }
 
+                        // Under the digest policy the receipt rides the
+                        // tower's next beacon instead of being a packet, so
+                        // nothing is spawned here at all — which is the whole
+                        // saving: no ack ever competes for a wake slot.
+                        if digest_acks {
+                            deliveries.push(Delivery {
+                                tower_id,
+                                origin_id: bd.origin_id,
+                                seq: bd.seq,
+                            });
+                            continue;
+                        }
+
                         // Spawn the ack, source-routed back along the reversed
                         // path. A zero-hop bundle (the origin delivered
                         // directly) resolves on the spot — there's no one to
@@ -691,7 +706,33 @@ pub fn step(
         stats.originated += 1;
     }
 
-    events
+    StepOutput { events, deliveries }
+}
+
+/// A delivery a tower took this round, for it to announce in later beacons.
+pub struct Delivery {
+    pub tower_id: u32,
+    pub origin_id: u32,
+    pub seq: u64,
+}
+
+pub struct StepOutput {
+    pub events: Vec<CommsEvent>,
+    /// Empty unless `AckPolicy::Digest` is in force.
+    pub deliveries: Vec<Delivery>,
+}
+
+/// Resolves an origin's own view once it hears its delivery announced. Same
+/// bookkeeping the source-routed path does when an ack completes, minus the
+/// packet that had to survive the trip.
+pub fn apply_digest_ack(node: &mut DvNode, seq: u64, stats: &mut BundleStats) {
+    let Some(o) = node.outstanding.as_mut() else { return };
+    if o.seq != seq || o.state != AckState::Pending {
+        return;
+    }
+    o.state = AckState::Acked;
+    stats.acked += 1;
+    snapshot_resolved(node);
 }
 
 #[cfg(test)]
@@ -1092,6 +1133,46 @@ mod tests {
         assert_eq!(at_zero, vec![100], "b1 sent the bundle it actually checked");
         let at_one: Vec<u64> = nodes[1].queue.iter().map(|b| b.seq).collect();
         assert_eq!(at_one, vec![200], "b2's bundle landed and stayed");
+    }
+
+    /// Under the digest policy the receipt rides a beacon the tower was
+    /// sending anyway: no ack packet is ever created, so none can be lost to
+    /// a full queue, and none competes for a wake slot. The origin still finds
+    /// out.
+    #[test]
+    fn a_digest_acks_the_origin_without_any_ack_packet() {
+        use super::super::params::AckPolicy;
+        let params = DvDtnParams { ack_policy: AckPolicy::Digest, ..Default::default() };
+        // b1 -- b0 -- t0: b1 originates, b0 relays, the tower takes it, and
+        // the announcement floods back out with the next beacon wave.
+        let mut world = super::super::DvDtn::with_params(params);
+        let balloons: Vec<Balloon> =
+            (0..2).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1")], 2, &towers);
+        world.reseed_for_test(7);
+        world.add_tower_for_test(0);
+        for _ in 0..2 {
+            world.spawn_node_for_test();
+        }
+
+        let mut acked = false;
+        for round in 0..400u64 {
+            world.step_for_test(&balloons, &towers, &adj, round);
+            if world.nodes[1].outstanding.as_ref().is_some_and(|o| o.state == AckState::Acked) {
+                acked = true;
+                break;
+            }
+        }
+
+        assert!(acked, "origin should have learned of its delivery from a digest");
+        assert!(world.stats.delivered >= 1);
+        assert_eq!(world.stats.ack_lost, 0, "no ack packet exists, so none can be lost");
+        assert!(
+            world.nodes.iter().all(|n| n.ack_queue.is_empty()),
+            "the digest policy must never enqueue an ack packet"
+        );
     }
 
     #[test]

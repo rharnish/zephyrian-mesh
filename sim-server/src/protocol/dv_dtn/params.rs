@@ -57,6 +57,34 @@ impl Default for BatchPolicy {
     }
 }
 
+/// How a delivery gets acknowledged back to its origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AckPolicy {
+    /// What ships: the tower creates a receipt and it is source-routed back
+    /// along the bundle's recorded path, one hop per wake slot, competing with
+    /// ordinary forwarding for those slots (and winning, which is why it costs
+    /// throughput).
+    #[default]
+    SourceRouted,
+    /// Towers instead announce recent deliveries inside the beacons they are
+    /// already sending, and the announcement floods outward with the wave.
+    ///
+    /// This is close to DTN's Aggregate Custody Signals, and it attacks the
+    /// same scarcity everything else here does: the receipt costs *no
+    /// additional transmissions at all*, because it rides ones that were
+    /// happening anyway. One tower transmission can also satisfy many origins
+    /// at once — it is a broadcast medium, so everyone in earshot learns
+    /// together.
+    ///
+    /// Truncation is lossy in one direction only. An origin whose entry didn't
+    /// fit in `ack_digest_entries` simply doesn't learn *yet*; it never learns
+    /// something false. A Bloom filter would be smaller and would introduce
+    /// false positives — a balloon concluding it was acked when it wasn't —
+    /// which would be a genuinely new category of belief error. Interesting,
+    /// but not what this option is.
+    Digest,
+}
+
 /// Which held bundle a balloon transmits when its slot comes up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QueueDiscipline {
@@ -215,6 +243,13 @@ pub struct DvDtnParams {
     pub ack_queue_capacity: usize,
     /// Which held bundle moves when a slot comes up.
     pub queue_discipline: QueueDiscipline,
+    /// How a delivery is acknowledged back to its origin.
+    pub ack_policy: AckPolicy,
+    /// Under `AckPolicy::Digest`, how many recent deliveries a tower announces
+    /// per beacon, freshest first. Bounds the beacon's size; entries also age
+    /// out after `belief_max_age_rounds`, past which the origin has given up
+    /// anyway and the announcement would be telling it nothing it can use.
+    pub ack_digest_entries: usize,
 
     // --- Telemetry records (design doc §1) -----------------------------------
     /// How many telemetry records a balloon retains locally. Records are
@@ -241,6 +276,8 @@ impl Default for DvDtnParams {
             bundle_max_hops: 20,
             ack_queue_capacity: 4,
             queue_discipline: QueueDiscipline::default(),
+            ack_policy: AckPolicy::default(),
+            ack_digest_entries: 16,
             comms_log_capacity: 32,
         }
     }

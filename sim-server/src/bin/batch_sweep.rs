@@ -18,7 +18,7 @@ use sim_server::config::{
     COMMS_EVERY_N_TICKS, DEFAULT_HORIZON_REFRACTION_COEFF, INITIAL_TOWERS, TICK_DT_SECONDS,
     TIME_SCALE,
 };
-use sim_server::protocol::dv_dtn::params::{BatchPolicy, DvDtnParams};
+use sim_server::protocol::dv_dtn::params::{AckPolicy, BatchPolicy, DvDtnParams};
 use sim_server::protocol::ProtocolSpec;
 use sim_server::sim::World;
 use sim_server::wind_field::WindField;
@@ -41,41 +41,48 @@ fn main() {
     println!("n={n}  rounds={rounds}  seed={SEED}  zero wind  coeff={DEFAULT_HORIZON_REFRACTION_COEFF}");
     println!("(mesh_hop=1, tower_contact=4 is what ships)\n");
     println!(
-        "{:>5}  {:>7}  {:>10}  {:>10}  {:>11}  {:>9}  {:>9}",
-        "mesh", "tower", "delivered", "completion", "deliv/round", "ceiling", "blocked"
+        "{:>5}  {:>7}  {:>10}  {:>10}  {:>11}  {:>9}  {:>9}  {:>9}",
+        "mesh", "tower", "delivered", "completion", "deliv/round", "ceiling", "blocked", "ack_lost"
     );
-    println!("{}", "-".repeat(74));
+    println!("{}", "-".repeat(85));
 
-    for &tower_contact in &[1usize, 4] {
-        for &mesh_hop in &[1usize, 2, 4, 8] {
-            let params = DvDtnParams {
-                batch: BatchPolicy { mesh_hop, tower_contact },
-                ..Default::default()
-            };
-            let mut world = World::new(Arc::new(WindField::zero()))
-                .with_protocol(ProtocolSpec::DvDtn(params))
-                .with_seed(SEED);
-            for &(lon, lat, h) in INITIAL_TOWERS {
-                world.add_tower(lon, lat, h);
+    for &(ack_policy, ack_label) in
+        &[(AckPolicy::SourceRouted, "source-routed"), (AckPolicy::Digest, "digest")]
+    {
+        println!("--- acks: {ack_label} ---");
+        for &tower_contact in &[1usize, 4] {
+            for &mesh_hop in &[1usize, 2, 4, 8] {
+                let params = DvDtnParams {
+                    batch: BatchPolicy { mesh_hop, tower_contact },
+                    ack_policy,
+                    ..Default::default()
+                };
+                let mut world = World::new(Arc::new(WindField::zero()))
+                    .with_protocol(ProtocolSpec::DvDtn(params))
+                    .with_seed(SEED);
+                for &(lon, lat, h) in INITIAL_TOWERS {
+                    world.add_tower(lon, lat, h);
+                }
+                world.spawn_balloon_pool(n);
+                world.set_visible_count(n);
+                for _ in 0..rounds {
+                    advance_round(&mut world);
+                }
+                let st = world.bundle_stats();
+                println!(
+                    "{:>5}  {:>7}  {:>10}  {:>9.1}%  {:>11.2}  {:>9.2}  {:>9}  {:>9}",
+                    mesh_hop,
+                    tower_contact,
+                    st.delivered,
+                    100.0 * st.completion_rate(),
+                    st.delivered as f64 / rounds as f64,
+                    st.delivery_capacity_per_round(&params),
+                    st.blocked,
+                    st.ack_lost,
+                );
             }
-            world.spawn_balloon_pool(n);
-            world.set_visible_count(n);
-            for _ in 0..rounds {
-                advance_round(&mut world);
-            }
-            let st = world.bundle_stats();
-            println!(
-                "{:>5}  {:>7}  {:>10}  {:>9.1}%  {:>11.2}  {:>9.2}  {:>9}",
-                mesh_hop,
-                tower_contact,
-                st.delivered,
-                100.0 * st.completion_rate(),
-                st.delivered as f64 / rounds as f64,
-                st.delivery_capacity_per_round(&params),
-                st.blocked,
-            );
+            println!();
         }
-        println!();
     }
 
     println!(

@@ -64,6 +64,10 @@ pub struct DvNode {
     /// Server truth about how the last resolved bundle actually got through.
     /// Published onto `Balloon::last_channel` each tick for the UI.
     pub last_channel: Option<Channel>,
+    /// Under `AckPolicy::Digest`, the delivery announcements that arrived with
+    /// this node's current belief, held so they relay onward with it. Empty
+    /// under source-routed acks.
+    pub ack_digest: Vec<(u32, u64)>,
 }
 
 /// A tower's beacon scheduling state. Lives here rather than on `Tower` for
@@ -76,6 +80,9 @@ pub struct TowerBeacon {
     pub epoch: u64,
     /// Next comms round this tower emits.
     pub next_round: u64,
+    /// Deliveries this tower has taken, newest last, for `AckPolicy::Digest`.
+    /// Bounded by trimming on insert and by age when announced.
+    pub recent: VecDeque<(u32, u64, u64)>, // (origin_id, seq, delivered_at_round)
 }
 
 /// Everything this protocol can express — all of it, as it happens, since the
@@ -121,6 +128,51 @@ impl DvDtn {
 
     pub fn with_params(params: DvDtnParams) -> Self {
         DvDtn { params, ..Self::default() }
+    }
+
+    /// Records a delivery for announcement in this tower's next beacons.
+    /// Bounded well above `ack_digest_entries`, since a tower can take several
+    /// bundles per contact and each beacon only announces a window of them.
+    fn note_delivery(&mut self, tower_id: u32, origin_id: u32, seq: u64, round: u64) {
+        let cap = self.params.ack_digest_entries.saturating_mul(8).max(64);
+        if let Some(t) = self.towers.get_mut(&tower_id) {
+            t.recent.push_back((origin_id, seq, round));
+            while t.recent.len() > cap {
+                t.recent.pop_front();
+            }
+        }
+    }
+
+    /// Test-only shims: driving a DvDtn directly, without a World, so a test
+    /// can exercise beacon-and-bundle interaction (which is where the digest
+    /// lives) rather than either half alone.
+    #[cfg(test)]
+    pub fn reseed_for_test(&mut self, seed: u64) {
+        use rand::SeedableRng;
+        self.rng = StdRng::seed_from_u64(seed);
+    }
+
+    #[cfg(test)]
+    pub fn add_tower_for_test(&mut self, id: u32) {
+        self.towers.insert(id, TowerBeacon::default());
+    }
+
+    #[cfg(test)]
+    pub fn spawn_node_for_test(&mut self) {
+        let next_beacon_round = beacon::initial_slot(&self.params, &mut self.rng);
+        let next_bundle_round = self.rng.gen_range(0..self.params.bundle_interval_rounds);
+        self.nodes.push(DvNode { next_beacon_round, next_bundle_round, ..Default::default() });
+    }
+
+    #[cfg(test)]
+    pub fn step_for_test(
+        &mut self,
+        balloons: &[crate::balloon::Balloon],
+        towers: &[crate::tower::Tower],
+        adj: &crate::mesh_adjacency::MeshAdjacency,
+        round: u64,
+    ) {
+        <Self as MeshProtocol>::step(self, StepCtx { round, balloons, towers, adj });
     }
 
     /// Acks currently in transit anywhere in the mesh.
@@ -179,7 +231,7 @@ impl MeshProtocol for DvDtn {
             ctx.round,
             &mut self.rng,
         );
-        let mut events: Vec<CommsEvent> = bundle::step(
+        let out = bundle::step(
             &mut self.nodes[..n],
             ctx.balloons,
             ctx.adj,
@@ -188,6 +240,19 @@ impl MeshProtocol for DvDtn {
             ctx.round,
             &mut self.stats,
         );
+        let mut events = out.events;
+        // Deliveries taken this round go into their tower's announcement ring;
+        // origins hear about them on a later beacon, which is what makes the
+        // receipt cost nothing.
+        for d in out.deliveries {
+            self.note_delivery(d.tower_id, d.origin_id, d.seq, ctx.round);
+        }
+        // Origins that heard their own delivery announced this round.
+        for a in result.digest_acks {
+            if let Some(node) = self.nodes.get_mut(a.node) {
+                bundle::apply_digest_ack(node, a.seq, &mut self.stats);
+            }
+        }
         events.extend(result.hops.into_iter().map(|h| CommsEvent {
             kind: EventKind::RouteAd,
             from: h.from,
