@@ -20,6 +20,7 @@
 // choice. Those stay outside.
 
 pub mod dv_dtn;
+pub mod epidemic;
 
 use crate::balloon::Balloon;
 use crate::link_detection::NodeKey;
@@ -183,6 +184,7 @@ pub trait MeshProtocol: Send {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProtocolSpec {
     DvDtn(dv_dtn::params::DvDtnParams),
+    Epidemic(epidemic::params::EpidemicParams),
 }
 
 impl Default for ProtocolSpec {
@@ -195,6 +197,7 @@ impl ProtocolSpec {
     pub fn build(&self) -> Box<dyn MeshProtocol> {
         match self {
             ProtocolSpec::DvDtn(p) => Box::new(dv_dtn::DvDtn::with_params(*p)),
+            ProtocolSpec::Epidemic(p) => Box::new(epidemic::Epidemic::with_params(*p)),
         }
     }
 }
@@ -223,8 +226,11 @@ impl std::str::FromStr for ProtocolSpec {
             Some((n, r)) => (n, Some(r)),
             None => (s, None),
         };
+        if name == "epidemic" {
+            return parse_epidemic(rest.unwrap_or(""));
+        }
         if name != "dv-dtn" {
-            return Err(format!("unknown protocol {name:?} (known: dv-dtn)"));
+            return Err(format!("unknown protocol {name:?} (known: dv-dtn, epidemic)"));
         }
 
         let mut p = DvDtnParams::default();
@@ -271,4 +277,30 @@ impl std::str::FromStr for ProtocolSpec {
         }
         Ok(ProtocolSpec::DvDtn(p))
     }
+}
+
+fn parse_epidemic(rest: &str) -> Result<ProtocolSpec, String> {
+    use epidemic::params::EpidemicParams;
+
+    let mut p = EpidemicParams::default();
+    for pair in rest.split(',').filter(|x| !x.is_empty()) {
+        let (k, v) =
+            pair.split_once('=').ok_or_else(|| format!("expected key=value, got {pair:?}"))?;
+        let num = || -> Result<u64, String> {
+            v.parse::<u64>().map_err(|_| format!("{k}: expected a number, got {v:?}"))
+        };
+        match k {
+            "copies" => p.copies = num()?.max(1) as u32,
+            "tower" => p.tower_contact = num()?.max(1) as usize,
+            "originate" => p.bundle_interval_rounds = num()?.max(1),
+            "wake" => p.wake_interval_rounds = num()?.max(1),
+            other => {
+                return Err(format!(
+                    "unknown parameter {other:?} for epidemic \
+                     (known: copies, tower, originate, wake)"
+                ))
+            }
+        }
+    }
+    Ok(ProtocolSpec::Epidemic(p))
 }
