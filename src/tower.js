@@ -44,6 +44,15 @@ export class Tower extends TowerModel {
     this.rangeCircleEntities = [];
   }
 
+  // Visual indicator that this tower's beacon activity is being watched
+  // (see BeaconLayer). Just an outline toggle on the existing point — no new
+  // entity, so it can't itself become a pick target.
+  setWatching(isWatching) {
+    if (!this.entity) return;
+    this.entity.point.outlineColor = Cesium.Color.fromCssColorString('#7fe0ff');
+    this.entity.point.outlineWidth = isWatching ? 3 : 0;
+  }
+
   // Rebuilds the range-gradient overlay in place — call this after
   // params.horizonRefractionCoeff changes, since the gradient depends on it.
   refreshRangeCircle(viewer) {

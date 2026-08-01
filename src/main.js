@@ -23,8 +23,10 @@ import {
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
 import { BalloonLayer } from './balloonLayer.js';
 import { CommsReplay } from './commsReplay.js';
+import { BeaconLayer } from './beaconLayer.js';
 import { InspectorPanel } from './ui/inspectorPanel.js';
 import { ControlPanel } from './ui/controlPanel.js';
+import { TowerMenu } from './ui/towerMenu.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -88,6 +90,25 @@ async function initCesium() {
   };
 
   const commsReplay = new CommsReplay();
+  const beaconLayer = new BeaconLayer();
+  const towerMenu = new TowerMenu();
+
+  // Which tower's beacon activity is currently animated, if any. A purely
+  // client-side choice — the server broadcasts every tower's hops on every
+  // comms round (like edges), so different tabs can watch different towers
+  // without any server-side selection state.
+  let watchedTowerId = null;
+
+  function setWatchedTower(id) {
+    if (watchedTowerId !== null) towerById.get(watchedTowerId)?.setWatching(false);
+    watchedTowerId = id;
+    beaconLayer.reset(viewer);
+    if (watchedTowerId !== null) towerById.get(watchedTowerId)?.setWatching(true);
+  }
+
+  function toggleBeaconWatch(id) {
+    setWatchedTower(watchedTowerId === id ? null : id);
+  }
 
   const inspector = new InspectorPanel({
     onClose: () => deselectBalloon(),
@@ -140,6 +161,9 @@ async function initCesium() {
       if (!seen.has(id)) {
         tower.removeFromScene(viewer);
         towerById.delete(id);
+        // Defensive: covers deletion from another tab, not just this one's
+        // own "Delete tower" action (which already clears the watch itself).
+        if (id === watchedTowerId) setWatchedTower(null);
       }
     }
   }
@@ -193,6 +217,7 @@ async function initCesium() {
       linkLayer.sync(viewer, snapshot.edges, resolveNodePosition);
     }
     linkLayer.refreshPositions(resolveNodePosition);
+    beaconLayer.handleSnapshot(viewer, snapshot.beaconHops, watchedTowerId, resolveNodePosition);
     controlPanel.syncFromSnapshot(snapshot, () => {
       for (const tower of towerById.values()) tower.refreshRangeCircle(viewer);
     });
@@ -227,7 +252,17 @@ async function initCesium() {
     const pickedTower = candidates.find((c) => c.id && c.id.__isTower);
     if (pickedTower) {
       const entry = [...towerById.entries()].find(([, tower]) => tower.entity === pickedTower.id);
-      if (entry) removeTower(entry[0]);
+      if (entry) {
+        const [id] = entry;
+        towerMenu.show(click.position.x, click.position.y, {
+          isWatching: watchedTowerId === id,
+          onDelete: () => {
+            if (id === watchedTowerId) setWatchedTower(null);
+            removeTower(id);
+          },
+          onToggleWatch: () => toggleBeaconWatch(id),
+        });
+      }
       return;
     }
     // No tower in range of the click — fall back to balloon selection.

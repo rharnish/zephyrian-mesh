@@ -160,21 +160,41 @@ pub fn initial_slot(rng: &mut impl Rng) -> u64 {
     rng.gen_range(0..BEACON_INTERVAL_ROUNDS)
 }
 
+/// One beacon transmission from this round, for the wavefront animation
+/// (docs/design/MESH_COMMS_DESIGN.md §3 "Beacon wavefront"). `from` is the
+/// tower for a fresh wave's first hop, or the relaying balloon otherwise —
+/// exactly the node whose radio actually carried this offer.
+pub struct BeaconHop {
+    pub from: NodeKey,
+    pub to_balloon: usize,
+    pub tower_id: u32,
+    pub hop_count: u32,
+    pub epoch: u64,
+}
+
+pub struct BeaconStepResult {
+    /// Indices of balloons that woke and transmitted this round. Bundle
+    /// forwarding reuses this set rather than keeping its own schedule: a
+    /// radio that is awake is awake for both, which is what makes
+    /// BEACON_INTERVAL_ROUNDS the forwarding rate as well (see
+    /// docs/design/MESH_COMMS_DESIGN.md §4).
+    pub awake: Vec<usize>,
+    /// Every offer made this round, for whichever tower(s) a client wants to
+    /// animate. Not filtered here — see Snapshot::beacon_hops.
+    pub hops: Vec<BeaconHop>,
+}
+
 /// Advance discovery by one round. `balloons` must be the visible slice — only
 /// visible balloons participate in link detection, so only they can hear or
 /// be heard. (A balloon hidden by the slider keeps its belief until it simply
 /// ages out, and rediscovers from scratch if it becomes visible again.)
-/// Returns the indices of balloons that woke and transmitted this round. Bundle
-/// forwarding reuses that set rather than keeping its own schedule: a radio that
-/// is awake is awake for both, which is what makes BEACON_INTERVAL_ROUNDS the
-/// forwarding rate as well (see docs/design/MESH_COMMS_DESIGN.md §4).
 pub fn step(
     balloons: &mut [Balloon],
     towers: &mut [Tower],
     adj: &MeshAdjacency,
     round: u64,
     rng: &mut impl Rng,
-) -> Vec<usize> {
+) -> BeaconStepResult {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
     for b in balloons.iter_mut() {
         if b.belief.is_some_and(|bel| bel.is_expired(round)) {
@@ -188,6 +208,7 @@ pub fn step(
     //    a single round depending on iteration order, collapsing exactly the
     //    propagation delay we're modelling.
     let mut offers: Vec<(usize, RouteBelief)> = Vec::new();
+    let mut hops: Vec<BeaconHop> = Vec::new();
 
     for (slot, t) in towers.iter_mut().enumerate() {
         if round < t.next_beacon_round {
@@ -196,16 +217,21 @@ pub fn step(
         t.next_beacon_round = next_slot(round, rng);
         t.beacon_epoch += 1;
         for &b_id in adj.tower_adj.get(slot).into_iter().flatten() {
-            offers.push((
-                b_id as usize,
-                RouteBelief {
-                    tower_id: t.id,
-                    hop_count: 1,
-                    next_hop: None,
-                    epoch: t.beacon_epoch,
-                    emitted_at_round: round,
-                },
-            ));
+            let belief = RouteBelief {
+                tower_id: t.id,
+                hop_count: 1,
+                next_hop: None,
+                epoch: t.beacon_epoch,
+                emitted_at_round: round,
+            };
+            hops.push(BeaconHop {
+                from: NodeKey::Tower(t.id),
+                to_balloon: b_id as usize,
+                tower_id: belief.tower_id,
+                hop_count: belief.hop_count,
+                epoch: belief.epoch,
+            });
+            offers.push((b_id as usize, belief));
         }
     }
 
@@ -225,16 +251,21 @@ pub fn step(
         }
         let id = balloons[i].id;
         for &n_id in adj.balloon_adj.get(i).into_iter().flatten() {
-            offers.push((
-                n_id as usize,
-                // `emitted_at_round` is inherited untouched via `..belief` —
-                // relaying does not make the news any newer.
-                RouteBelief {
-                    hop_count: belief.hop_count + 1,
-                    next_hop: Some(id),
-                    ..belief
-                },
-            ));
+            // `emitted_at_round` is inherited untouched via `..belief` —
+            // relaying does not make the news any newer.
+            let offer = RouteBelief {
+                hop_count: belief.hop_count + 1,
+                next_hop: Some(id),
+                ..belief
+            };
+            hops.push(BeaconHop {
+                from: NodeKey::Balloon(id),
+                to_balloon: n_id as usize,
+                tower_id: offer.tower_id,
+                hop_count: offer.hop_count,
+                epoch: offer.epoch,
+            });
+            offers.push((n_id as usize, offer));
         }
     }
 
@@ -252,7 +283,7 @@ pub fn step(
         }
     }
 
-    awake
+    BeaconStepResult { awake, hops }
 }
 
 #[cfg(test)]
@@ -306,6 +337,29 @@ mod tests {
         assert_eq!(balloons[0].belief.unwrap().next_hop, None);
         assert_eq!(balloons[1].belief.unwrap().next_hop, Some(0));
         assert_eq!(balloons[2].belief.unwrap().next_hop, Some(1));
+    }
+
+    /// The tower's first hop should surface as a hop from the tower node
+    /// itself, not from whatever balloon happens to relay it later.
+    #[test]
+    fn tower_origin_offer_produces_a_hop_from_the_tower() {
+        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
+        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(&[edge("t0", "b0")], 1, &towers);
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let mut round = 0u64;
+        loop {
+            let result = step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            if let Some(hop) = result.hops.iter().find(|h| h.to_balloon == 0) {
+                assert_eq!(hop.from, NodeKey::Tower(0));
+                assert_eq!(hop.hop_count, 1);
+                break;
+            }
+            round += 1;
+            assert!(round < 30, "tower should have beaconed by now");
+        }
     }
 
     /// Cut the link and the belief must not persist forever — it ages out,

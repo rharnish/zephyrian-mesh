@@ -83,6 +83,20 @@ pub struct EdgeSnapshot {
     pub grounded: bool,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+/// One beacon transmission, for the frontend's beacon-wavefront animation
+/// (docs/design/MESH_COMMS_DESIGN.md §3). `from`/`to` are wire node keys —
+/// same format and same `NodeKey` `Display` impl edges already use — so the
+/// frontend's existing `parseNodeKey`/position-lookup needs no changes.
+pub struct BeaconHopWire {
+    pub from: String,
+    pub to: String,
+    pub tower_id: u32,
+    pub hop_count: u32,
+    pub epoch: u64,
+}
+
 /// Milliseconds since the Unix epoch. Saturates rather than panicking on a
 /// clock before 1970, which is not a real case but is not worth a panic path.
 fn now_ms() -> u64 {
@@ -115,6 +129,12 @@ pub struct Snapshot {
     /// `None` on ticks where links weren't recomputed (still throttled the
     /// same way main.js throttles it) — client keeps the last edge set.
     pub edges: Option<Vec<EdgeSnapshot>>,
+    /// Beacon transmissions from this comms round, across all towers.
+    /// `None`/omitted when none fired. Broadcast unfiltered to every client,
+    /// same as `edges` — picking which tower to animate is a client-side
+    /// concern (see BeaconLayer in the frontend), not server-side selection
+    /// state, so multiple tabs can watch different towers independently.
+    pub beacon_hops: Option<Vec<BeaconHopWire>>,
     /// Broadcast so every connected tab's slider stays in sync with
     /// whichever tab last changed it (server is the source of truth).
     pub horizon_refraction_coeff: f64,
@@ -301,6 +321,7 @@ impl World {
                 balloons: visible.to_vec(),
                 towers: self.towers.clone(),
                 edges: None,
+                beacon_hops: None,
                 horizon_refraction_coeff: self.horizon_refraction_coeff,
                 paused: true,
                 mean_degree: self.mean_degree,
@@ -404,22 +425,38 @@ impl World {
         // clock (see config::COMMS_EVERY_N_TICKS). Beacon slots are per-node
         // and jittered, so they don't align with the link-recompute cadence.
         // Only visible balloons take part, since only they have edges.
+        let mut beacon_hops: Option<Vec<BeaconHopWire>> = None;
         if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
             let round = self.tick_count / COMMS_EVERY_N_TICKS;
             // Beacons first, so a bundle forwarded this round uses the freshest
             // belief available rather than one a round old. `awake` is the set
             // of radios that transmitted; bundles ride the same duty cycle.
-            let awake = crate::beacon::step(
+            let result = crate::beacon::step(
                 &mut self.balloons[..self.visible_count],
                 &mut self.towers,
                 &self.adjacency,
                 round,
                 &mut self.rng,
             );
+            if !result.hops.is_empty() {
+                beacon_hops = Some(
+                    result
+                        .hops
+                        .iter()
+                        .map(|h| BeaconHopWire {
+                            from: h.from.to_string(),
+                            to: NodeKey::Balloon(self.balloons[h.to_balloon].id).to_string(),
+                            tower_id: h.tower_id,
+                            hop_count: h.hop_count,
+                            epoch: h.epoch,
+                        })
+                        .collect(),
+                );
+            }
             crate::bundle::step(
                 &mut self.balloons[..self.visible_count],
                 &self.adjacency,
-                &awake,
+                &result.awake,
                 round,
                 &mut self.bundle_stats,
             );
@@ -454,6 +491,7 @@ impl World {
             balloons: self.balloons[..self.visible_count].to_vec(),
             towers: self.towers.clone(),
             edges,
+            beacon_hops,
             horizon_refraction_coeff: self.horizon_refraction_coeff,
             paused: false,
             mean_degree: self.mean_degree,
