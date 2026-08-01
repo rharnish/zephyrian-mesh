@@ -10,6 +10,7 @@ use axum::{
 use serde::Deserialize;
 use sim_server::config;
 use sim_server::sim::{Command, World};
+use sim_server::wind_cache;
 use sim_server::wind_field::WindField;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
@@ -53,7 +54,7 @@ async fn main() {
 
     let protocol = protocol_from_args();
     tracing::info!("comms protocol: {protocol:?}");
-    let wind = Arc::new(fetch_wind_field().await);
+    let wind = Arc::new(load_wind_field(wind_from_args()).await);
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Command>();
     // Deliberately shallow (~0.8s at 20 Hz). This is a live view, not a log: a
@@ -116,6 +117,147 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     tracing::info!("sim-server listening on ws://127.0.0.1:8080/ws");
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Where the wind field comes from at startup.
+///
+/// Startup used to be: ask wind_backend.py for ~350MB of JSON, ~55s, every
+/// single time — on top of the ~46s that backend spends building the payload
+/// before it will answer at all. Both are avoidable after the first run, since
+/// the field is static.
+enum WindSpec {
+    /// Cache first, network second. Asks the backend only which field it would
+    /// serve — a metadata call that never touches the grids — and skips the
+    /// payload entirely on a hit. On a miss, fetches once and caches for next
+    /// time.
+    Auto,
+    /// A named cache entry. Never touches the network, so the Python backend
+    /// need not be running at all.
+    Cached(String),
+    /// No wind. The frozen-topology baseline every experiment was measured on.
+    Zero,
+}
+
+fn wind_from_args() -> WindSpec {
+    let args: Vec<String> = std::env::args().collect();
+    let flag = args
+        .iter()
+        .position(|a| a == "--wind")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .or_else(|| std::env::var("ZM_WIND").ok());
+    match flag.as_deref() {
+        None | Some("auto") => WindSpec::Auto,
+        Some("none") | Some("zero") => WindSpec::Zero,
+        Some(name) => WindSpec::Cached(name.to_string()),
+    }
+}
+
+async fn load_wind_field(spec: WindSpec) -> WindField {
+    match spec {
+        WindSpec::Zero => {
+            tracing::info!("wind: zero (--wind none)");
+            WindField::zero()
+        }
+        WindSpec::Cached(name) => match wind_cache::resolve(&name) {
+            Ok(f) => {
+                tracing::info!("wind: loaded {name:?} from cache");
+                f
+            }
+            Err(e) => {
+                // Named explicitly, so a silent substitution would be worse
+                // than not starting: the sim would run on weather nobody asked
+                // for and nothing would look wrong.
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
+        WindSpec::Auto => auto_wind().await,
+    }
+}
+
+async fn auto_wind() -> WindField {
+    let cache = match wind_cache::WindCache::open() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("wind cache unavailable ({e}); falling back to a direct fetch");
+            return fetch_wind_field().await;
+        }
+    };
+
+    // Which field *would* the backend serve? This is the cheap endpoint — it
+    // reads metadata and never builds a grid — so asking costs milliseconds
+    // even when the answer is "the one you already have".
+    let source_url = format!("{}/source", config::WIND_API_URL);
+    match reqwest::get(&source_url).await {
+        Ok(resp) => match resp.json::<wind_cache::SourceMeta>().await {
+            Ok(meta) => {
+                let key = meta.cache_key();
+                if cache.contains(&key) {
+                    match cache.load(&key) {
+                        Ok(f) => {
+                            tracing::info!(
+                                "wind: {} from cache (skipped the ~350MB fetch)",
+                                meta.label()
+                            );
+                            return f;
+                        }
+                        Err(e) => tracing::warn!("wind cache entry {key} unreadable ({e}); refetching"),
+                    }
+                }
+                tracing::info!("wind: {} not cached, fetching (~1 min, once)", meta.label());
+                let field = fetch_wind_field().await;
+                match cache.store(&meta, &field) {
+                    Ok(e) => tracing::info!(
+                        "wind: cached {} ({:.0} MB) — later starts will skip the fetch",
+                        e.label,
+                        e.bytes as f64 / 1e6
+                    ),
+                    Err(e) => tracing::warn!("could not write wind cache: {e}"),
+                }
+                field
+            }
+            Err(e) => {
+                tracing::warn!("could not read {source_url} ({e}); falling back to a direct fetch");
+                fetch_wind_field().await
+            }
+        },
+        // Backend down. That used to mean zero wind unconditionally; with a
+        // populated cache it no longer has to, which is what lets run-all.sh
+        // skip starting the backend at all.
+        Err(_) => match newest_cached(&cache) {
+            Some((label, field)) => {
+                tracing::info!("wind: backend not running; using newest cached field {label}");
+                field
+            }
+            None => {
+                tracing::warn!(
+                    "wind: backend not running at {} and the cache is empty, using zero wind. \
+                     Populate it with: cargo run --release --bin wind_cache -- fetch",
+                    config::WIND_API_URL
+                );
+                WindField::zero()
+            }
+        },
+    }
+}
+
+/// Newest by observation time. Deterministic and explainable, which matters
+/// because this path picks the weather without being told which to use — an
+/// arbitrary choice among several cached fields would be a quiet way to make
+/// two runs incomparable.
+fn newest_cached(cache: &wind_cache::WindCache) -> Option<(String, WindField)> {
+    let entries = cache.entries().ok()?;
+    let first = entries.first()?;
+    if entries.len() > 1 {
+        tracing::info!(
+            "wind: {} entries cached; taking the newest. Pass --wind <label> to choose: {}",
+            entries.len(),
+            entries.iter().map(|e| e.label.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let field = cache.load(&first.key).ok()?;
+    Some((first.label.clone(), field))
 }
 
 async fn fetch_wind_field() -> WindField {

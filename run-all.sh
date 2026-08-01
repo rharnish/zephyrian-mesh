@@ -5,13 +5,13 @@
 # stops all three together. See README.md for the manual/three-terminal
 # version of this same sequence.
 #
-# Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
+# Usage: ./run-all.sh [--local] [--protocol SPEC] [--wind NAME] [-h|--help]
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'EOF'
-Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
+Usage: ./run-all.sh [--local] [--protocol SPEC] [--wind NAME] [-h|--help]
 
   (default)  dev mode — everything bound to 127.0.0.1, only reachable from
              this computer.
@@ -26,6 +26,19 @@ Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
              Which comms protocol sim-server runs — see PROTOCOLS below.
              Defaults to "dv-dtn" (the shipped configuration). Ignored if
              sim-server is already running on :8080.
+  --wind NAME
+             Which wind field to simulate. Defaults to "auto": use the cached
+             field if there is one, else fetch it from wind_backend.py once and
+             cache it. "none" is zero wind — the frozen-topology condition
+             every result in experiments/ was measured under, and the right
+             choice when reproducing one. Anything else names a cache entry by
+             its observation time, e.g. --wind 1978-06-09T03:00:00.
+
+             The cache is why startup is fast. wind_backend.py spends ~46s
+             building a ~350MB payload and sim-server ~55s fetching it, for a
+             field that never changes; cached, that becomes about a second and
+             the Python backend is not started at all. Manage it with:
+               cd sim-server && cargo run --release --bin wind_cache -- list
   -h, --help Show this help and exit.
 
 PROTOCOLS
@@ -169,6 +182,11 @@ MODE="dev"
 # completion. Changing the default would quietly re-baseline every figure in
 # experiments/.
 PROTOCOL="dv-dtn"
+# "auto" means: use the cached wind field if there is one, otherwise fetch it
+# from wind_backend.py and cache it for next time. "none" is zero wind — the
+# frozen-topology condition every experiment in experiments/ was measured
+# under, and worth choosing deliberately when reproducing one.
+WIND="auto"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local) MODE="local"; shift ;;
@@ -177,6 +195,11 @@ while [[ $# -gt 0 ]]; do
       PROTOCOL="$2"; shift 2
       ;;
     --protocol=*) PROTOCOL="${1#*=}"; shift ;;
+    --wind)
+      [[ $# -ge 2 ]] || { echo "--wind needs a value" >&2; usage >&2; exit 1; }
+      WIND="$2"; shift 2
+      ;;
+    --wind=*) WIND="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown option: $1" >&2
@@ -240,16 +263,42 @@ wait_for_log() {
 }
 
 # --- 1. wind_backend.py (port 8000) ---------------------------------------
+#
+# Skipped entirely when sim-server already has the wind field cached. The
+# backend exists to *produce* that field: it spends ~46s building a ~350MB
+# payload at startup and sim-server then spends ~55s fetching it, every single
+# run, for a field that never changes. Once cached, sim-server reads it from
+# disk in about a second and needs nothing from Python at all.
+#
+# Populate or refresh the cache with:
+#   cd sim-server && cargo run --release --bin wind_cache -- fetch
+# which does start the backend's work — but once, rather than per run.
+WIND_CACHE_DIR="${ZM_WIND_CACHE:-sim-server/.wind-cache}"
+wind_cached() {
+  # An entry is a matched .bin/.json pair; a lone .bin is a half-written store.
+  local f
+  for f in "$WIND_CACHE_DIR"/*.bin; do
+    [[ -e "$f" && -e "${f%.bin}.json" ]] && return 0
+  done
+  return 1
+}
+
 if port_open 8000; then
   echo "Something is already listening on :8000 — assuming wind_backend.py is up, skipping."
+elif [[ "$WIND" == "none" ]]; then
+  echo "Wind disabled (--wind none) — not starting wind_backend.py."
+elif wind_cached; then
+  echo "Wind field is cached ($WIND_CACHE_DIR) — not starting wind_backend.py."
+  echo "  sim-server will load it from disk, skipping the ~100s build-and-fetch."
+  echo "  To re-fetch: cd sim-server && cargo run --release --bin wind_cache -- fetch"
 else
-  echo "Starting wind_backend.py..."
+  echo "Starting wind_backend.py (no cached wind field yet)..."
   (
     [[ "$MODE" == "local" ]] && export WIND_BACKEND_HOST=0.0.0.0
     cd weather-data-server && exec ./run.sh
   ) > "$LOG_DIR/wind_backend.log" 2>&1 &
   PIDS+=($!)
-  wait_for_log "$LOG_DIR/wind_backend.log" "Application startup complete" "wind_backend.py" 60
+  wait_for_log "$LOG_DIR/wind_backend.log" "Application startup complete" "wind_backend.py" 120
 fi
 
 # --- 2. sim-server (port 8080) ---------------------------------------------
@@ -261,7 +310,8 @@ else
   (
     cd sim-server \
       && cargo build --release --bin sim-server \
-      && exec ./target/release/sim-server ${PROTOCOL:+--protocol "$PROTOCOL"}
+      && exec ./target/release/sim-server ${PROTOCOL:+--protocol "$PROTOCOL"} \
+           ${WIND:+--wind "$WIND"}
   ) > "$LOG_DIR/sim-server.log" 2>&1 &
   PIDS+=($!)
   wait_for_log "$LOG_DIR/sim-server.log" "listening on" "sim-server" 180
