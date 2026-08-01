@@ -58,6 +58,12 @@ for await (const line of rl) {
         await page.click(arg);
         console.log(`OK click ${arg}`);
         break;
+      case 'clickat': {
+        const [x, y] = arg.split(/\s+/).map(Number);
+        await page.mouse.click(x, y);
+        console.log(`OK clickat ${arg}`);
+        break;
+      }
       case 'console':
         console.log(`CONSOLE_DUMP ${JSON.stringify(consoleMessages)}`);
         break;
