@@ -34,10 +34,14 @@ use std::sync::Arc;
 /// Keys every delivery protocol reports, and which therefore compare.
 const CANONICAL: &[&str] = &["originated", "delivered", "resolved", "completion_rate"];
 
-fn run(spec: &ProtocolSpec, seed: u64, n: u32, rounds: u64) -> StatsTable {
-    let mut world = World::new(Arc::new(WindField::zero()))
-        .with_protocol(spec.clone())
-        .with_seed(seed);
+fn run(
+    spec: &ProtocolSpec,
+    seed: u64,
+    n: u32,
+    rounds: u64,
+    wind: &Arc<WindField>,
+) -> StatsTable {
+    let mut world = World::new(Arc::clone(wind)).with_protocol(spec.clone()).with_seed(seed);
     for &(lon, lat, h) in INITIAL_TOWERS {
         world.add_tower(lon, lat, h);
     }
@@ -69,10 +73,36 @@ fn sd(v: &[f64]) -> f64 {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let seeds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
-    let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1200);
-    let rounds: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(600);
+    // --wind NAME anywhere; everything else stays positional.
+    let mut positional: Vec<String> = Vec::new();
+    let mut wind_name = String::from("none");
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--wind" => match it.next() {
+                Some(v) => wind_name = v,
+                None => {
+                    eprintln!("--wind needs a value (a cache label, or 'none')");
+                    std::process::exit(2);
+                }
+            },
+            _ if a.starts_with("--wind=") => wind_name = a["--wind=".len()..].to_string(),
+            _ => positional.push(a),
+        }
+    }
+    let seeds: u64 = positional.first().and_then(|s| s.parse().ok()).unwrap_or(8);
+    let n: u32 = positional.get(1).and_then(|s| s.parse().ok()).unwrap_or(1200);
+    let rounds: u64 = positional.get(2).and_then(|s| s.parse().ok()).unwrap_or(600);
+
+    // Loaded once and shared by every run: identical weather across
+    // protocols, the same way the seed gives identical balloon fields.
+    let wind = Arc::new(match sim_server::wind_cache::resolve(&wind_name) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    });
 
     let specs: Vec<(&str, ProtocolSpec)> = vec![
         ("dv-dtn (shipped)", "dv-dtn".parse().unwrap()),
@@ -87,14 +117,14 @@ fn main() {
         ("spray-and-wait L=16", "epidemic:copies=16".parse().unwrap()),
     ];
 
-    println!("n={n}  rounds={rounds}  seeds={seeds}  zero wind  coeff={DEFAULT_HORIZON_REFRACTION_COEFF}");
+    println!("n={n}  rounds={rounds}  seeds={seeds}  wind={wind_name}  coeff={DEFAULT_HORIZON_REFRACTION_COEFF}");
     println!("(identical balloon field per seed across every protocol)\n");
 
     // key -> label -> per-seed values
     let mut all: BTreeMap<&'static str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
     for (label, spec) in &specs {
         for seed in 0..seeds {
-            let table = run(spec, seed, n, rounds);
+            let table = run(spec, seed, n, rounds, &wind);
             for (k, v) in table.iter() {
                 all.entry(k).or_default().entry(label).or_default().push(v.as_f64());
             }

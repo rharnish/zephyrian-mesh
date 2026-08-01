@@ -174,6 +174,7 @@ def _resolve_source_uncached():
             f"Paths are relative to {DATA_DIR}/. Run {CATALOG_COMMAND} to list what's there."
         )
 
+    file_stat = os.stat(abs_path)
     stride = _resolve_int(config, "spatialStride", DEFAULT_SPATIAL_STRIDE, minimum=1)
 
     try:
@@ -213,6 +214,13 @@ def _resolve_source_uncached():
         "names": names,
         "meta": {
             "file": os.path.relpath(abs_path, HERE),
+            # Identity of the bytes, not just the path. A client caching the
+            # (large) payload keys on these, so replacing the .nc underneath a
+            # cache entry invalidates it instead of silently serving the old
+            # field forever. Path alone would not: these filenames are CDS
+            # request hashes and get reused across re-downloads.
+            "fileSize": file_stat.st_size,
+            "fileMtime": int(file_stat.st_mtime_ns),
             "timeIndex": time_index,
             "validTime": valid_time,
             "timeStepCount": time_count,
@@ -234,6 +242,8 @@ def resolve_source():
                 "names": None,
                 "meta": {
                     "file": None,
+                    "fileSize": None,
+                    "fileMtime": None,
                     "timeIndex": 0,
                     "validTime": None,
                     "timeStepCount": 1,
@@ -354,10 +364,33 @@ app.add_middleware(
 _wind_levels_response_cache = {}
 
 
-def _snapshot():
-    """The single selected time step, strided, with resolved dim names."""
+def _snapshot(time_index=None):
+    """The selected time step, strided, with resolved dim names.
+
+    `time_index` overrides what wind_source.json selected. That exists for
+    clients building their own cache of several steps from one file: a single
+    .nc commonly holds dozens of hours, and consecutive steps are different
+    weather over the same domain — which is exactly the replication an
+    experiment wants, without downloading anything further. Editing the config
+    and restarting for each would work too, but it makes the served step
+    ambiguous while a sweep is running.
+    """
     source = resolve_source()
     ds, names, meta = source["ds"], source["names"], source["meta"]
+
+    if time_index is not None and time_index != meta["timeIndex"]:
+        count = meta["timeStepCount"]
+        if not 0 <= time_index < count:
+            raise SourceProblem(
+                f"timeIndex {time_index} is out of range: this file has {count} "
+                f"time step(s), so valid indices are 0..{count - 1}."
+            )
+        meta = dict(meta)
+        meta["timeIndex"] = time_index
+        time_values = np.asarray(ds[names["timeDim"]].values).ravel()
+        meta["validTime"] = np.datetime_as_string(
+            np.datetime64(time_values[time_index]), unit="s"
+        ).item()
 
     snapshot = ds.isel({names["timeDim"]: meta["timeIndex"]})
     stride = meta["spatialStride"]
@@ -370,18 +403,18 @@ def _snapshot():
     return snapshot, names, meta
 
 
-def _build_wind_levels_response():
-    """Builds the /api/wind-levels payload, then caches it for the process
-    lifetime.
+def _build_wind_levels_response(time_index=None):
+    """Builds the /api/wind-levels payload. The default step is cached for the
+    process lifetime; an explicitly requested one is built and discarded.
 
-    The source file may hold more than one time step, but only the one selected
-    in wind_source.json is ever built here. That's a size decision: a single
+    Only one step is ever *cached*, and that is a size decision: a single
     stride-2 step is ~350MB of JSON taking ~55s to serialize (see
-    docs/investigations/WIND_TRANSFER_PERF.md), so caching several would exhaust
-    memory. Change "timeIndex" or "spatialStride" in wind_source.json and
-    restart to serve something different.
+    docs/investigations/WIND_TRANSFER_PERF.md), so holding several would
+    exhaust memory. A client asking for a specific `time_index` pays the full
+    build each time, which is the right trade for something fetched once into
+    a durable cache on the other end.
     """
-    snapshot, names, meta = _snapshot()
+    snapshot, names, meta = _snapshot(time_index)
 
     lats = snapshot[names["latDim"]].values.tolist()
     lons = snapshot[names["lonDim"]].values.tolist()
@@ -494,11 +527,35 @@ def preload_dataset():
 
 
 @app.get("/api/wind-levels")
-def get_wind_levels(request: Request):
+def get_wind_levels(request: Request, timeIndex: int | None = None):
+    """The full grid payload. `?timeIndex=N` serves a step other than the one
+    wind_source.json selected, for clients caching several steps from one file.
+
+    Only the default step is served from cache; an explicit index costs a full
+    ~46s rebuild, so this is for populating a cache, not for repeated use.
+    """
     try:
-        raw_bytes, gzip_bytes = _wind_levels_json_bytes()
+        if timeIndex is None:
+            raw_bytes, gzip_bytes = _wind_levels_json_bytes()
+        else:
+            meta = resolve_source()["meta"]
+            if meta["synthetic"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="timeIndex requires a real wind source; this server is "
+                    f"serving synthetic wind ({meta['problem']})",
+                )
+            payload = _build_wind_levels_response(timeIndex)
+            raw_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            gzip_bytes = None
+    except HTTPException:
+        raise
+    except SourceProblem as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to build wind payload: {e}")
+    if gzip_bytes is None:
+        return Response(content=raw_bytes, media_type="application/json")
 
     accept_encoding = request.headers.get("accept-encoding", "")
     if "gzip" in accept_encoding:
@@ -511,15 +568,37 @@ def get_wind_levels(request: Request):
 
 
 @app.get("/api/wind-levels/source")
-def get_wind_levels_source():
+def get_wind_levels_source(timeIndex: int | None = None):
     """Which file and time step are actually being served, and whether the wind
     is real or synthetic.
 
     Cheap by design -- it never touches the grids, so it's the endpoint to hit
     when you want to know what the server resolved without paying for the
-    ~350MB payload.
+    ~350MB payload. That makes it the right place to key a client-side cache:
+    `file`, `fileSize`, `fileMtime`, `timeIndex` and `spatialStride` together
+    identify the field exactly, so a changed .nc invalidates rather than
+    silently reusing a stale entry.
+
+    `?timeIndex=N` reports what *would* be served at that step -- notably its
+    `validTime` -- without building anything, so a client can enumerate and
+    label the steps in a file before deciding which to fetch.
     """
-    meta = dict(resolve_source()["meta"])
+    source = resolve_source()
+    meta = dict(source["meta"])
+    if timeIndex is not None and not meta["synthetic"]:
+        count = meta["timeStepCount"]
+        if not 0 <= timeIndex < count:
+            raise HTTPException(
+                status_code=400,
+                detail=f"timeIndex {timeIndex} is out of range: this file has "
+                f"{count} time step(s), so valid indices are 0..{count - 1}.",
+            )
+        names = source["names"]
+        time_values = np.asarray(source["ds"][names["timeDim"]].values).ravel()
+        meta["timeIndex"] = timeIndex
+        meta["validTime"] = np.datetime_as_string(
+            np.datetime64(time_values[timeIndex]), unit="s"
+        ).item()
     meta["config"] = os.path.relpath(SOURCE_CONFIG, HERE)
     return meta
 

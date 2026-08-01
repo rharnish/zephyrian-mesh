@@ -10,4 +10,5 @@ pub mod spatial_grid;
 pub mod telemetry;
 pub mod tower;
 pub mod union_find;
+pub mod wind_cache;
 pub mod wind_field;

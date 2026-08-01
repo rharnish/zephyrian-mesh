@@ -53,3 +53,9 @@ experiments/legacy-js/results*/*log
 # protocol sweep raw results
 experiments/protocol-results/json/*json
 
+
+# Cached wind fields — ~150MB per entry, rebuildable from weather-data-server
+# via `cargo run --release --bin wind_cache -- fetch`. The manifests next to
+# them record exactly which .nc and time step each came from, so a cache can
+# be reconstructed rather than needing to be shared.
+sim-server/.wind-cache/
