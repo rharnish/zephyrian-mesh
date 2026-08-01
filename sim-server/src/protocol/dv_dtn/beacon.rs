@@ -61,7 +61,11 @@ impl RouteBelief {
 /// Should `new` replace `cur`? This is the rebroadcast-suppression rule: a
 /// beacon that doesn't improve the belief is dropped rather than relayed,
 /// which is what stops a flood from becoming a broadcast storm.
-fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief, params: &DvDtnParams) -> bool {
+pub(super) fn should_adopt(
+    cur: Option<&RouteBelief>,
+    new: &RouteBelief,
+    params: &DvDtnParams,
+) -> bool {
     let Some(cur) = cur else { return true };
     if params.metric == Metric::NearestFirst {
         // Nearest wins, freshness only breaks ties. Beliefs still drain when
@@ -82,7 +86,7 @@ fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief, params: &DvDtnPara
     new.hop_count < cur.hop_count
 }
 
-fn next_slot(round: u64, params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
+pub(super) fn next_slot(round: u64, params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
     let j = params.beacon_jitter_rounds;
     let jitter = rng.gen_range(0..=(2 * j)) as i64 - j as i64;
     let interval = (params.beacon_interval_rounds as i64 + jitter).max(1) as u64;

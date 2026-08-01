@@ -77,6 +77,7 @@ fn main() {
     let specs: Vec<(&str, ProtocolSpec)> = vec![
         ("dv-dtn (shipped)", "dv-dtn".parse().unwrap()),
         ("dv-dtn digest+batch", "dv-dtn:ack=digest,mesh=4".parse().unwrap()),
+        ("dv-dtn reactive (AODV)", "dv-dtn:discovery=reactive".parse().unwrap()),
         ("spray-and-wait L=4", "epidemic:copies=4".parse().unwrap()),
         ("spray-and-wait L=16", "epidemic:copies=16".parse().unwrap()),
     ];

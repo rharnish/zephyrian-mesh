@@ -15,6 +15,7 @@
 // swapping protocols swaps the whole struct rather than reinterpreting
 // shared fields.
 
+pub mod aodv;
 pub mod beacon;
 pub mod bundle;
 pub mod bundle_stats;
@@ -27,7 +28,7 @@ use crate::telemetry::TelemetryRecord;
 use beacon::RouteBelief;
 use bundle::{Ack, Bundle, Channel, OutstandingBundle, ResolvedBundle};
 use bundle_stats::BundleStats;
-use params::DvDtnParams;
+use params::{Discovery, DvDtnParams};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, VecDeque};
@@ -97,8 +98,27 @@ static CAPABILITIES: Capabilities = Capabilities {
     event_kinds: &[EventKind::RouteAd, EventKind::Bundle, EventKind::Ack],
 };
 
+/// Same expressive power as the proactive mode; different traffic on the wire.
+static CAPABILITIES_REACTIVE: Capabilities = Capabilities {
+    name: "dv-dtn-reactive",
+    label: "On-demand discovery + store-and-forward",
+    route_belief: true,
+    next_hop_paths: true,
+    acks: true,
+    satellite_fallback: true,
+    event_kinds: &[
+        EventKind::RouteRequest,
+        EventKind::RouteReply,
+        EventKind::Bundle,
+        EventKind::Ack,
+    ],
+};
+
 pub struct DvDtn {
     pub params: DvDtnParams,
+    /// Only populated under `Discovery::Reactive`; the proactive mode carries
+    /// none of this state.
+    aodv: aodv::State,
     /// The protocol's own randomness — duty-cycle phases and slot jitter.
     /// Separate from the world's stream on purpose; see `MeshProtocol::reseed`.
     rng: StdRng,
@@ -113,6 +133,7 @@ impl Default for DvDtn {
     fn default() -> Self {
         DvDtn {
             params: DvDtnParams::default(),
+            aodv: aodv::State::default(),
             rng: StdRng::from_entropy(),
             nodes: Vec::new(),
             towers: HashMap::new(),
@@ -187,8 +208,14 @@ impl MeshProtocol for DvDtn {
         "dv-dtn"
     }
 
+    /// The two discovery modes differ in what they *emit*, not in what they
+    /// can express — both maintain a real route with a hop count — so the
+    /// flags match and only the label and event kinds change.
     fn capabilities(&self) -> &'static Capabilities {
-        &CAPABILITIES
+        match self.params.discovery {
+            Discovery::Proactive => &CAPABILITIES,
+            Discovery::Reactive => &CAPABILITIES_REACTIVE,
+        }
     }
 
     fn reseed(&mut self, seed: u64) {
@@ -221,16 +248,42 @@ impl MeshProtocol for DvDtn {
     /// radio that is awake is awake for both.
     fn step(&mut self, ctx: StepCtx<'_>) -> Vec<CommsEvent> {
         let n = ctx.balloons.len();
-        let result = beacon::step(
-            &mut self.nodes[..n],
-            ctx.balloons,
-            &mut self.towers,
-            ctx.towers,
-            ctx.adj,
-            &self.params,
-            ctx.round,
-            &mut self.rng,
-        );
+        // Discovery is the only half that differs between the proactive and
+        // reactive variants; forwarding below is identical either way, which
+        // is precisely why reactive lives here rather than as its own
+        // protocol. Both return the wake set bundles ride on.
+        let (awake, mut discovery_events, hops, digest_acks) = match self.params.discovery {
+            Discovery::Proactive => {
+                let r = beacon::step(
+                    &mut self.nodes[..n],
+                    ctx.balloons,
+                    &mut self.towers,
+                    ctx.towers,
+                    ctx.adj,
+                    &self.params,
+                    ctx.round,
+                    &mut self.rng,
+                );
+                (r.awake, Vec::new(), r.hops, r.digest_acks)
+            }
+            Discovery::Reactive => {
+                let (awake, ev) = aodv::step(
+                    &mut self.nodes[..n],
+                    &mut self.aodv,
+                    ctx.balloons,
+                    ctx.adj,
+                    &self.params,
+                    ctx.round,
+                    &mut self.rng,
+                );
+                // Reactive discovery sends no tower beacons, so there is
+                // nothing for a digest to ride on; the spec parser refuses
+                // that combination outright rather than letting it look like
+                // a protocol that simply never acknowledges.
+                (awake, ev, Vec::new(), Vec::new())
+            }
+        };
+        let result = beacon::BeaconStepResult { awake, hops, digest_acks };
         let out = bundle::step(
             &mut self.nodes[..n],
             ctx.balloons,
@@ -241,6 +294,7 @@ impl MeshProtocol for DvDtn {
             &mut self.stats,
         );
         let mut events = out.events;
+        events.append(&mut discovery_events);
         // Deliveries taken this round go into their tower's announcement ring;
         // origins hear about them on a later beacon, which is what makes the
         // receipt cost nothing.

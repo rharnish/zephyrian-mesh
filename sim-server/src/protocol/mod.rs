@@ -225,7 +225,7 @@ impl std::str::FromStr for ProtocolSpec {
     /// are measured constants that want a code change and a comment, not a
     /// command line.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use dv_dtn::params::{AckPolicy, DvDtnParams, Metric, QueueDiscipline};
+        use dv_dtn::params::{AckPolicy, Discovery, DvDtnParams, Metric, QueueDiscipline};
 
         let (name, rest) = match s.split_once(':') {
             Some((n, r)) => (n, Some(r)),
@@ -268,6 +268,17 @@ impl std::str::FromStr for ProtocolSpec {
                         _ => return Err(format!("ack: expected source-routed|digest, got {v:?}")),
                     }
                 }
+                "discovery" => {
+                    p.discovery = match v {
+                        "proactive" => Discovery::Proactive,
+                        "reactive" => Discovery::Reactive,
+                        _ => {
+                            return Err(format!(
+                                "discovery: expected proactive|reactive, got {v:?}"
+                            ))
+                        }
+                    }
+                }
                 "mesh" => p.batch.mesh_hop = num()?.max(1),
                 "tower" => p.batch.tower_contact = num()?.max(1),
                 "digest_entries" => p.ack_digest_entries = num()?,
@@ -275,10 +286,21 @@ impl std::str::FromStr for ProtocolSpec {
                 other => {
                     return Err(format!(
                         "unknown parameter {other:?} (known: metric, queue, ack, mesh, tower, \
-                         digest_entries, originate)"
+                         digest_entries, originate, discovery)"
                     ))
                 }
             }
+        }
+        // The digest rides tower beacons. Reactive discovery doesn't send any,
+        // so the combination would silently never acknowledge anything —
+        // which would look like a protocol result rather than a missing
+        // mechanism. Refuse it instead.
+        if p.discovery == Discovery::Reactive && p.ack_policy == AckPolicy::Digest {
+            return Err(
+                "ack=digest needs tower beacons to ride on, which discovery=reactive \
+                 does not send; use ack=source-routed with reactive discovery"
+                    .to_string(),
+            );
         }
         Ok(ProtocolSpec::DvDtn(p))
     }

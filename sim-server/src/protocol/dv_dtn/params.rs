@@ -13,6 +13,20 @@
 // `Default` returns exactly the shipped values, so a `World` built without
 // saying otherwise behaves as it always has.
 
+/// When route discovery happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Discovery {
+    /// Towers flood beacons continuously; a balloon usually has a route
+    /// already, and it may be stale. What ships.
+    #[default]
+    Proactive,
+    /// A balloon asks only when it has a bundle and no route (AODV-style).
+    /// Nothing is spent until there is something to send, but the first hop
+    /// waits for a flood out and a reply back — under a duty cycle, that is
+    /// hops x the wake interval in each direction.
+    Reactive,
+}
+
 /// Which route a balloon prefers when two offers compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Metric {
@@ -134,6 +148,8 @@ pub struct DvDtnParams {
     pub beacon_max_hops: u32,
     /// How a balloon chooses between competing route offers.
     pub metric: Metric,
+    /// Whether routes are maintained continuously or fetched on demand.
+    pub discovery: Discovery,
 
     // --- Telemetry bundles (C2, design doc §1 and §4) ------------------------
     //
@@ -269,6 +285,7 @@ impl Default for DvDtnParams {
             belief_max_age_rounds: 60,
             beacon_max_hops: 20,
             metric: Metric::default(),
+            discovery: Discovery::default(),
             bundle_interval_rounds: 200,
             bundle_max_age_rounds: 150,
             relay_queue_capacity: 8,
