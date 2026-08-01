@@ -5,13 +5,13 @@
 # stops all three together. See README.md for the manual/three-terminal
 # version of this same sequence.
 #
-# Usage: ./run-all.sh [--local] [-h|--help]
+# Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'EOF'
-Usage: ./run-all.sh [--local] [-h|--help]
+Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
 
   (default)  dev mode — everything bound to 127.0.0.1, only reachable from
              this computer.
@@ -22,23 +22,46 @@ Usage: ./run-all.sh [--local] [-h|--help]
              whatever hostname it was loaded from (see src/config.js), so no
              other change is needed. Also opens 5173/8000/8080 in ufw
              (asking for sudo) and closes them again on exit.
+  --protocol SPEC
+             Which comms protocol sim-server runs. SPEC is a protocol name,
+             optionally followed by ':' and comma-separated overrides. The
+             frontend adapts on its own — it reads the protocol's declared
+             capabilities from each snapshot and hides anything that protocol
+             has no concept of. Ignored if sim-server is already running.
+
+               dv-dtn                          the shipped default
+               dv-dtn:ack=digest               receipts ride tower beacons
+               dv-dtn:ack=digest,mesh=4        ...and mesh hops carry 4
+               dv-dtn:metric=nearest           hop count over freshness
+               dv-dtn:queue=lifo               newest held bundle first
+
+             Keys: metric=freshest|nearest, queue=fifo|lifo,
+                   ack=source-routed|digest, mesh=N, tower=N,
+                   digest_entries=N, originate=N
   -h, --help Show this help and exit.
 EOF
 }
 
 MODE="dev"
-for arg in "$@"; do
-  case "$arg" in
-    --local) MODE="local" ;;
+PROTOCOL=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --local) MODE="local"; shift ;;
+    --protocol)
+      [[ $# -ge 2 ]] || { echo "--protocol needs a value" >&2; usage >&2; exit 1; }
+      PROTOCOL="$2"; shift 2
+      ;;
+    --protocol=*) PROTOCOL="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
-      echo "Unknown option: $arg" >&2
+      echo "Unknown option: $1" >&2
       usage >&2
       exit 1
       ;;
   esac
 done
 echo "Mode: $MODE"
+[[ -n "$PROTOCOL" ]] && echo "Protocol: $PROTOCOL"
 
 LAN_PORTS=(5173 8000 8080)
 
@@ -107,12 +130,13 @@ fi
 # --- 2. sim-server (port 8080) ---------------------------------------------
 if port_open 8080; then
   echo "Something is already listening on :8080 — assuming sim-server is up, skipping."
+  [[ -n "$PROTOCOL" ]] && echo "  NOTE: --protocol has no effect on an already-running sim-server." >&2
 else
   echo "Starting sim-server (building first if needed — can take a minute)..."
   (
     cd sim-server \
-      && cargo build --release \
-      && exec ./target/release/sim-server
+      && cargo build --release --bin sim-server \
+      && exec ./target/release/sim-server ${PROTOCOL:+--protocol "$PROTOCOL"}
   ) > "$LOG_DIR/sim-server.log" 2>&1 &
   PIDS+=($!)
   wait_for_log "$LOG_DIR/sim-server.log" "listening on" "sim-server" 180

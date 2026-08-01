@@ -202,13 +202,73 @@ impl ProtocolSpec {
 impl std::str::FromStr for ProtocolSpec {
     type Err = String;
 
-    /// Bare name selects a protocol with its default parameters; parameter
-    /// overrides are deliberately not parsed here yet, since nothing needs
-    /// them from a command line and a half-built syntax is worse than none.
+    /// `name` for defaults, or `name:key=value,key=value` to override
+    /// parameters — so a live server or a harness can be pointed at a variant
+    /// without a rebuild.
+    ///
+    /// ```text
+    /// dv-dtn
+    /// dv-dtn:ack=digest
+    /// dv-dtn:ack=digest,mesh=4,tower=4
+    /// dv-dtn:metric=nearest,queue=lifo
+    /// ```
+    ///
+    /// Only the parameters worth varying from outside are exposed; the rest
+    /// are measured constants that want a code change and a comment, not a
+    /// command line.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "dv-dtn" => Ok(ProtocolSpec::DvDtn(Default::default())),
-            other => Err(format!("unknown protocol {other:?} (known: dv-dtn)")),
+        use dv_dtn::params::{AckPolicy, DvDtnParams, Metric, QueueDiscipline};
+
+        let (name, rest) = match s.split_once(':') {
+            Some((n, r)) => (n, Some(r)),
+            None => (s, None),
+        };
+        if name != "dv-dtn" {
+            return Err(format!("unknown protocol {name:?} (known: dv-dtn)"));
         }
+
+        let mut p = DvDtnParams::default();
+        for pair in rest.unwrap_or("").split(',').filter(|x| !x.is_empty()) {
+            let (k, v) = pair
+                .split_once('=')
+                .ok_or_else(|| format!("expected key=value, got {pair:?}"))?;
+            let num = || -> Result<usize, String> {
+                v.parse::<usize>().map_err(|_| format!("{k}: expected a number, got {v:?}"))
+            };
+            match k {
+                "metric" => {
+                    p.metric = match v {
+                        "freshest" => Metric::FreshestFirst,
+                        "nearest" => Metric::NearestFirst,
+                        _ => return Err(format!("metric: expected freshest|nearest, got {v:?}")),
+                    }
+                }
+                "queue" => {
+                    p.queue_discipline = match v {
+                        "fifo" => QueueDiscipline::Fifo,
+                        "lifo" => QueueDiscipline::Lifo,
+                        _ => return Err(format!("queue: expected fifo|lifo, got {v:?}")),
+                    }
+                }
+                "ack" => {
+                    p.ack_policy = match v {
+                        "source-routed" | "source" => AckPolicy::SourceRouted,
+                        "digest" => AckPolicy::Digest,
+                        _ => return Err(format!("ack: expected source-routed|digest, got {v:?}")),
+                    }
+                }
+                "mesh" => p.batch.mesh_hop = num()?.max(1),
+                "tower" => p.batch.tower_contact = num()?.max(1),
+                "digest_entries" => p.ack_digest_entries = num()?,
+                "originate" => p.bundle_interval_rounds = num()? as u64,
+                other => {
+                    return Err(format!(
+                        "unknown parameter {other:?} (known: metric, queue, ack, mesh, tower, \
+                         digest_entries, originate)"
+                    ))
+                }
+            }
+        }
+        Ok(ProtocolSpec::DvDtn(p))
     }
 }

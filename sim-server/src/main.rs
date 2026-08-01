@@ -25,10 +25,34 @@ struct AppState {
     wind: Arc<WindField>,
 }
 
+/// Which comms protocol this server runs, from `--protocol <spec>` or the
+/// `MESH_PROTOCOL` env var, defaulting to the shipped one. See
+/// `ProtocolSpec::from_str` for the spec syntax; a bad spec is fatal rather
+/// than silently falling back, since running the wrong protocol and not
+/// noticing is the worse failure.
+fn protocol_from_args() -> sim_server::protocol::ProtocolSpec {
+    let args: Vec<String> = std::env::args().collect();
+    let from_flag = args
+        .iter()
+        .position(|a| a == "--protocol")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let spec = from_flag.or_else(|| std::env::var("MESH_PROTOCOL").ok());
+    match spec {
+        None => Default::default(),
+        Some(s) => s.parse().unwrap_or_else(|e| {
+            eprintln!("bad --protocol {s:?}: {e}");
+            std::process::exit(2);
+        }),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    let protocol = protocol_from_args();
+    tracing::info!("comms protocol: {protocol:?}");
     let wind = Arc::new(fetch_wind_field().await);
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Command>();
@@ -47,7 +71,9 @@ async fn main() {
     // The single task that owns `World`. Everything else only talks to it
     // through `command_tx` (mutations) or `snapshot_tx` (read-only state).
     tokio::spawn(async move {
-        let mut world = World::new(wind);
+        // Protocol first: it seeds per-node state as balloons are created, so
+        // choosing it after spawning would leave it empty.
+        let mut world = World::new(wind).with_protocol(protocol);
         // `wind` (the Arc) was moved into World; the HTTP layer keeps its own
         // clone in AppState.
         world.spawn_balloon_pool(config::BALLOON_POOL_SIZE);
