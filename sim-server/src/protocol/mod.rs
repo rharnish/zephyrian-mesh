@@ -21,6 +21,7 @@
 
 pub mod dv_dtn;
 pub mod epidemic;
+pub mod stats;
 
 use crate::balloon::Balloon;
 use crate::link_detection::NodeKey;
@@ -162,6 +163,10 @@ pub trait MeshProtocol: Send {
     fn delivered(&self) -> u64;
     /// Everything that has left circulation one way or another.
     fn resolved(&self) -> u64;
+    /// This protocol's counters, keyed, for consumers that don't know which
+    /// protocol they are driving. See `stats::StatsTable` for the handful of
+    /// key names that are expected to mean the same thing everywhere.
+    fn stats(&self) -> stats::StatsTable;
 
     // --- On-demand detail, for GET /api/balloons/:id/comms ------------------
     fn last_bundle(&self, i: usize) -> Option<LastBundleView>;

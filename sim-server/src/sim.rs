@@ -317,6 +317,12 @@ impl World {
         self.dv_dtn().stats
     }
 
+    /// Whatever the running protocol counts, keyed — works regardless of
+    /// which protocol that is, unlike `bundle_stats`.
+    pub fn stats(&self) -> crate::protocol::stats::StatsTable {
+        self.protocol.stats()
+    }
+
     /// Read-only access to dv-dtn's internals, for offline harnesses that need
     /// to inspect queues/logs directly (see bin/telemetry_records.rs). Node
     /// `i` here is the same node as `balloons[i]`.

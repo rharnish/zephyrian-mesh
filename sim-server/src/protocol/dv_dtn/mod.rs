@@ -293,6 +293,32 @@ impl MeshProtocol for DvDtn {
         self.stats.delivered
     }
 
+    /// Keys match `BundleStats`' own field names, so a harness moving from the
+    /// concrete type to the table doesn't have to relearn anything.
+    fn stats(&self) -> crate::protocol::stats::StatsTable {
+        use crate::protocol::stats::StatsTable;
+        let st = &self.stats;
+        StatsTable::new()
+            .count("originated", st.originated)
+            .count("delivered", st.delivered)
+            .count("resolved", st.resolved())
+            .ratio("completion_rate", st.completion_rate())
+            .count("satellite", st.satellite)
+            .count("dropped_loop", st.dropped_loop)
+            .count("dropped_ttl", st.dropped_ttl)
+            .count("blocked", st.blocked)
+            .count("acked", st.acked)
+            .count("ack_lost", st.ack_lost)
+            .count("slots_with_bundle", st.slots_with_bundle)
+            .count("stall_no_belief", st.stall_no_belief)
+            .count("stall_stale_next_hop", st.stall_stale_next_hop)
+            .count("stall_tower_gone", st.stall_tower_gone)
+            .ratio("mean_tower_adjacent", st.mean_tower_adjacent())
+            .ratio("delivery_ceiling_per_round", st.delivery_capacity_per_round(&self.params))
+            .ratio("belief_hops_mean", bundle::hist_mean(&st.belief_hops))
+            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops))
+    }
+
     fn resolved(&self) -> u64 {
         self.stats.resolved()
     }

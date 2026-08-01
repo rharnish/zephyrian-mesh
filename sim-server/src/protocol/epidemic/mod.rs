@@ -410,6 +410,26 @@ impl MeshProtocol for Epidemic {
         self.stats.delivered
     }
 
+    /// The four canonical keys, plus what replication specifically costs.
+    /// Nothing here about beliefs, next hops or acks — those are not zero
+    /// under this protocol, they are absent.
+    fn stats(&self) -> crate::protocol::stats::StatsTable {
+        use crate::protocol::stats::StatsTable;
+        let st = &self.stats;
+        StatsTable::new()
+            .count("originated", st.originated)
+            .count("delivered", st.delivered)
+            .count("resolved", st.resolved())
+            .ratio("completion_rate", st.completion_rate())
+            .count("satellite", st.satellite)
+            .count("blocked", st.blocked)
+            .count("duplicate_arrivals", st.duplicate_arrivals)
+            .count("copies_expired", st.copies_expired)
+            .count("handoffs", st.handoffs)
+            .count("no_candidate", st.no_candidate)
+            .ratio("handoffs_per_delivery", st.handoffs_per_delivery())
+    }
+
     fn resolved(&self) -> u64 {
         self.stats.delivered + self.stats.satellite
     }
