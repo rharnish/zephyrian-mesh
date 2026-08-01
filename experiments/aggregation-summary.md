@@ -1,155 +1,167 @@
 # Aggregation: batching mesh hops, and acks that cost nothing
 
-> **Status: provisional — single seed.** Every number below comes from one
-> balloon field. This simulation's run-to-run variance is dominated by how many
-> balloons happen to sit in tower range, which correlates with delivered/round
-> at r = 0.94, so a single seed can resolve a large effect and nothing finer.
-> The multi-seed replacement is described under [Confirming this](#confirming-this)
-> and should overwrite these tables before any figure here is quoted elsewhere.
-
-**Data:** single-seed output of [`batch_sweep`](../sim-server/src/bin/batch_sweep.rs)
-(`batch_sweep 1200 600`) · **Generator for the confirming run:**
-[`aggregation_sweep`](../sim-server/src/bin/aggregation_sweep.rs) ·
-**Tables from:** [`summarize_aggregation.py`](summarize_aggregation.py)
+**Data:** [`aggregation-sweep-results.csv`](aggregation-sweep-results.csv) —
+1152 rows: 24 seeds × {600, 1200, 2000} balloons × {1, 4} tower contact ×
+{1, 2, 4, 8} mesh batch × {source-routed, digest} acks, 800 rounds each, zero
+wind, coeff 4.12. 2.8h on four cores.
+**Generator:** [`aggregation_sweep`](../sim-server/src/bin/aggregation_sweep.rs) ·
+**Tables:** [`summarize_aggregation.py`](summarize_aggregation.py)
 
 ## The question
 
 [`MESH_COMMS_DESIGN.md`](../docs/design/MESH_COMMS_DESIGN.md) §4 closed a long
 investigation with the finding that delivery is limited by the **last hop**:
-only ~23 of 1200 balloons can hear a tower at any moment, and sweeping offered
-load 28× left delivery pinned near 3.1/round. Widening the tower contact window
-from 1 to 4 bought +16 points of completion and then saturated, at which point
-the doc noted the limit had moved *back into the mesh* — and stopped there:
-"the remaining loss is now a different problem from the one investigated here."
+only ~23 of 1200 balloons can hear a tower at any moment. Widening the tower
+contact window from 1 to 4 bought +16 points of completion and then saturated,
+at which point the limit moved *back into the mesh* — and the doc stopped
+there: "the remaining loss is now a different problem from the one investigated
+here."
 
-This is that different problem. Both levers here raise **information per
-transmission** rather than transmissions per second, which is the one direction
-the earlier work never tried:
+This is that problem. Both levers raise **information per transmission** rather
+than transmissions per second, the one direction the earlier work never tried:
 
 - **Batching** (`BatchPolicy`) generalizes the tower-contact window to
   balloon-to-balloon hops, so one wake slot can carry several bundles.
-- **The ack digest** (`AckPolicy::Digest`) stops sending receipts as packets
-  at all. Towers announce recent deliveries inside beacons they were already
-  transmitting, and the announcement floods outward with the wave.
+- **The ack digest** (`AckPolicy::Digest`) stops sending receipts as packets.
+  Towers announce recent deliveries inside beacons they were already sending,
+  and the announcement floods outward with the wave.
 
-Both are transmission-time changes only. A batched hop still carries K
-individually identified bundles, each with its own origin, seq and recorded
-path — so per-record provenance survives for C3's signing, and `delivered`
-still counts records.
+Both are transmission-time changes only: a batched hop carries K individually
+identified bundles, each with its own origin, seq and path, so per-record
+provenance survives and `delivered` still counts records.
 
-## Results
+## Headline
 
-n = 1200, coeff 4.12, 600 rounds, zero wind, seed 42. Completion is
-delivered/resolved; `blocked` counts handoffs refused by a full receiver
-(retried, not lost).
+Completion %, mean ± sd across 24 seeds, at n = 1200, tower_contact = 4:
 
-| acks | mesh | tower | completion | deliv/round | ceiling | blocked | ack_lost |
-|---|---|---|---|---|---|---|---|
-| source-routed | 1 | 4 | **66.0%** | 3.30 | 22.68 | 2915 | 601 |
-| source-routed | 4 | 4 | 90.0% | 4.80 | 22.68 | 5194 | 1367 |
-| digest | 1 | 4 | 79.5% | 4.14 | 22.68 | 1939 | 0 |
-| digest | 4 | 4 | **95.7%** | 5.31 | 22.68 | 1246 | 0 |
-
-The first row is what ships. The last is both levers together.
-
-### The digest is close to free, and pays twice
-
-Switching acks to the digest at otherwise-shipped settings moves completion
-**66.0% → 79.5%**. It does this while *removing* traffic: `ack_lost` goes to
-zero by construction, because no ack packet is ever created to be lost.
-
-The second payment is the interesting one. `blocked` **falls**, 2915 → 1939.
-Acks were not merely occupying airtime, they were winning it — `bundle.rs`
-deliberately gives a relayed ack priority over that balloon's own forwarding,
-since letting both ride one wake would double its per-slot throughput and
-undermine the scarcity the whole model rests on. Removing acks as packets hands
-those slots back to ordinary forwarding, so the mesh drains faster as a side
-effect of the receipt getting cheaper.
-
-This is close to DTN's **Aggregate Custody Signals**, which exist for the same
-reason: per-bundle custody signals were too expensive to send individually.
-
-### Batching only pays once the ground link isn't the cap
-
-At `tower_contact = 1`, where the last hop is still the binding constraint,
-batching mesh hops buys little and costs a lot:
-
-| acks | mesh | tower | completion | blocked |
+| acks | mesh=1 | mesh=2 | mesh=4 | mesh=8 |
 |---|---|---|---|---|
-| source-routed | 1 | 1 | 57.9% | 3562 |
-| source-routed | 8 | 1 | 66.9% | 24495 |
+| source-routed | **62.6 ± 6.8** | 76.8 ± 6.6 | 87.3 ± 4.7 | 90.4 ± 4.0 |
+| digest | 73.6 ± 6.3 | 89.5 ± 4.1 | **94.2 ± 2.6** | 94.4 ± 2.5 |
 
-+9 points for a **7× rise in blocked handoffs**. The mesh pushes harder into a
-ground link that cannot take more, and the bundles pile up one hop short. At
-`tower_contact = 4` the same change is worth +24 points (66.0% → 90.0%) at less
-than double the blocking.
+Top-left is what ships. Both levers work; together they roughly halve the
+shortfall twice over, 62.6% → 94.2%.
 
-So the two levers are not independent, and neither alone is enough: tower=4
-with mesh=1 gives 66.0%, tower=1 with mesh=8 gives 66.9%. Together with the
-digest, 95.7%. **The last hop has to stop binding before mesh airtime becomes
-worth spending.**
+## The two levers are substitutes, not complements
 
-### What still limits it
+**This corrects the provisional single-seed reading of this file, which had it
+backwards.** From one seed it looked as though neither lever was much use
+without the other. Paired across 24 seeds, the opposite is true: each is worth
+*less* when the other is already in place.
 
-Delivery reaches 5.31/round against a last-hop ceiling of 22.68 — the ground
-link is now far from saturated, and offered load at `originate = 200` is about
-6/round. At 95.7% completion the mesh is close to carrying everything it is
-asked to carry, so the next honest experiment is to raise demand rather than
-capacity, and find where it breaks next.
+Effect of the digest, as (digest − source-routed) at the same seed, in
+completion points — n = 1200, tower_contact = 4:
 
-## Why the comparison is trustworthy even at one seed
+| mesh=1 | mesh=2 | mesh=4 | mesh=8 |
+|---|---|---|---|
+| **+11.1 ± 1.8** | +12.6 ± 3.7 | +6.9 ± 4.0 | +4.1 ± 3.1 |
 
-Rows differing only in protocol parameters ran over an **identical balloon
-field**. The protocol draws from an RNG stream independent of the world's
-(`MeshProtocol::reseed`), so changing `mesh`, `tower` or `ack` cannot perturb a
-single spawn position or altitude drift — there is a test asserting exactly
-that (`protocol_choice_does_not_perturb_the_balloon_field`).
+The digest is worth +11 points on its own and only +4 once mesh hops already
+carry 8 — by which point the effect is no longer clearly distinguishable from
+zero at this sample size. Symmetrically, batching is worth +24.8 ± 3.8 points
+under source-routed acks and +20.6 ± 5.7 under the digest.
 
-That makes *differences between these rows* clean. It does not make the
-*levels* general: this is one field, and the field is what the dominant
-variance comes from. A different seed will move all eight rows together.
+The reason is that **both levers spend the same currency**. Acks were not
+merely occupying airtime, they were *winning* it: `bundle.rs` deliberately
+gives a relayed ack priority over that balloon's own forwarding, since letting
+both ride one wake would double its per-slot throughput. So the digest frees
+wake slots, and batching makes each remaining slot carry more. Do either and
+the mesh moves more per unit airtime; do both and the second one finds less
+left to recover.
 
-## Confirming this
+Batching is the larger lever of the two at every density measured.
 
-[`aggregation_sweep`](../sim-server/src/bin/aggregation_sweep.rs) runs the same
-grid across many seeds and three densities:
+## The finding that isn't about throughput
+
+Share of *delivered* bundles whose receipt never got home — the band where a
+balloon cannot distinguish "never arrived" from "arrived, receipt died":
+
+| acks | mesh=1 | mesh=2 | mesh=4 | mesh=8 |
+|---|---|---|---|---|
+| source-routed | 35.1 ± 6.1 | 46.5 ± 5.8 | 53.5 ± 5.2 | **55.3 ± 5.1** |
+| digest | 0.0 ± 0.0 | 0.0 ± 0.0 | 0.0 ± 0.0 | 0.0 ± 0.0 |
+
+(n = 1200, tower_contact = 4.)
+
+Under source-routed acks, **batching makes the acknowledgement problem
+strictly worse**: more bundles land, so more receipts contend for the same
+slots, and the unacked share climbs from 35% to 55%. At mesh=8 a clear
+majority of successfully delivered telemetry leaves its origin believing it
+failed.
+
+The digest removes this by construction — no ack packet exists, so none can be
+lost — and the zeros carry no variance because it is not a measured effect but
+a structural one.
+
+For the project's central theme this matters more than the throughput
+numbers. The belief-vs-truth gap that motivates the whole simulator is usually
+shown as stale routes; here it is a balloon that *did* get its data home and
+has no way to know. Tuning for throughput alone would have widened that gap
+while making the delivery figures look better.
+
+## Density, and where the ground link still binds
+
+| n | best completion (digest, mesh=8), tower=4 | tower=1 |
+|---|---|---|
+| 600 | 34.7 ± 13.6 | 32.4 ± 12.6 |
+| 1200 | 94.4 ± 2.5 | 62.1 ± 8.1 |
+| 2000 | 96.2 ± 1.5 | — |
+
+At **n = 600** the mesh is below percolation and nothing helps: every
+configuration sits near 30%, and the ±13 spread says the answer is decided by
+which balloon field you drew, not by policy. Both levers are irrelevant when
+there is no connected path to spend airtime on.
+
+At **tower_contact = 1** the ground link is still the cap, and the levers are
+worth much less: the digest gains +5.0 ± 1.3 at n = 1200 rather than +11.1,
+and the best configuration reaches 62% against 94%. So the design doc's
+last-hop finding survives intact — **the ground link has to stop binding
+before mesh airtime becomes worth spending**, and that part of the provisional
+reading was right.
+
+Ceiling utilisation at tower_contact = 4 runs 19–31%, so the ground link is
+now far from saturated and the mesh is squarely the constraint again.
+
+## On method
+
+Comparisons here are **paired by seed**, and that is doing real work. The
+protocol draws from an RNG stream independent of the world's
+(`MeshProtocol::reseed`), so every configuration at a given seed runs over an
+*identical* balloon field — there is a test asserting exactly that
+(`protocol_choice_does_not_perturb_the_balloon_field`). Differences can
+therefore be taken per seed before averaging.
+
+The payoff is visible: the digest effect at n = 1200, mesh = 1 is **+11.1 ±
+1.8**, while the *levels* it is computed from carry ±6.8 and ±6.3. Comparing
+marginal means would have buried an 11-point effect inside a 7-point spread.
+
+The single-seed figures this file previously reported (seed 42) were
+systematically optimistic by 3–6 points at every configuration — directionally
+right on levels, wrong on the relationship between the levers.
+
+## Limitations
+
+- **Zero wind.** Topology is near-frozen. Real ERA5 wind churns links and
+  should hurt every row, plausibly not equally.
+- **`originate = 200` throughout.** Both levers raise capacity; none of this
+  says where the mesh breaks under heavier demand. With completion at 94% and
+  ceiling utilisation at 31%, raising demand is the obvious next experiment.
+- **Digest truncation untested at scale.** At `digest_entries = 16` and these
+  delivery rates the window is generous. A denser, faster-delivering field
+  could overflow it, at which point origins would learn late rather than never
+  — worth measuring before the parameter is trusted.
+- **n = 600 is uninformative** rather than negative: the error bars swamp
+  every effect. More seeds would help there specifically.
+
+## Reproducing
 
 ```bash
 cd sim-server
 RAYON_NUM_THREADS=3 nohup ./target/release/aggregation_sweep 24 800 \
   > /tmp/aggregation-sweep.log 2>&1 &
-```
-
-~4.5h on four cores. Rows append to
-`experiments/aggregation-sweep-results.csv` as they finish and are skipped on
-restart, so it can be interrupted, resumed, or extended with more seeds by
-re-running with a larger first argument.
-
-Then:
-
-```bash
 python3 experiments/summarize_aggregation.py experiments/aggregation-sweep-results.csv
 ```
 
-which prints the tables to paste in here. Its headline analysis is **paired**:
-because every configuration at a given seed sees the same field, differences
-are taken per seed before averaging, which cancels the between-field variance
-rather than averaging over it. Expect the paired effect estimates to be far
-tighter than the spread of the levels would suggest.
-
-**When that run lands, replace the Results section above** with the paired
-tables and drop this provisional banner.
-
-## Limitations
-
-- **Zero wind.** Topology is near-frozen, so bundles are not chasing a moving
-  target. Real ERA5 wind churns links and should hurt every row, plausibly not
-  equally.
-- **One density** in the tables above (n = 1200, degree ~6.3, above
-  percolation). The multi-seed run covers 600/1200/2000.
-- **`originate = 200` throughout.** Both levers raise capacity; none of this
-  says where the mesh breaks under heavier demand.
-- **Truncation of the digest is untested at scale.** At `digest_entries = 16`
-  and these delivery rates the window is generous. A denser field delivering
-  faster could overflow it, at which point origins would learn late rather than
-  never — worth measuring before the parameter is trusted.
+Rows append as they finish and are skipped on restart, so the run can be
+interrupted, resumed, or extended with more seeds by re-running with a larger
+first argument.
