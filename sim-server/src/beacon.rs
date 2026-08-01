@@ -19,6 +19,7 @@
 
 use crate::balloon::Balloon;
 use crate::config::*;
+use crate::dv_dtn::{DvNode, TowerBeacon};
 use crate::link_detection::{Edge, NodeKey};
 use crate::tower::Tower;
 use rand::Rng;
@@ -184,21 +185,26 @@ pub struct BeaconStepResult {
     pub hops: Vec<BeaconHop>,
 }
 
-/// Advance discovery by one round. `balloons` must be the visible slice — only
-/// visible balloons participate in link detection, so only they can hear or
-/// be heard. (A balloon hidden by the slider keeps its belief until it simply
-/// ages out, and rediscovers from scratch if it becomes visible again.)
+/// Advance discovery by one round. `nodes` and `balloons` must be the visible
+/// slices, index-aligned — only visible balloons participate in link
+/// detection, so only they can hear or be heard. (A balloon hidden by the
+/// slider keeps its belief until it simply ages out, and rediscovers from
+/// scratch if it becomes visible again.)
+///
+/// `balloons` is read-only: discovery reads identity, never physics state.
 pub fn step(
-    balloons: &mut [Balloon],
-    towers: &mut [Tower],
+    nodes: &mut [DvNode],
+    balloons: &[Balloon],
+    tower_state: &mut HashMap<u32, TowerBeacon>,
+    towers: &[Tower],
     adj: &MeshAdjacency,
     round: u64,
     rng: &mut impl Rng,
 ) -> BeaconStepResult {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
-    for b in balloons.iter_mut() {
-        if b.belief.is_some_and(|bel| bel.is_expired(round)) {
-            b.belief = None;
+    for n in nodes.iter_mut() {
+        if n.belief.is_some_and(|bel| bel.is_expired(round)) {
+            n.belief = None;
         }
     }
 
@@ -210,18 +216,20 @@ pub fn step(
     let mut offers: Vec<(usize, RouteBelief)> = Vec::new();
     let mut hops: Vec<BeaconHop> = Vec::new();
 
-    for (slot, t) in towers.iter_mut().enumerate() {
-        if round < t.next_beacon_round {
+    for (slot, t) in towers.iter().enumerate() {
+        let ts = tower_state.entry(t.id).or_default();
+        if round < ts.next_round {
             continue;
         }
-        t.next_beacon_round = next_slot(round, rng);
-        t.beacon_epoch += 1;
+        ts.next_round = next_slot(round, rng);
+        ts.epoch += 1;
+        let epoch = ts.epoch;
         for &b_id in adj.tower_adj.get(slot).into_iter().flatten() {
             let belief = RouteBelief {
                 tower_id: t.id,
                 hop_count: 1,
                 next_hop: None,
-                epoch: t.beacon_epoch,
+                epoch,
                 emitted_at_round: round,
             };
             hops.push(BeaconHop {
@@ -236,16 +244,16 @@ pub fn step(
     }
 
     let mut awake: Vec<usize> = Vec::new();
-    for i in 0..balloons.len() {
-        if round < balloons[i].next_beacon_round {
+    for i in 0..nodes.len() {
+        if round < nodes[i].next_beacon_round {
             continue;
         }
-        balloons[i].next_beacon_round = next_slot(round, rng);
+        nodes[i].next_beacon_round = next_slot(round, rng);
         awake.push(i);
         // A balloon with no belief has nothing to say. Silence is itself
         // information the neighbours never get — they can't tell "no route"
         // from "not transmitting".
-        let Some(belief) = balloons[i].belief else { continue };
+        let Some(belief) = nodes[i].belief else { continue };
         if belief.hop_count >= BEACON_MAX_HOPS {
             continue;
         }
@@ -271,15 +279,16 @@ pub fn step(
 
     // 3. Apply.
     for (idx, offer) in offers {
-        let Some(b) = balloons.get_mut(idx) else { continue };
-        if offer.next_hop == Some(b.id) {
+        let Some(id) = balloons.get(idx).map(|b| b.id) else { continue };
+        let Some(n) = nodes.get_mut(idx) else { continue };
+        if offer.next_hop == Some(id) {
             continue; // never learn a route to the ground from yourself
         }
         if offer.is_expired(round) {
             continue; // news too old to act on, whoever just repeated it
         }
-        if should_adopt(b.belief.as_ref(), &offer) {
-            b.belief = Some(offer);
+        if should_adopt(n.belief.as_ref(), &offer) {
+            n.belief = Some(offer);
         }
     }
 
@@ -307,22 +316,57 @@ mod tests {
         Edge { a: node_key(a), b: node_key(b) }
     }
 
+    /// Balloons plus their protocol state plus tower beacon schedules, which
+    /// now live in three places rather than one. Bundling them keeps each test
+    /// about discovery rather than about wiring.
+    struct Field {
+        balloons: Vec<Balloon>,
+        nodes: Vec<DvNode>,
+        towers: Vec<Tower>,
+        tower_state: HashMap<u32, TowerBeacon>,
+    }
+
+    impl Field {
+        fn new(n: u32, towers: Vec<Tower>) -> Self {
+            Field {
+                balloons: (0..n).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect(),
+                nodes: vec![DvNode::default(); n as usize],
+                tower_state: towers.iter().map(|t| (t.id, TowerBeacon::default())).collect(),
+                towers,
+            }
+        }
+
+        fn step(&mut self, adj: &MeshAdjacency, round: u64, rng: &mut impl Rng) {
+            super::step(
+                &mut self.nodes,
+                &self.balloons,
+                &mut self.tower_state,
+                &self.towers,
+                adj,
+                round,
+                rng,
+            );
+        }
+
+        fn belief(&self, i: usize) -> Option<RouteBelief> {
+            self.nodes[i].belief
+        }
+    }
+
     /// A chain t0 - b0 - b1 - b2 should light up one hop at a time, not all at
     /// once: the propagation delay is the whole point of the design.
     #[test]
     fn belief_propagates_outward_one_hop_at_a_time() {
-        let mut balloons: Vec<Balloon> =
-            (0..3).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect();
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(3, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2")], 3, &towers);
+        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2")], 3, &f.towers);
         let mut rng = StdRng::seed_from_u64(7);
 
         let mut first_seen = [None; 3];
         for round in 0..60u64 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
-            for (i, b) in balloons.iter().enumerate() {
-                if first_seen[i].is_none() && b.belief.is_some() {
+            f.step(&adj, round, &mut rng);
+            for i in 0..3 {
+                if first_seen[i].is_none() && f.belief(i).is_some() {
                     first_seen[i] = Some(round);
                 }
             }
@@ -330,28 +374,35 @@ mod tests {
 
         let t = first_seen.map(|x| x.expect("every balloon in the chain should learn a route"));
         assert!(t[0] < t[1] && t[1] < t[2], "beacon should reach nearer balloons first, got {t:?}");
-        assert_eq!(balloons[0].belief.unwrap().hop_count, 1);
-        assert_eq!(balloons[1].belief.unwrap().hop_count, 2);
-        assert_eq!(balloons[2].belief.unwrap().hop_count, 3);
+        assert_eq!(f.belief(0).unwrap().hop_count, 1);
+        assert_eq!(f.belief(1).unwrap().hop_count, 2);
+        assert_eq!(f.belief(2).unwrap().hop_count, 3);
         // Learned next-hop must point back the way the beacon came.
-        assert_eq!(balloons[0].belief.unwrap().next_hop, None);
-        assert_eq!(balloons[1].belief.unwrap().next_hop, Some(0));
-        assert_eq!(balloons[2].belief.unwrap().next_hop, Some(1));
+        assert_eq!(f.belief(0).unwrap().next_hop, None);
+        assert_eq!(f.belief(1).unwrap().next_hop, Some(0));
+        assert_eq!(f.belief(2).unwrap().next_hop, Some(1));
     }
 
     /// The tower's first hop should surface as a hop from the tower node
     /// itself, not from whatever balloon happens to relay it later.
     #[test]
     fn tower_origin_offer_produces_a_hop_from_the_tower() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0")], 1, &towers);
+        adj.rebuild(&[edge("t0", "b0")], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(7);
 
         let mut round = 0u64;
         loop {
-            let result = step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            let result = super::step(
+                &mut f.nodes,
+                &f.balloons,
+                &mut f.tower_state,
+                &f.towers,
+                &adj,
+                round,
+                &mut rng,
+            );
             if let Some(hop) = result.hops.iter().find(|h| h.to_balloon == 0) {
                 assert_eq!(hop.from, NodeKey::Tower(0));
                 assert_eq!(hop.hop_count, 1);
@@ -366,24 +417,23 @@ mod tests {
     /// and only then does the balloon consider itself ungrounded.
     #[test]
     fn belief_expires_after_link_is_cut() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0")], 1, &towers);
+        adj.rebuild(&[edge("t0", "b0")], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(11);
 
         let mut round = 0u64;
-        while round < 30 && balloons[0].belief.is_none() {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+        while round < 30 && f.belief(0).is_none() {
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
-        assert!(balloons[0].belief.is_some(), "should have learned a route");
+        assert!(f.belief(0).is_some(), "should have learned a route");
 
         // Sever every link, keep ticking.
-        adj.rebuild(&[], 1, &towers);
+        adj.rebuild(&[], 1, &f.towers);
         let cut_at = round;
-        while balloons[0].belief.is_some() {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+        while f.belief(0).is_some() {
+            f.step(&adj, round, &mut rng);
             round += 1;
             assert!(round - cut_at < 100, "belief should have expired by now");
         }
@@ -396,14 +446,13 @@ mod tests {
     /// route" have to look the same from inside.
     #[test]
     fn isolated_balloon_never_believes_it_is_grounded() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[], 1, &towers);
+        adj.rebuild(&[], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(3);
         for round in 0..200 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
-            assert!(balloons[0].belief.is_none());
+            f.step(&adj, round, &mut rng);
+            assert!(f.belief(0).is_none());
         }
     }
 
@@ -447,9 +496,7 @@ mod tests {
     #[test]
     fn beliefs_drain_completely_once_towers_are_unreachable() {
         let n = 12usize;
-        let mut balloons: Vec<Balloon> =
-            (0..n as u32).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect();
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(n as u32, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         // Tower feeds b0; the rest form a densely interconnected clump, which
         // is the structure that lets stale routes circulate.
         let mut edges = vec![edge("t0", "b0")];
@@ -459,27 +506,27 @@ mod tests {
             }
         }
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&edges, n, &towers);
+        adj.rebuild(&edges, n, &f.towers);
         let mut rng = StdRng::seed_from_u64(5);
 
         let mut round = 0u64;
         while round < 120 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
         assert!(
-            balloons.iter().all(|b| b.belief.is_some()),
+            (0..n).all(|i| f.belief(i).is_some()),
             "everything should be reachable while the tower is connected"
         );
 
         // Sever only the tower link; the balloon-to-balloon clump stays intact.
-        adj.rebuild(&edges[1..], n, &towers);
+        adj.rebuild(&edges[1..], n, &f.towers);
         let cut_at = round;
         while round < cut_at + 300 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
-        let survivors = balloons.iter().filter(|b| b.belief.is_some()).count();
+        let survivors = (0..n).filter(|&i| f.belief(i).is_some()).count();
         assert_eq!(survivors, 0, "{survivors} balloons kept a dead route alive");
     }
 }

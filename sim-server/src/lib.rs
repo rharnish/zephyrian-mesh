@@ -4,6 +4,7 @@ pub mod beacon;
 pub mod bundle;
 pub mod bundle_stats;
 pub mod config;
+pub mod dv_dtn;
 pub mod ablation;
 pub mod geo;
 pub mod link_detection;

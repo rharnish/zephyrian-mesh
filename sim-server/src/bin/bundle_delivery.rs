@@ -233,16 +233,13 @@ fn main() {
     for id in tower_ids {
         world.remove_tower(id);
     }
-    for b in world.balloons.iter_mut() {
-        b.next_bundle_round = u64::MAX; // no new bundles from here on
-    }
+    world.halt_origination(); // no new bundles from here on
     println!("at tower removal: {} in flight", {
         let s = advance_round(&mut world);
         s.bundles_in_flight
     });
 
-    let acks_in_flight =
-        |w: &World| -> u64 { w.balloons.iter().map(|b| b.ack_queue.len() as u64).sum() };
+    let acks_in_flight = |w: &World| -> u64 { w.protocol().acks_in_flight() };
 
     println!(
         "\n{:>7}  {:>10}  {:>10}  {:>9}  {:>9}",

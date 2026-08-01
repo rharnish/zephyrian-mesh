@@ -19,47 +19,13 @@ pub struct Balloon {
     pub alt: f64,
     #[serde(skip)]
     pub target_alt: f64,
-    /// This balloon's own belief about reaching a tower, learned only from
-    /// beacons that arrived (see beacon.rs). Not serialized — the client gets
-    /// the derived `believed_hops` instead.
-    #[serde(skip)]
-    pub belief: Option<crate::beacon::RouteBelief>,
-    /// Next comms round this balloon is awake to transmit (radio duty cycle).
-    #[serde(skip)]
-    pub next_beacon_round: u64,
-    /// Telemetry bundles this balloon is holding, oldest first (see bundle.rs).
-    /// Bounded by RELAY_QUEUE_CAPACITY, which bounds memory across the pool and
-    /// models a real store-and-forward buffer.
-    #[serde(skip)]
-    pub queue: std::collections::VecDeque<crate::bundle::Bundle>,
-    /// Acks in transit that this balloon is currently holding, source-routed
-    /// back along a bundle's recorded path. Bounded by ACK_QUEUE_CAPACITY.
-    #[serde(skip)]
-    pub ack_queue: std::collections::VecDeque<crate::bundle::Ack>,
-    /// Next comms round this balloon may originate a bundle.
-    #[serde(skip)]
-    pub next_bundle_round: u64,
-    /// Monotonic per-balloon sequence number for bundles it originates. Also
-    /// stamps the telemetry record created alongside each bundle — they are the
-    /// same event, so they share a sequence rather than keeping two counters
-    /// that could drift.
-    #[serde(skip)]
-    pub bundle_seq: u64,
-    /// Telemetry this balloon has measured and retained, oldest first — the
-    /// copy that *stays*, as against the copy inside each bundle that travels
-    /// (see telemetry.rs). Bounded by COMMS_LOG_CAPACITY. This is what C3's
-    /// hash chain will eventually sign.
-    #[serde(skip)]
-    pub log: std::collections::VecDeque<crate::telemetry::TelemetryRecord>,
-    /// This balloon's own view of its most recently originated bundle —
-    /// deliberately poorer than server truth. Flips to `Acked` only if a real
-    /// ack completes the full reverse path; flips to `TimedOut` if it doesn't,
-    /// whether the bundle never arrived, arrived and the ack died, or arrived
-    /// via satellite (which is silent to the origin). See bundle.rs.
-    #[serde(skip)]
-    pub outstanding: Option<crate::bundle::OutstandingBundle>,
     /// Hops to a tower as this balloon *believes*; `None` if it currently
     /// knows of no route. This is what the balloon would act on.
+    ///
+    /// Published here each tick from the comms protocol's own state (see
+    /// dv_dtn.rs) rather than stored here: the balloon is physics, and which
+    /// protocol is running decides whether a "believed hop count" even exists
+    /// as a concept.
     pub believed_hops: Option<u32>,
     /// Ground truth from union-find — whether it can *actually* reach a tower.
     /// Sent alongside `believed_hops` purely so the UI can show where the two
@@ -69,15 +35,9 @@ pub struct Balloon {
     /// through — server truth (§3 of the design doc), not the balloon's own
     /// view: satellite delivery is silent to the origin, so this is
     /// deliberately something the balloon itself could never know. `None`
-    /// until its first bundle resolves.
+    /// until its first bundle resolves. Published from the protocol each tick,
+    /// same as `believed_hops`.
     pub last_channel: Option<crate::bundle::Channel>,
-    /// A settled snapshot of `outstanding`, taken the moment it stops being
-    /// `Pending` — unlike `outstanding` itself, this is *not* clobbered by the
-    /// next origination, so the C4 animated-packet query always has a
-    /// complete round-trip to replay instead of flashing back to "Pending"
-    /// every time a new bundle starts. `None` until the first one resolves.
-    #[serde(skip)]
-    pub last_resolved: Option<crate::bundle::ResolvedBundle>,
 }
 
 impl Balloon {
@@ -88,18 +48,9 @@ impl Balloon {
             lat,
             alt,
             target_alt: alt,
-            belief: None,
-            next_beacon_round: 0,
-            queue: std::collections::VecDeque::new(),
-            ack_queue: std::collections::VecDeque::new(),
-            next_bundle_round: 0,
-            bundle_seq: 0,
-            log: std::collections::VecDeque::new(),
-            outstanding: None,
             believed_hops: None,
             grounded: false,
             last_channel: None,
-            last_resolved: None,
         }
     }
 
