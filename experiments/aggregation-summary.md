@@ -257,15 +257,74 @@ score that trade, and arguably should.
 So this is **not** "routing beats replication". It is spray-and-wait run in the
 regime it is worst suited to, at parameters that were not tuned (L=16 against a
 queue capacity of 8 is self-inflicted congestion). The honest claim is
-narrower, and the interesting follow-up is to churn the topology hard enough
-that dv-dtn's beliefs cannot keep up — which is where the ordering should
-invert, and which this simulator can stage by raising the wind or the
-retargeting rate.
+narrower, and the obvious follow-up was to churn the topology until dv-dtn's
+beliefs could not keep up, which is where the ordering should invert.
+
+### That follow-up ran, and the ordering did not invert
+
+Every table above is zero wind. Repeating the comparison on a real ERA5 field
+(1978-06-09T03:00, same seeds, same n, `--wind`) moves essentially nothing:
+
+| protocol | zero wind | real wind |
+|---|---|---|
+| dv-dtn (shipped) | 72.3 ± 7.7% | 72.9 ± 8.7% |
+| dv-dtn digest + mesh=4 | 95.0 ± 1.4% | 93.0 ± 3.6% |
+| dv-dtn reactive | 57.3 ± 5.0% | 53.4 ± 7.7% |
+| dv-dtn link-state | 52.4 ± 5.7% | 51.0 ± 6.3% |
+| spray-and-wait L=4 | 10.4 ± 1.2% | 10.8 ± 1.6% |
+| spray-and-wait L=16 | 23.5 ± 3.4% | 23.7 ± 4.6% |
+
+**The churn is real and it reached the protocol.** `link_churn` measures link
+turnover rising 4.1× (0.091% → 0.376% per round, half-life 757 → 184 rounds) at
+unchanged density, and dv-dtn's own counter agrees almost exactly:
+`stall_stale_next_hop` goes 50 → 212, a 4.3× rise. Believed depth grows 7.12 →
+7.47 and loop drops double. Routes are going stale four times as often, and
+completion does not move.
+
+**The reason is that store-carry-forward already absorbs exactly this.** A
+balloon whose next hop has gone does not drop the bundle — it keeps carrying it
+and forwards later, by a different route. `dropped_ttl` actually *falls*
+(2.25 → 1.50). Churn converts into delay, not loss.
+
+This also corrects a prediction made from these same measurements. Reading the
+churn figures, I first estimated path survival — a 7-hop path is in transit ~35
+rounds and all 7 links must hold — and got 80% → 40%, concluding delivery
+should roughly halve. It didn't move at all, because that model assumes a
+broken path means a lost bundle. **That is precisely the assumption
+store-carry-forward exists to violate.** Path survival is the right model for
+an end-to-end circuit; it is the wrong model for DTN.
+
+Which sharpens the coda's original point rather than overturning it.
+Replication cannot close the gap by being robust to churn, because the routed
+protocol here *is already* robust to churn — carrying a bundle is redundancy in
+time, and it substitutes for spray-and-wait's redundancy in space. The two
+approaches are not competing on this axis at all.
+
+What would still invert the ordering is churn fast enough that a bundle cannot
+be carried to a tower within its TTL at all. Real weather at these altitudes
+does not supply that: 4× turnover leaves link half-life at 184 rounds against a
+150-round bundle lifetime. It would take a synthetic mechanism, and the result
+would be about the mechanism rather than about the atmosphere.
 
 ## Limitations
 
-- **Zero wind.** Topology is near-frozen. Real ERA5 wind churns links and
-  should hurt every row, plausibly not equally.
+- **Zero wind for the main tables.** The protocol comparison has since been
+  repeated on a real ERA5 field (see the coda) and nothing moved, but the
+  aggregation sweep itself has not been re-run under wind. Given the digest and
+  batching levers act on airtime rather than on route validity, there is no
+  particular reason to expect wind to change them — but that is an argument,
+  not a measurement.
+- **One weather sample.** The coda's wind result rests on a single ERA5 time
+  step (1978-06-09T03:00, shear 7.3 ± 5.6 m/s across the balloon altitude
+  band), which is a mild field. The cache keys on time step precisely so that
+  wind can become a factor crossed with the seed, but the file currently on
+  disk holds only one step, so that awaits more data. A winter jet would churn
+  considerably harder.
+- **The wind comparison is 4 seeds and unpaired across wind conditions.**
+  Balloon positions diverge once wind is applied, so the two columns are not
+  paired the way the within-table comparisons are. The null result is safe at
+  this effect size — the counters independently confirm the churn arrived — but
+  a small effect would be invisible here.
 - **`originate = 200` throughout.** Both levers raise capacity; none of this
   says where the mesh breaks under heavier demand. With completion at 94% and
   ceiling utilisation at 31%, raising demand is the obvious next experiment.
@@ -295,6 +354,22 @@ RAYON_NUM_THREADS=3 nohup ./target/release/aggregation_sweep 24 800 \
   > /tmp/aggregation-sweep.log 2>&1 &
 python3 experiments/summarize_aggregation.py experiments/aggregation-sweep-results.csv
 ```
+
+For the coda's cross-protocol and wind rows — the wind cache has to be
+populated once, with `weather-data-server` running; after that it is read from
+disk and the Python side can be stopped:
+
+```bash
+cargo run --release --bin wind_cache -- steps        # what the .nc holds
+cargo run --release --bin wind_cache -- fetch        # cache the configured step
+cargo run --release --bin wind_cache -- list
+
+./target/release/link_churn 1978-06-09T03:00:00 1200 400        # is there churn?
+./target/release/protocol_compare --wind 1978-06-09T03:00:00 4 1200 400
+```
+
+`--wind none` is the default and means zero wind, so every command above
+reproduces the frozen-topology tables unchanged when the flag is omitted.
 
 Rows append as they finish and are skipped on restart, so the run can be
 interrupted, resumed, or extended with more seeds by re-running with a larger
