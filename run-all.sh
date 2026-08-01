@@ -23,27 +23,91 @@ Usage: ./run-all.sh [--local] [--protocol SPEC] [-h|--help]
              other change is needed. Also opens 5173/8000/8080 in ufw
              (asking for sudo) and closes them again on exit.
   --protocol SPEC
-             Which comms protocol sim-server runs. SPEC is a protocol name,
-             optionally followed by ':' and comma-separated overrides. The
-             frontend adapts on its own — it reads the protocol's declared
-             capabilities from each snapshot and hides anything that protocol
-             has no concept of. Ignored if sim-server is already running.
-
-               dv-dtn                          the shipped default
-               dv-dtn:ack=digest               receipts ride tower beacons
-               dv-dtn:ack=digest,mesh=4        ...and mesh hops carry 4
-               dv-dtn:metric=nearest           hop count over freshness
-               dv-dtn:queue=lifo               newest held bundle first
-
-             Keys: metric=freshest|nearest, queue=fifo|lifo,
-                   ack=source-routed|digest, mesh=N, tower=N,
-                   digest_entries=N, originate=N
+             Which comms protocol sim-server runs — see PROTOCOLS below.
+             Defaults to "dv-dtn" (the shipped configuration). Ignored if
+             sim-server is already running on :8080.
   -h, --help Show this help and exit.
+
+PROTOCOLS
+
+  A "protocol" here is the whole answer to two questions: how does a balloon
+  find out it can reach the ground, and how does data actually get there. The
+  simulator owns physics, radio range and ground truth; the protocol owns
+  everything else, including its own per-balloon state.
+
+  The frontend needs no flag of its own. Each snapshot carries what the
+  running protocol can express, and the UI hides anything it has no concept of
+  — so a protocol without route beliefs simply shows no belief overlay rather
+  than showing one full of meaningless values.
+
+  SPEC is a protocol name, optionally followed by ':' and comma-separated
+  key=value overrides. An unknown name or key is an error, not a fallback.
+
+  dv-dtn   (the default, and currently the only one)
+           Distance-vector discovery feeding store-and-forward delivery.
+           Towers periodically flood hop-counted beacons; a balloon that hears
+           one records a route belief and passes it on one hop further on its
+           own duty-cycle slot. Telemetry bundles are then carried hop by hop
+           along whatever next hop the holder currently *believes* in — which
+           may be stale, and may be wrong. Nothing consults the true topology
+           on a balloon's behalf; that is the point of the exercise.
+
+  Overrides, and what they are for:
+
+    ack=source-routed|digest      (default source-routed)
+        How a delivery is acknowledged. source-routed sends a receipt back
+        along the bundle's recorded path, one hop per wake slot, competing
+        with ordinary forwarding for those slots. digest instead has towers
+        announce recent deliveries inside beacons they were already sending,
+        so the receipt costs no extra transmissions at all.
+        Measured (single seed, n=1200): completion 66% -> 80%, and ack loss
+        to zero by construction.
+
+    mesh=N                        (default 1)
+        Bundles carried per balloon-to-balloon hop. 1 treats a wake as one
+        transmission. Raising it asks whether the mesh is limited by airtime
+        or by opportunity. Measured: with ack=digest, mesh=4 reaches ~96%
+        completion, against 66% for the shipped defaults.
+
+    tower=N                       (default 4)
+        Bundles handed over per tower contact. The measured last-hop lever:
+        only ~23 of 1200 balloons can hear a tower at once, so this sets the
+        ceiling everything else runs into. Set to 1 to reproduce the older
+        one-bundle-per-contact behaviour.
+
+    metric=freshest|nearest       (default freshest)
+        Which route wins when two compete. freshest takes the newer wave
+        however long its path; nearest prefers fewer hops. nearest helps
+        below the percolation threshold and hurts above it, which is where
+        the mesh usually sits.
+
+    queue=fifo|lifo               (default fifo)
+        Which held bundle moves when a slot comes up. lifo serves the newest
+        first, so what moves still has budget left — at the cost of starving
+        the bottom of the queue.
+
+    originate=N                   (default 200)
+        Rounds between a balloon originating telemetry. The demand knob.
+
+    digest_entries=N              (default 16)
+        With ack=digest, how many deliveries a tower announces per beacon.
+
+  Examples:
+
+    ./run-all.sh --protocol dv-dtn:ack=digest
+    ./run-all.sh --protocol dv-dtn:ack=digest,mesh=4
+    ./run-all.sh --protocol dv-dtn:metric=nearest,queue=lifo
 EOF
 }
 
 MODE="dev"
-PROTOCOL=""
+# Explicit rather than empty, so a bare ./run-all.sh still prints what it is
+# running. This is the *shipped* configuration, deliberately: the digest and
+# batching variants measure better (see --help) but only at a single seed so
+# far, and the default should be the honest baseline until that is confirmed
+# across seeds. It is also the more interesting thing to watch — belief drift
+# and satellite fallback are both plainly visible at these settings.
+PROTOCOL="dv-dtn"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local) MODE="local"; shift ;;
@@ -61,7 +125,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 echo "Mode: $MODE"
-[[ -n "$PROTOCOL" ]] && echo "Protocol: $PROTOCOL"
+echo "Protocol: $PROTOCOL"
 
 LAN_PORTS=(5173 8000 8080)
 
@@ -130,7 +194,7 @@ fi
 # --- 2. sim-server (port 8080) ---------------------------------------------
 if port_open 8080; then
   echo "Something is already listening on :8080 — assuming sim-server is up, skipping."
-  [[ -n "$PROTOCOL" ]] && echo "  NOTE: --protocol has no effect on an already-running sim-server." >&2
+  echo "  NOTE: --protocol has no effect on an already-running sim-server." >&2
 else
   echo "Starting sim-server (building first if needed — can take a minute)..."
   (
@@ -143,6 +207,14 @@ else
 fi
 
 # --- 3. frontend (port 5173, foreground) -----------------------------------
+# Unlike the other two, a busy :5173 is not something to skip past: Vite would
+# quietly bind 5174 instead, and you would end up looking at a second frontend
+# while assuming it was this one.
+if port_open 5173; then
+  echo "Something is already listening on :5173 — stop it first, or open that one." >&2
+  echo "  (it will serve this same source; only sim-server's protocol differs)" >&2
+  exit 1
+fi
 echo "Starting frontend — press Ctrl-C to stop everything."
 if [[ "$MODE" == "local" ]]; then
   npm run dev -- --host
