@@ -237,7 +237,7 @@ export class ControlPanel {
       <!-- Belief vs. truth. Balloons only know what beacons told them, so
            their belief lags reality (stale) or trails behind it (unaware).
            See docs/design/MESH_COMMS_DESIGN.md §1. -->
-      <div style="${SECTION}">
+      <div id="beliefSection" style="${SECTION}">
         <div style="${CHECKBOX_ROW}">
           <input id="beliefOverlayToggle" type="checkbox" />
           <label for="beliefOverlayToggle" style="flex:1;">Belief overlay</label>
@@ -345,7 +345,12 @@ export class ControlPanel {
     this.meshDegreeBar = $('#meshDegreeBar');
     this.meshGroundedValue = $('#meshGroundedValue');
     this.viewLagValue = $('#viewLagValue');
+    this.beliefSection = $('#beliefSection');
+    this.beliefToggleEl = $('#beliefOverlayToggle');
     this.beliefValues = valueRefs(panel, BELIEF_KEYS, 'belief');
+    // Until a snapshot says otherwise, assume the protocol has beliefs — the
+    // shipped one does, and this only ever hides things.
+    this.caps = null;
     this.deliveryValues = valueRefs(panel, DELIVERY_KEYS, 'delivery');
 
     // --- overlays ---
@@ -417,6 +422,25 @@ export class ControlPanel {
 
   // `onHorizonEcho` fires when another tab's horizon change arrives, since the
   // tower range circles have to be rebuilt for it.
+  // Hide controls whose underlying concept the running protocol doesn't have.
+  // A belief overlay reading "unaware" for every balloon because the protocol
+  // has no beliefs is worse than showing nothing: it looks like a measurement
+  // rather than a category error.
+  applyCapabilities(caps) {
+    this.caps = caps;
+    if (!caps.routeBelief) {
+      // Turn it off before hiding, or the tint persists with no way to clear.
+      if (this.beliefToggleEl.checked) {
+        this.beliefToggleEl.checked = false;
+        this.beliefToggleEl.dispatchEvent(new Event('change'));
+      }
+      this.beliefSection.style.display = 'none';
+      for (const key of BELIEF_KEYS) this.beliefValues[key].textContent = '—';
+    } else {
+      this.beliefSection.style.display = '';
+    }
+  }
+
   syncFromSnapshot(snapshot, onHorizonEcho) {
     if (typeof snapshot.paused === 'boolean' && snapshot.paused !== this.paused) {
       this.paused = snapshot.paused;
@@ -497,6 +521,7 @@ export class ControlPanel {
         : BELIEF_CSS.ok;
     }
 
+    if (this.caps && !this.caps.routeBelief) return;
     if (typeof snapshot.believedGroundedPct !== 'number') return;
     // "believes and is right" is everything that believes, minus those whose
     // belief is stale; the remainder with no belief splits into unaware (a

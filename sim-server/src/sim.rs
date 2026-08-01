@@ -87,16 +87,27 @@ pub struct EdgeSnapshot {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-/// One beacon transmission, for the frontend's beacon-wavefront animation
-/// (docs/design/MESH_COMMS_DESIGN.md §3). `from`/`to` are wire node keys —
-/// same format and same `NodeKey` `Display` impl edges already use — so the
-/// frontend's existing `parseNodeKey`/position-lookup needs no changes.
-pub struct BeaconHopWire {
+/// One transmission that happened this comms round, for the frontend's
+/// wavefront animation (docs/design/MESH_COMMS_DESIGN.md §3).
+///
+/// `from`/`to` are wire node keys — same format and same `NodeKey` `Display`
+/// impl edges already use — so the frontend resolves endpoints with the
+/// `parseNodeKey`/position lookup it already has.
+///
+/// Deliberately not beacon-specific: `kind` says what sort of transmission it
+/// was, so a protocol whose discovery is a request/reply flood rather than a
+/// periodic advert animates through the same path with no frontend change.
+pub struct CommsEventWire {
+    pub kind: crate::protocol::EventKind,
     pub from: String,
     pub to: String,
-    pub tower_id: u32,
-    pub hop_count: u32,
-    pub epoch: u64,
+    /// Records riding this one transmission — 1 today, higher once batching
+    /// lands, so a batched hop can draw as one heavier mark than N identical.
+    pub payload: u32,
+    /// `None` under protocols with no tower-rooted routing.
+    pub tower_id: Option<u32>,
+    pub hop_count: Option<u32>,
+    pub epoch: Option<u64>,
 }
 
 /// Derives the protocol's RNG seed from the world's. Any fixed bijection
@@ -138,12 +149,16 @@ pub struct Snapshot {
     /// `None` on ticks where links weren't recomputed (still throttled the
     /// same way main.js throttles it) — client keeps the last edge set.
     pub edges: Option<Vec<EdgeSnapshot>>,
-    /// Beacon transmissions from this comms round, across all towers.
-    /// `None`/omitted when none fired. Broadcast unfiltered to every client,
-    /// same as `edges` — picking which tower to animate is a client-side
-    /// concern (see BeaconLayer in the frontend), not server-side selection
-    /// state, so multiple tabs can watch different towers independently.
-    pub beacon_hops: Option<Vec<BeaconHopWire>>,
+    /// Transmissions from this comms round. `None`/omitted when none
+    /// happened. Broadcast unfiltered to every client, same as `edges` —
+    /// picking which tower to animate is a client-side concern (see
+    /// CommsLayer in the frontend), not server-side selection state, so
+    /// multiple tabs can watch different towers independently.
+    pub comms_events: Option<Vec<CommsEventWire>>,
+    /// What the running protocol can express, so the client can hide UI whose
+    /// underlying concept doesn't exist. Static per protocol, but carried on
+    /// every snapshot so a late-joining client needs no second request.
+    pub capabilities: &'static crate::protocol::Capabilities,
     /// Broadcast so every connected tab's slider stays in sync with
     /// whichever tab last changed it (server is the source of truth).
     pub horizon_refraction_coeff: f64,
@@ -364,7 +379,8 @@ impl World {
                 balloons: visible.to_vec(),
                 towers: self.towers.clone(),
                 edges: None,
-                beacon_hops: None,
+                comms_events: None,
+                capabilities: self.protocol.capabilities(),
                 horizon_refraction_coeff: self.horizon_refraction_coeff,
                 paused: true,
                 mean_degree: self.mean_degree,
@@ -468,7 +484,7 @@ impl World {
         // clock (see config::COMMS_EVERY_N_TICKS). Beacon slots are per-node
         // and jittered, so they don't align with the link-recompute cadence.
         // Only visible balloons take part, since only they have edges.
-        let mut beacon_hops: Option<Vec<BeaconHopWire>> = None;
+        let mut comms_events: Option<Vec<CommsEventWire>> = None;
         if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
             let round = self.tick_count / COMMS_EVERY_N_TICKS;
             // Beacons first, so a bundle forwarded this round uses the freshest
@@ -481,15 +497,17 @@ impl World {
                 adj: &self.adjacency,
             });
             if !events.is_empty() {
-                beacon_hops = Some(
+                comms_events = Some(
                     events
                         .iter()
-                        .map(|e| BeaconHopWire {
+                        .map(|e| CommsEventWire {
+                            kind: e.kind,
                             from: e.from.to_string(),
                             to: e.to.to_string(),
-                            tower_id: e.tower_id.unwrap_or(0),
-                            hop_count: e.hop_count.unwrap_or(0),
-                            epoch: e.epoch.unwrap_or(0),
+                            payload: e.payload,
+                            tower_id: e.tower_id,
+                            hop_count: e.hop_count,
+                            epoch: e.epoch,
                         })
                         .collect(),
                 );
@@ -529,7 +547,8 @@ impl World {
             balloons: self.balloons[..self.visible_count].to_vec(),
             towers: self.towers.clone(),
             edges,
-            beacon_hops,
+            comms_events,
+            capabilities: self.protocol.capabilities(),
             horizon_refraction_coeff: self.horizon_refraction_coeff,
             paused: false,
             mean_degree: self.mean_degree,

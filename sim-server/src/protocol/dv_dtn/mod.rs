@@ -21,7 +21,7 @@ pub mod bundle_stats;
 pub mod params;
 
 use crate::protocol::{
-    CommsEvent, EventKind, LastBundleView, MeshProtocol, NodeCommsView, StepCtx,
+    Capabilities, CommsEvent, EventKind, LastBundleView, MeshProtocol, NodeCommsView, StepCtx,
 };
 use crate::telemetry::TelemetryRecord;
 use beacon::RouteBelief;
@@ -78,6 +78,18 @@ pub struct TowerBeacon {
     pub next_round: u64,
 }
 
+/// Everything this protocol can express — all of it, as it happens, since the
+/// UI was built against this protocol in the first place.
+static CAPABILITIES: Capabilities = Capabilities {
+    name: "dv-dtn",
+    label: "Distance-vector + store-and-forward",
+    route_belief: true,
+    next_hop_paths: true,
+    acks: true,
+    satellite_fallback: true,
+    event_kinds: &[EventKind::RouteAd],
+};
+
 pub struct DvDtn {
     pub params: DvDtnParams,
     /// The protocol's own randomness — duty-cycle phases and slot jitter.
@@ -121,6 +133,10 @@ impl DvDtn {
 impl MeshProtocol for DvDtn {
     fn spec_name(&self) -> &'static str {
         "dv-dtn"
+    }
+
+    fn capabilities(&self) -> &'static Capabilities {
+        &CAPABILITIES
     }
 
     fn reseed(&mut self, seed: u64) {

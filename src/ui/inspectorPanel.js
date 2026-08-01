@@ -61,6 +61,9 @@ export class InspectorPanel {
   // currently selected balloon.
   constructor({ onClose, onReplay }) {
     this.comms = null; // last-fetched GET /api/balloons/:id/comms response
+    // What the running protocol can express. Null until the first snapshot;
+    // treated as "everything" until then, since this only ever hides rows.
+    this.caps = null;
 
     this.panel = document.createElement('div');
     this.panel.style.cssText = `
@@ -119,6 +122,12 @@ export class InspectorPanel {
   `;
     document.body.appendChild(this.logPanel);
     this.logTableBody = this.logPanel.querySelector('#commsLogTableBody');
+  }
+
+  // See ControlPanel.applyCapabilities — same reasoning, applied to the rows
+  // of this panel rather than to the overlay toggles.
+  applyCapabilities(caps) {
+    this.caps = caps;
   }
 
   show(id) {
@@ -186,24 +195,36 @@ export class InspectorPanel {
     }
     // Deliberately shows the balloon's belief and the truth as two separate
     // rows: the balloon acts on the former and has no access to the latter.
+    const hasBelief = !this.caps || this.caps.routeBelief;
     const key = beliefKey(b);
     const beliefText =
       b.believedHops === null || b.believedHops === undefined
         ? 'no route known'
         : `${b.believedHops} hop${b.believedHops === 1 ? '' : 's'} to a tower`;
+    // Under a protocol with no route belief these three rows have no referent
+    // — "Believes: no route known" would read as a finding rather than as an
+    // absent concept. Ground truth stays: it is the simulator's, not the
+    // protocol's.
+    const beliefRows = hasBelief
+      ? `<div style="${ROW} margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
+      ${row('Actually grounded', b.grounded ? 'yes' : 'no')}
+      ${row('Verdict', BELIEF_VERDICT[key], BELIEF_CSS[key])}`
+      : row('Actually grounded', b.grounded ? 'yes' : 'no');
     const dKey = deliveryKey(b);
     this.body.innerHTML = `
       ${row('Latitude', fmtLat(b.lat))}
       ${row('Longitude', fmtLon(b.lon))}
       ${row('Altitude', `${(b.alt / 1000).toFixed(2)} km`)}
-      <div style="${ROW} margin-top:6px;"><span>Believes</span><span>${beliefText}</span></div>
-      ${row('Actually grounded', b.grounded ? 'yes' : 'no')}
-      ${row('Verdict', BELIEF_VERDICT[key], BELIEF_CSS[key])}
+      ${beliefRows}
       ${row('Last delivered via', DELIVERY_LEGEND[dKey], DELIVERY_CSS[dKey] ?? MUTED_CSS)}
       <div style="border-top: 1px solid rgba(255,255,255,0.2); margin-top:8px; padding-top:6px;">
         <div style="${ROW} align-items:center; margin-bottom:2px;">
           <span style="font-weight:bold;">Last bundle</span>
-          <button id="commsReplayBtn" title="Replay the animation" style="font-size:11px; padding:1px 6px; cursor:pointer;">&#8635; Replay</button>
+          ${
+            !this.caps || this.caps.nextHopPaths
+              ? `<button id="commsReplayBtn" title="Replay the animation" style="font-size:11px; padding:1px 6px; cursor:pointer;">&#8635; Replay</button>`
+              : ''
+          }
         </div>
         ${this._commsSummaryHtml()}
       </div>

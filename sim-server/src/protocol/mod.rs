@@ -79,6 +79,38 @@ pub struct CommsEvent {
     pub epoch: Option<u64>,
 }
 
+/// What a protocol can and cannot express, so the frontend can hide UI that
+/// would otherwise show meaningless values rather than no values.
+///
+/// This exists because the interesting protocols genuinely disagree about
+/// which concepts exist. Epidemic has no route belief, so a belief-vs-truth
+/// overlay under it is not "empty" — it is a category error. Declaring
+/// capabilities lets the UI say nothing rather than say something false.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    /// Stable identifier, matching `ProtocolSpec`'s parse name.
+    pub name: &'static str,
+    /// Human-readable, for the controls panel.
+    pub label: &'static str,
+    /// Nodes hold a believed route with a hop count. Gates the belief overlay,
+    /// the belief/truth mesh-health readouts, and the inspector's
+    /// Believes/Verdict rows.
+    pub route_belief: bool,
+    /// A delivered payload has one recorded path that can be replayed hop by
+    /// hop. False for anything replication-based, where "the path" isn't a
+    /// single thing.
+    pub next_hop_paths: bool,
+    /// Receipts travel back to the origin, so "delivered but unacknowledged"
+    /// is a state that can exist.
+    pub acks: bool,
+    /// Payloads that age out leave via satellite rather than being dropped.
+    pub satellite_fallback: bool,
+    /// Which event kinds this protocol actually emits, so the animation
+    /// legend can list only what will appear.
+    pub event_kinds: &'static [EventKind],
+}
+
 /// The protocol's published per-node view, copied onto the wire each tick.
 /// Deliberately small: anything richer is answered on demand per balloon.
 #[derive(Debug, Clone, Copy, Default)]
@@ -100,6 +132,8 @@ pub type LastBundleView = crate::sim::LastBundleView;
 pub trait MeshProtocol: Send {
     /// Stable identifier, for logs and sweep output.
     fn spec_name(&self) -> &'static str;
+    /// What this protocol can express — see `Capabilities`.
+    fn capabilities(&self) -> &'static Capabilities;
 
     // --- Lifecycle ----------------------------------------------------------
     /// Pin the protocol's own randomness. Deliberately a *separate* stream
