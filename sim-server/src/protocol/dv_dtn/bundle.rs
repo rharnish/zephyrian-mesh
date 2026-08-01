@@ -24,7 +24,7 @@
 //     makes this delay-tolerant rather than merely lossy. The same applies to a
 //     receiver whose queue is full.
 //
-// Each balloon holds a bounded FIFO queue (RELAY_QUEUE_CAPACITY) and transmits
+// Each balloon holds a bounded FIFO queue (params.relay_queue_capacity) and transmits
 // the head of it once per duty-cycle slot. The queue is separate from the
 // one-outstanding rule on origination: capping *carriage* at one meant a balloon
 // holding its own bundle could not relay anyone else's, which gridlocked the
@@ -37,7 +37,7 @@
 //     "instantaneous" convention tower delivery itself already uses) and then
 //     hop by hop back to the origin, one balloon at a time.
 //   * **Satellite fallback** in place of the old silent expiry: a bundle that
-//     ages past BUNDLE_MAX_AGE_ROUNDS wherever it currently sits is handed to
+//     ages past params.bundle_max_age_rounds wherever it currently sits is handed to
 //     satellite instead of dropped.
 //
 // Acks are not a free side channel. A relay's wake slot is one transmission,
@@ -45,7 +45,7 @@
 // balloon's own bundle-forwarding this slot — letting both ride the same wake
 // would quietly double a balloon's per-slot throughput and undermine the
 // scarce-slot model the last-hop saturation findings depend on. Tower
-// contacts are unaffected: draining TOWER_CONTACT_BUNDLES already runs on a
+// contacts are unaffected: draining params.tower_contact_bundles already runs on a
 // separate, higher-capacity link, which is why it's allowed to break the
 // one-per-slot rule in the first place.
 //
@@ -58,7 +58,7 @@
 use crate::balloon::Balloon;
 use crate::mesh_adjacency::MeshAdjacency;
 use super::bundle_stats::bump;
-use crate::config::*;
+use super::params::{DvDtnParams, QueueDiscipline};
 use super::DvNode;
 
 pub use super::bundle_stats::{hist_mean, BundleStats};
@@ -93,7 +93,7 @@ impl Bundle {
 /// A tower's receipt for one bundle, source-routed back along that bundle's
 /// recorded path, reversed. Carries the *bundle's* `created_at_round`, not its
 /// own — a round trip has to complete inside the same age budget as the
-/// one-way bundle timeout (see BUNDLE_MAX_AGE_ROUNDS), not a separate one.
+/// one-way bundle timeout (see params.bundle_max_age_rounds), not a separate one.
 #[derive(Debug, Clone)]
 pub struct Ack {
     pub origin_id: u32,
@@ -219,6 +219,23 @@ fn record_dead_end(nodes: &mut [DvNode], origin_id: u32, seq: u64, path: Vec<u32
     }
 }
 
+/// Which held bundle moves this slot. FIFO takes the oldest, LIFO the newest;
+/// both must agree between the peek in phase 3 and the take in phase 4, or a
+/// balloon would inspect one bundle and send another.
+fn peek(q: &std::collections::VecDeque<Bundle>, d: QueueDiscipline) -> Option<&Bundle> {
+    match d {
+        QueueDiscipline::Fifo => q.front(),
+        QueueDiscipline::Lifo => q.back(),
+    }
+}
+
+fn take(q: &mut std::collections::VecDeque<Bundle>, d: QueueDiscipline) -> Option<Bundle> {
+    match d {
+        QueueDiscipline::Fifo => q.pop_front(),
+        QueueDiscipline::Lifo => q.pop_back(),
+    }
+}
+
 /// Advance bundles by one comms round.
 ///
 /// `awake` is the set of balloon indices that transmitted this round, taken
@@ -232,6 +249,7 @@ pub fn step(
     nodes: &mut [DvNode],
     balloons: &[Balloon],
     adj: &MeshAdjacency,
+    params: &DvDtnParams,
     awake: &[usize],
     round: u64,
     stats: &mut BundleStats,
@@ -242,12 +260,12 @@ pub fn step(
     for b in nodes.iter_mut() {
         let before = b.queue.len();
         for bd in b.queue.iter() {
-            if bd.age(round) > BUNDLE_MAX_AGE_ROUNDS {
+            if bd.age(round) > params.bundle_max_age_rounds {
                 bump(&mut stats.satellite_hops, bd.hops());
                 satellite_origins.push((bd.origin_id, bd.seq, bd.path.clone()));
             }
         }
-        b.queue.retain(|bd| bd.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
+        b.queue.retain(|bd| bd.age(round) <= params.bundle_max_age_rounds);
         stats.satellite += (before - b.queue.len()) as u64;
     }
     for (origin_id, seq, path) in satellite_origins {
@@ -269,11 +287,11 @@ pub fn step(
     for b in nodes.iter_mut() {
         let before = b.ack_queue.len();
         for a in b.ack_queue.iter() {
-            if a.age(round) > BUNDLE_MAX_AGE_ROUNDS {
+            if a.age(round) > params.bundle_max_age_rounds {
                 ack_died.push((a.origin_id, a.seq, a.total_hops - a.remaining.len() as u32));
             }
         }
-        b.ack_queue.retain(|a| a.age(round) <= BUNDLE_MAX_AGE_ROUNDS);
+        b.ack_queue.retain(|a| a.age(round) <= params.bundle_max_age_rounds);
         stats.ack_lost += (before - b.ack_queue.len()) as u64;
     }
     for (origin_id, seq, hops) in ack_died {
@@ -291,7 +309,7 @@ pub fn step(
     //     those are distinguishable from inside.
     for b in nodes.iter_mut() {
         if let Some(o) = b.outstanding.as_mut() {
-            if o.state == AckState::Pending && round.saturating_sub(o.created_at_round) > BUNDLE_MAX_AGE_ROUNDS
+            if o.state == AckState::Pending && round.saturating_sub(o.created_at_round) > params.bundle_max_age_rounds
             {
                 o.state = AckState::TimedOut;
                 snapshot_resolved(b);
@@ -310,7 +328,7 @@ pub fn step(
     //    an ack ride alongside a bundle-forward would quietly double a
     //    balloon's per-slot throughput there. This does NOT compete with tower
     //    draining below — the tower link is a separate, higher-capacity
-    //    channel (same reason TOWER_CONTACT_BUNDLES already breaks the
+    //    channel (same reason params.tower_contact_bundles already breaks the
     //    one-per-slot rule), and a tower-adjacent balloon's belief never
     //    points at a mesh peer anyway (hop_count == 1, next_hop == None), so it
     //    was never a candidate for the bundle-forward branch this contends
@@ -340,7 +358,7 @@ pub fn step(
     for (to, ack) in ack_moves {
         let to_idx = to as usize;
         let has_room =
-            nodes.get(to_idx).is_some_and(|b| b.ack_queue.len() < ACK_QUEUE_CAPACITY);
+            nodes.get(to_idx).is_some_and(|b| b.ack_queue.len() < params.ack_queue_capacity);
         if has_room {
             nodes[to_idx].ack_queue.push_back(ack);
         } else {
@@ -382,7 +400,7 @@ pub fn step(
         if let Some(bel) = nodes[i].belief {
             bump(&mut stats.belief_hops, bel.hop_count as usize);
         }
-        let Some(bundle) = nodes[i].queue.front() else { continue };
+        let Some(bundle) = peek(&nodes[i].queue, params.queue_discipline) else { continue };
 
         // A balloon with no belief has nowhere to send it. Hold.
         let Some(belief) = nodes[i].belief else {
@@ -397,14 +415,15 @@ pub fn step(
             None => {
                 stats.slots_with_bundle += 1;
                 if let Some(tower_id) = adj.tower_in_range(i) {
-                    // A tower contact drains up to TOWER_CONTACT_BUNDLES, not
+                    // A tower contact drains up to params.tower_contact_bundles, not
                     // one. The one-per-slot rule rations *beacon* airtime; a
                     // point-to-point link to a ground station is a different
                     // event, and this is the only lever that acts on the last
                     // hop, which is where the throughput limit actually lives.
-                    let n = TOWER_CONTACT_BUNDLES.min(nodes[i].queue.len());
+                    let n = params.tower_contact_bundles.min(nodes[i].queue.len());
                     for _ in 0..n {
-                        let bd = nodes[i].queue.pop_front().expect("checked non-empty");
+                        let bd = take(&mut nodes[i].queue, params.queue_discipline)
+                            .expect("checked non-empty");
                         bump(&mut stats.delivered_hops, bd.hops());
                         stats.delivered += 1;
                         if let Some(o) = nodes.get_mut(bd.origin_id as usize) {
@@ -442,7 +461,7 @@ pub fn step(
                                 remaining: reversed,
                                 total_hops,
                             };
-                            if nodes[i].ack_queue.len() < ACK_QUEUE_CAPACITY {
+                            if nodes[i].ack_queue.len() < params.ack_queue_capacity {
                                 nodes[i].ack_queue.push_back(ack);
                             } else {
                                 stats.ack_lost += 1;
@@ -477,14 +496,14 @@ pub fn step(
                 }
                 if bundle.path.contains(&next) {
                     let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
-                    nodes[i].queue.pop_front();
+                    take(&mut nodes[i].queue, params.queue_discipline);
                     stats.dropped_loop += 1;
                     record_dead_end(nodes, origin_id, seq, path);
                     continue;
                 }
-                if bundle.path.len() >= BUNDLE_MAX_HOPS {
+                if bundle.path.len() >= params.bundle_max_hops {
                     let (origin_id, seq, path) = (bundle.origin_id, bundle.seq, bundle.path.clone());
-                    nodes[i].queue.pop_front();
+                    take(&mut nodes[i].queue, params.queue_discipline);
                     stats.dropped_ttl += 1;
                     record_dead_end(nodes, origin_id, seq, path);
                     continue;
@@ -500,15 +519,16 @@ pub fn step(
     //    majority of traffic the moment the mesh is busy, which is what the
     //    first run of bundle_delivery.rs showed: 18270 of 21634 bundles
     //    destroyed by congestion alone.
+    let discipline = params.queue_discipline;
     for (from, to) in moves {
         let to_idx = to as usize;
         let has_room =
-            nodes.get(to_idx).is_some_and(|r| r.queue.len() < RELAY_QUEUE_CAPACITY);
+            nodes.get(to_idx).is_some_and(|r| r.queue.len() < params.relay_queue_capacity);
         if !has_room {
             stats.blocked += 1;
             continue;
         }
-        let Some(mut bundle) = nodes[from].queue.pop_front() else { continue };
+        let Some(mut bundle) = take(&mut nodes[from].queue, discipline) else { continue };
         bundle.path.push(to);
         nodes[to_idx].queue.push_back(bundle);
     }
@@ -519,7 +539,7 @@ pub fn step(
     for &i in awake {
         let id = balloons[i].id;
         let b = &mut nodes[i];
-        if round < b.next_bundle_round || b.queue.len() >= RELAY_QUEUE_CAPACITY {
+        if round < b.next_bundle_round || b.queue.len() >= params.relay_queue_capacity {
             continue;
         }
         if b.queue.iter().any(|bd| bd.origin_id == id) {
@@ -530,7 +550,7 @@ pub fn step(
         // is passed explicitly now that it lives on the protocol node rather
         // than on the balloon being sampled.
         let record = crate::telemetry::TelemetryRecord::sample(&balloons[i], b.bundle_seq, round);
-        if b.log.len() >= COMMS_LOG_CAPACITY {
+        if b.log.len() >= params.comms_log_capacity {
             b.log.pop_front();
         }
         b.log.push_back(record.clone());
@@ -551,7 +571,7 @@ pub fn step(
             ack_hops_completed: None,
         });
         b.bundle_seq += 1;
-        b.next_bundle_round = round + BUNDLE_INTERVAL_ROUNDS;
+        b.next_bundle_round = round + params.bundle_interval_rounds;
         stats.originated += 1;
     }
 }
@@ -559,6 +579,7 @@ pub fn step(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::params::{DvDtnParams, QueueDiscipline};
     use crate::protocol::dv_dtn::beacon::RouteBelief;
     use crate::link_detection::{Edge, NodeKey};
     use crate::tower::Tower;
@@ -626,7 +647,7 @@ mod tests {
         nodes[3].next_bundle_round = 0;
 
         for round in 0..10 {
-            step(&mut nodes, &balloons, &adj, &awake, round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
             if stats.delivered > 0 {
                 break;
             }
@@ -657,13 +678,13 @@ mod tests {
         }
         nodes[3].next_bundle_round = 0;
 
-        step(&mut nodes, &balloons, &adj, &awake, 0, &mut stats); // b3 originates
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, 0, &mut stats); // b3 originates
         assert_eq!(nodes[3].queue.front().unwrap().path, vec![3]);
 
-        step(&mut nodes, &balloons, &adj, &awake, 1, &mut stats); // 3 -> 2
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, 1, &mut stats); // 3 -> 2
         assert_eq!(nodes[2].queue.front().unwrap().path, vec![3, 2]);
 
-        step(&mut nodes, &balloons, &adj, &awake, 2, &mut stats); // 2 -> 1
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, 2, &mut stats); // 2 -> 1
         let held = nodes[1].queue.front().unwrap();
         assert_eq!(held.path, vec![3, 2, 1]);
         assert_eq!(held.hops(), 2);
@@ -694,7 +715,7 @@ mod tests {
         });
 
         for round in 0..10 {
-            step(&mut nodes, &balloons, &adj, &awake, round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
         }
         assert!(!nodes[1].queue.is_empty(), "should still be holding");
         assert_eq!(stats.resolved(), 0, "nothing should have resolved: {stats:?}");
@@ -724,7 +745,7 @@ mod tests {
         let mut stats = BundleStats::default();
         let awake: Vec<usize> = vec![0, 1];
         for round in 0..6 {
-            step(&mut nodes, &balloons, &adj, &awake, round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
         }
         assert_eq!(stats.dropped_loop, 1, "stats: {stats:?}");
         assert!(nodes.iter().all(|n| n.queue.is_empty()));
@@ -752,7 +773,7 @@ mod tests {
             origin_id: 2, seq: 0, created_at_round: 0, record: test_record(2, 0), path: vec![2],
         });
 
-        step(&mut nodes, &balloons, &adj, &[2], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[2], 1, &mut stats);
         assert_eq!(nodes[1].queue.len(), 2, "relay should have accepted transit");
         assert_eq!(stats.blocked, 0);
     }
@@ -765,7 +786,7 @@ mod tests {
         for b in nodes.iter_mut() {
             b.next_bundle_round = u64::MAX;
         }
-        for k in 0..RELAY_QUEUE_CAPACITY {
+        for k in 0..DvDtnParams::default().relay_queue_capacity {
             nodes[1].queue.push_back(Bundle {
                 origin_id: 1, seq: k as u64, created_at_round: 0, record: test_record(1, k as u64), path: vec![1],
             });
@@ -775,7 +796,7 @@ mod tests {
         });
 
         // b2 is awake but b1 is full: the handoff fails and b2 keeps it.
-        step(&mut nodes, &balloons, &adj, &[2], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[2], 1, &mut stats);
         assert_eq!(stats.blocked, 1);
         assert_eq!(nodes[2].queue.len(), 1, "sender must keep the bundle");
         assert_eq!(stats.resolved(), 0, "nothing lost: {stats:?}");
@@ -791,7 +812,7 @@ mod tests {
         // its own may be outstanding.
         for round in 0..10 {
             nodes[0].next_bundle_round = 0;
-            step(&mut nodes, &balloons, &adj, &[0], round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], round, &mut stats);
         }
         assert_eq!(stats.originated, 1, "stats: {stats:?}");
         assert_eq!(nodes[0].queue.len(), 1);
@@ -809,17 +830,17 @@ mod tests {
             b.next_bundle_round = u64::MAX;
         }
         // b0 hears the tower directly and is holding a full queue.
-        for k in 0..RELAY_QUEUE_CAPACITY {
+        for k in 0..DvDtnParams::default().relay_queue_capacity {
             nodes[0].queue.push_back(Bundle {
                 origin_id: 1, seq: k as u64, created_at_round: 0, record: test_record(1, k as u64), path: vec![1, 0],
             });
         }
 
-        step(&mut nodes, &balloons, &adj, &[0], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], 1, &mut stats);
 
-        let expected = TOWER_CONTACT_BUNDLES.min(RELAY_QUEUE_CAPACITY);
+        let expected = DvDtnParams::default().tower_contact_bundles.min(DvDtnParams::default().relay_queue_capacity);
         assert_eq!(stats.delivered, expected as u64, "stats: {stats:?}");
-        assert_eq!(nodes[0].queue.len(), RELAY_QUEUE_CAPACITY - expected);
+        assert_eq!(nodes[0].queue.len(), DvDtnParams::default().relay_queue_capacity - expected);
     }
 
     /// The contact window applies only to towers. A relay handing off to another
@@ -839,10 +860,42 @@ mod tests {
             });
         }
 
-        step(&mut nodes, &balloons, &adj, &[2], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[2], 1, &mut stats);
 
         assert_eq!(nodes[1].queue.len(), 1, "only one bundle should have crossed");
         assert_eq!(nodes[2].queue.len(), 3, "the rest stay with the sender");
+    }
+
+    /// LIFO is a rule variant, not a reordering of the same outcome: under
+    /// load with an age-based drop rule, serving the newest first means the
+    /// bundles that move still have budget left. Assert it actually picks the
+    /// other end of the queue.
+    #[test]
+    fn lifo_transmits_the_newest_held_bundle_not_the_oldest() {
+        let params = DvDtnParams { queue_discipline: QueueDiscipline::Lifo, ..Default::default() };
+        let (balloons, mut nodes, _t, adj) = line(3);
+        seed_beliefs(&mut nodes, 0);
+        let mut stats = BundleStats::default();
+        for b in nodes.iter_mut() {
+            b.next_bundle_round = u64::MAX; // nobody originates; we plant them
+        }
+        for seq in 0..3u64 {
+            nodes[2].queue.push_back(Bundle {
+                origin_id: 2,
+                seq,
+                created_at_round: 0,
+                record: test_record(2, seq),
+                path: vec![2],
+            });
+        }
+
+        step(&mut nodes, &balloons, &adj, &params, &[2], 1, &mut stats);
+
+        assert_eq!(nodes[1].queue.len(), 1, "exactly one bundle crosses per slot either way");
+        assert_eq!(nodes[1].queue[0].seq, 2, "LIFO must send the newest, not seq 0");
+        // And the oldest are the ones left behind to age out.
+        let left: Vec<u64> = nodes[2].queue.iter().map(|b| b.seq).collect();
+        assert_eq!(left, vec![0, 1]);
     }
 
     #[test]
@@ -853,8 +906,8 @@ mod tests {
         let adj = MeshAdjacency::default();
         let mut stats = BundleStats::default();
 
-        for round in 0..(BUNDLE_MAX_AGE_ROUNDS + 5) {
-            step(&mut nodes, &balloons, &adj, &[0], round, &mut stats);
+        for round in 0..(DvDtnParams::default().bundle_max_age_rounds + 5) {
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], round, &mut stats);
         }
         assert!(stats.satellite >= 1, "stats: {stats:?}");
         assert_eq!(stats.delivered, 0);
@@ -885,7 +938,7 @@ mod tests {
         let adj = MeshAdjacency::default();
         let mut stats = BundleStats::default();
 
-        step(&mut nodes, &balloons, &adj, &[0], 5, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], 5, &mut stats);
 
         assert_eq!(nodes[0].log.len(), 1);
         let logged = nodes[0].log.front().unwrap();
@@ -910,13 +963,13 @@ mod tests {
 
         // Originate far more than the log can hold. The queue is drained each
         // round so the one-outstanding rule never blocks origination.
-        for round in 0..(COMMS_LOG_CAPACITY as u64 * 3) {
+        for round in 0..(DvDtnParams::default().comms_log_capacity as u64 * 3) {
             nodes[0].next_bundle_round = 0;
             nodes[0].queue.clear();
-            step(&mut nodes, &balloons, &adj, &[0], round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], round, &mut stats);
         }
 
-        assert_eq!(nodes[0].log.len(), COMMS_LOG_CAPACITY);
+        assert_eq!(nodes[0].log.len(), DvDtnParams::default().comms_log_capacity);
         // It kept the newest, not the oldest.
         let seqs: Vec<u64> = nodes[0].log.iter().map(|r| r.seq).collect();
         assert!(seqs.windows(2).all(|w| w[0] < w[1]), "log must stay ordered: {seqs:?}");
@@ -939,7 +992,7 @@ mod tests {
         // Run long enough for the bundle to reach the tower (b0) and the ack
         // to walk all the way back to b3 (origin).
         for round in 0..40 {
-            step(&mut nodes, &balloons, &adj, &awake, round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
             if nodes[3].outstanding.as_ref().is_some_and(|o| o.state == AckState::Acked) {
                 break;
             }
@@ -981,7 +1034,7 @@ mod tests {
         );
         let mut round = 0u64;
         while stats.delivered == 0 && round < 20 {
-            step(&mut nodes, &balloons, &adj, &awake, round, &mut stats);
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
             round += 1;
         }
         assert_eq!(stats.delivered, 1, "bundle should have reached the tower");
@@ -990,8 +1043,8 @@ mod tests {
         // can leave b0.
         adj.rebuild(&[edge("t0", "b0"), edge("b1", "b2"), edge("b2", "b3")], 4, &towers);
 
-        for r in round..(round + BUNDLE_MAX_AGE_ROUNDS + 10) {
-            step(&mut nodes, &balloons, &adj, &awake, r, &mut stats);
+        for r in round..(round + DvDtnParams::default().bundle_max_age_rounds + 10) {
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, r, &mut stats);
         }
         assert_eq!(stats.acked, 0, "stats: {stats:?}");
         assert_eq!(stats.ack_lost, 1, "stats: {stats:?}");
@@ -1021,8 +1074,8 @@ mod tests {
 
         // Origination happens last within a round, so the bundle isn't in the
         // queue to deliver until b0's *next* wake slot.
-        step(&mut nodes, &balloons, &adj, &[0], 0, &mut stats);
-        step(&mut nodes, &balloons, &adj, &[0], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], 0, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[0], 1, &mut stats);
 
         assert_eq!(stats.delivered, 1, "stats: {stats:?}");
         assert_eq!(stats.acked, 1, "stats: {stats:?}");
@@ -1042,7 +1095,7 @@ mod tests {
             tower_id: 0, hop_count: 1, next_hop: Some(0), epoch: 1, emitted_at_round: 0,
         });
 
-        for k in 0..ACK_QUEUE_CAPACITY {
+        for k in 0..DvDtnParams::default().ack_queue_capacity {
             nodes[0].ack_queue.push_back(Ack {
                 origin_id: 9,
                 seq: k as u64,
@@ -1062,9 +1115,9 @@ mod tests {
         });
 
         let mut stats = BundleStats::default();
-        step(&mut nodes, &balloons, &adj, &[1], 1, &mut stats);
+        step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &[1], 1, &mut stats);
 
         assert_eq!(stats.ack_lost, 1, "stats: {stats:?}");
-        assert_eq!(nodes[0].ack_queue.len(), ACK_QUEUE_CAPACITY);
+        assert_eq!(nodes[0].ack_queue.len(), DvDtnParams::default().ack_queue_capacity);
     }
 }

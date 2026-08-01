@@ -8,6 +8,7 @@
 //   cargo run --release --bin timing
 
 use sim_server::config::*;
+use sim_server::protocol::dv_dtn::params::DvDtnParams;
 
 /// The one number here that is measured rather than derived: rounds for a
 /// beacon wave to reach 99% of a 1200-balloon field, from
@@ -56,6 +57,12 @@ fn main() {
     let rt = real_secs_per_tick();
     let st = sim_secs_per_tick();
     let comms = COMMS_EVERY_N_TICKS as f64;
+    // The protocol's own pacing constants live on its params now, not in
+    // config.rs. Read them so this report can't drift from what actually runs.
+    let params = DvDtnParams::default();
+    let beacon_interval = params.beacon_interval_rounds;
+    let beacon_jitter = params.beacon_jitter_rounds;
+    let belief_max_age = params.belief_max_age_rounds;
 
     println!("\n=== Three clocks ===\n");
     println!(
@@ -101,18 +108,18 @@ fn main() {
     );
     row(
         "Beacon transmission",
-        &format!("BEACON_INTERVAL_ROUNDS = {BEACON_INTERVAL_ROUNDS}"),
-        BEACON_INTERVAL_ROUNDS as f64 * comms,
+        &format!("beacon_interval_rounds = {beacon_interval}"),
+        beacon_interval as f64 * comms,
     );
     row(
         "Beacon jitter",
-        &format!("BEACON_JITTER_ROUNDS = +/-{BEACON_JITTER_ROUNDS}"),
-        BEACON_JITTER_ROUNDS as f64 * comms,
+        &format!("beacon_jitter_rounds = +/-{beacon_jitter}"),
+        beacon_jitter as f64 * comms,
     );
     row(
         "Belief expiry",
-        &format!("BELIEF_MAX_AGE_ROUNDS = {BELIEF_MAX_AGE_ROUNDS}"),
-        BELIEF_MAX_AGE_ROUNDS as f64 * comms,
+        &format!("belief_max_age_rounds = {belief_max_age}"),
+        belief_max_age as f64 * comms,
     );
     row(
         "Full discovery (1200)",
@@ -120,13 +127,14 @@ fn main() {
         MEASURED_CONVERGENCE_ROUNDS as f64 * comms,
     );
     println!(
-        "\nBEACON_MAX_HOPS = {BEACON_MAX_HOPS} is omitted: a hop budget, not a duration."
+        "\nbeacon_max_hops = {} is omitted: a hop budget, not a duration.",
+        params.beacon_max_hops
     );
 
-    println!("\nIn plain terms: a balloon speaks every {}; a belief it cannot", fmt_real(BEACON_INTERVAL_ROUNDS as f64 * comms * rt));
+    println!("\nIn plain terms: a balloon speaks every {}; a belief it cannot", fmt_real(beacon_interval as f64 * comms * rt));
     println!(
         "refresh dies after {}; a beacon crosses the planet in about {}.",
-        fmt_real(BELIEF_MAX_AGE_ROUNDS as f64 * comms * rt),
+        fmt_real(belief_max_age as f64 * comms * rt),
         fmt_real(MEASURED_CONVERGENCE_ROUNDS as f64 * comms * rt)
     );
 
@@ -146,10 +154,10 @@ fn main() {
         println!(
             "{:>8}  {:>14}  {:>18}  {:>15}  {:>14}{}",
             candidate,
-            fmt_real(BEACON_INTERVAL_ROUNDS as f64 * c * rt),
-            fmt_real(BELIEF_MAX_AGE_ROUNDS as f64 * c * rt),
+            fmt_real(beacon_interval as f64 * c * rt),
+            fmt_real(belief_max_age as f64 * c * rt),
             fmt_real(MEASURED_CONVERGENCE_ROUNDS as f64 * c * rt),
-            fmt_sim(BELIEF_MAX_AGE_ROUNDS as f64 * c * st),
+            fmt_sim(belief_max_age as f64 * c * st),
             marker
         );
     }

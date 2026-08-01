@@ -1,7 +1,6 @@
 pub mod atmosphere;
 pub mod balloon;
 pub mod config;
-pub mod ablation;
 pub mod geo;
 pub mod link_detection;
 pub mod mesh_adjacency;

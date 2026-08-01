@@ -218,6 +218,17 @@ impl World {
         }
     }
 
+    /// Runs this world on a different comms protocol. Call before
+    /// `spawn_balloon_pool` — the protocol seeds per-node state as balloons
+    /// are created, so swapping afterwards would leave it empty.
+    pub fn with_protocol(mut self, spec: ProtocolSpec) -> Self {
+        self.protocol = spec.build();
+        for t in &self.towers {
+            self.protocol.add_tower(t.id);
+        }
+        self
+    }
+
     /// Reseeds the RNG driving balloon spawn/drift/duty-cycle jitter. `new`
     /// defaults to entropy (right for a live server); offline harnesses that
     /// want a reproducible run per parameter combo should call this before

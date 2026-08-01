@@ -2,7 +2,7 @@
 // queueing/ack/satellite-fallback logic in bundle.rs isn't interleaved with
 // the histogram/counter bookkeeping that logic reports into.
 
-use crate::config::{BEACON_INTERVAL_ROUNDS, TOWER_CONTACT_BUNDLES};
+use super::params::DvDtnParams;
 
 /// Cumulative outcomes. Every bundle that leaves circulation lands in exactly
 /// one of the `delivered` / `dropped_*` / `satellite` counters — the harness
@@ -121,12 +121,13 @@ impl BundleStats {
     }
 
     /// Ceiling on deliveries per round, from the last hop alone: each
-    /// tower-adjacent balloon can pass TOWER_CONTACT_BUNDLES per
-    /// BEACON_INTERVAL_ROUNDS. Nothing about mesh depth, queue depth, or routing
-    /// quality can raise it — only the tower-adjacent population or the size of
-    /// a contact.
-    pub fn delivery_capacity_per_round(&self) -> f64 {
-        self.mean_tower_adjacent() * TOWER_CONTACT_BUNDLES as f64 / BEACON_INTERVAL_ROUNDS as f64
+    /// tower-adjacent balloon can pass `tower_contact_bundles` per
+    /// `beacon_interval_rounds`. Nothing about mesh depth, queue depth, or
+    /// routing quality can raise it — only the tower-adjacent population or the
+    /// size of a contact.
+    pub fn delivery_capacity_per_round(&self, params: &DvDtnParams) -> f64 {
+        self.mean_tower_adjacent() * params.tower_contact_bundles as f64
+            / params.beacon_interval_rounds as f64
     }
 
     /// Delivery among bundles that actually finished. `delivered / originated`

@@ -13,12 +13,12 @@
 //
 // Consequence, and the point of the design: belief and ground truth drift
 // apart in both directions. A balloon keeps believing in a route for up to
-// BELIEF_MAX_AGE_ROUNDS after the link actually broke, and can believe it is
+// belief_max_age_rounds after the link actually broke, and can believe it is
 // isolated while sitting on a perfectly good path nobody has told it about.
 // Neither is a bug to fix.
 
 use crate::balloon::Balloon;
-use crate::config::*;
+use super::params::{DvDtnParams, Metric};
 use super::{DvNode, TowerBeacon};
 use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
@@ -49,8 +49,8 @@ impl RouteBelief {
     /// neighbour last repeated it. The latter is self-sustaining: balloons cut
     /// off from every tower keep renewing each other's dead routes by passing
     /// them in circles, and the field never forgets.
-    pub fn is_expired(&self, round: u64) -> bool {
-        round.saturating_sub(self.emitted_at_round) > BELIEF_MAX_AGE_ROUNDS
+    pub fn is_expired(&self, round: u64, max_age: u64) -> bool {
+        round.saturating_sub(self.emitted_at_round) > max_age
     }
 
     pub fn age(&self, round: u64) -> u64 {
@@ -61,11 +61,11 @@ impl RouteBelief {
 /// Should `new` replace `cur`? This is the rebroadcast-suppression rule: a
 /// beacon that doesn't improve the belief is dropped rather than relayed,
 /// which is what stops a flood from becoming a broadcast storm.
-fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
+fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief, params: &DvDtnParams) -> bool {
     let Some(cur) = cur else { return true };
-    if crate::ablation::prefer_nearer() {
-        // Ablation: nearest wins, freshness only breaks ties. Beliefs still drain
-        // when towers go away, because that property comes from expiry (which is
+    if params.metric == Metric::NearestFirst {
+        // Nearest wins, freshness only breaks ties. Beliefs still drain when
+        // towers go away, because that property comes from expiry (which is
         // keyed on emitted_at_round) rather than from this comparison.
         return new.hop_count < cur.hop_count
             || (new.hop_count == cur.hop_count && new.emitted_at_round > cur.emitted_at_round);
@@ -82,16 +82,17 @@ fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
     new.hop_count < cur.hop_count
 }
 
-fn next_slot(round: u64, rng: &mut (impl Rng + ?Sized)) -> u64 {
-    let jitter = rng.gen_range(0..=(2 * BEACON_JITTER_ROUNDS)) as i64 - BEACON_JITTER_ROUNDS as i64;
-    let interval = (BEACON_INTERVAL_ROUNDS as i64 + jitter).max(1) as u64;
+fn next_slot(round: u64, params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
+    let j = params.beacon_jitter_rounds;
+    let jitter = rng.gen_range(0..=(2 * j)) as i64 - j as i64;
+    let interval = (params.beacon_interval_rounds as i64 + jitter).max(1) as u64;
     round + interval
 }
 
 /// Randomized initial beacon phase, so the whole fleet doesn't transmit on the
 /// same round. Called at spawn.
-pub fn initial_slot(rng: &mut (impl Rng + ?Sized)) -> u64 {
-    rng.gen_range(0..BEACON_INTERVAL_ROUNDS)
+pub fn initial_slot(params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
+    rng.gen_range(0..params.beacon_interval_rounds)
 }
 
 /// One beacon transmission from this round, for the wavefront animation
@@ -110,7 +111,7 @@ pub struct BeaconStepResult {
     /// Indices of balloons that woke and transmitted this round. Bundle
     /// forwarding reuses this set rather than keeping its own schedule: a
     /// radio that is awake is awake for both, which is what makes
-    /// BEACON_INTERVAL_ROUNDS the forwarding rate as well (see
+    /// beacon_interval_rounds the forwarding rate as well (see
     /// docs/design/MESH_COMMS_DESIGN.md §4).
     pub awake: Vec<usize>,
     /// Every offer made this round, for whichever tower(s) a client wants to
@@ -131,12 +132,13 @@ pub fn step(
     tower_state: &mut HashMap<u32, TowerBeacon>,
     towers: &[Tower],
     adj: &MeshAdjacency,
+    params: &DvDtnParams,
     round: u64,
     rng: &mut (impl Rng + ?Sized),
 ) -> BeaconStepResult {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
     for n in nodes.iter_mut() {
-        if n.belief.is_some_and(|bel| bel.is_expired(round)) {
+        if n.belief.is_some_and(|bel| bel.is_expired(round, params.belief_max_age_rounds)) {
             n.belief = None;
         }
     }
@@ -154,7 +156,7 @@ pub fn step(
         if round < ts.next_round {
             continue;
         }
-        ts.next_round = next_slot(round, rng);
+        ts.next_round = next_slot(round, params, rng);
         ts.epoch += 1;
         let epoch = ts.epoch;
         for &b_id in adj.tower_neighbors(slot) {
@@ -181,13 +183,13 @@ pub fn step(
         if round < nodes[i].next_beacon_round {
             continue;
         }
-        nodes[i].next_beacon_round = next_slot(round, rng);
+        nodes[i].next_beacon_round = next_slot(round, params, rng);
         awake.push(i);
         // A balloon with no belief has nothing to say. Silence is itself
         // information the neighbours never get — they can't tell "no route"
         // from "not transmitting".
         let Some(belief) = nodes[i].belief else { continue };
-        if belief.hop_count >= BEACON_MAX_HOPS {
+        if belief.hop_count >= params.beacon_max_hops {
             continue;
         }
         let id = balloons[i].id;
@@ -217,10 +219,10 @@ pub fn step(
         if offer.next_hop == Some(id) {
             continue; // never learn a route to the ground from yourself
         }
-        if offer.is_expired(round) {
+        if offer.is_expired(round, params.belief_max_age_rounds) {
             continue; // news too old to act on, whoever just repeated it
         }
-        if should_adopt(n.belief.as_ref(), &offer) {
+        if should_adopt(n.belief.as_ref(), &offer, params) {
             n.belief = Some(offer);
         }
     }
@@ -258,6 +260,7 @@ use crate::mesh_adjacency::MeshAdjacency;
         nodes: Vec<DvNode>,
         towers: Vec<Tower>,
         tower_state: HashMap<u32, TowerBeacon>,
+        params: DvDtnParams,
     }
 
     impl Field {
@@ -267,6 +270,7 @@ use crate::mesh_adjacency::MeshAdjacency;
                 nodes: vec![DvNode::default(); n as usize],
                 tower_state: towers.iter().map(|t| (t.id, TowerBeacon::default())).collect(),
                 towers,
+                params: DvDtnParams::default(),
             }
         }
 
@@ -277,6 +281,7 @@ use crate::mesh_adjacency::MeshAdjacency;
                 &mut self.tower_state,
                 &self.towers,
                 adj,
+                &self.params,
                 round,
                 rng,
             );
@@ -334,6 +339,7 @@ use crate::mesh_adjacency::MeshAdjacency;
                 &mut f.tower_state,
                 &f.towers,
                 &adj,
+                &f.params,
                 round,
                 &mut rng,
             );
@@ -373,7 +379,7 @@ use crate::mesh_adjacency::MeshAdjacency;
         }
         // It must outlive the cut by roughly the timeout, not vanish instantly —
         // that lag is the belief/truth divergence we want to visualize.
-        assert!(round - cut_at > BELIEF_MAX_AGE_ROUNDS / 4);
+        assert!(round - cut_at > f.params.belief_max_age_rounds / 4);
     }
 
     /// An isolated balloon must never invent a route. "No signal" and "no
@@ -400,11 +406,46 @@ use crate::mesh_adjacency::MeshAdjacency;
             emitted_at_round: 100,
         };
         let short = RouteBelief { hop_count: 3, next_hop: Some(2), ..long };
-        assert!(should_adopt(Some(&long), &short));
-        assert!(!should_adopt(Some(&short), &long));
+        assert!(should_adopt(Some(&long), &short, &DvDtnParams::default()));
+        assert!(!should_adopt(Some(&short), &long, &DvDtnParams::default()));
         // A fresher wave supersedes regardless of hop count.
         let fresher = RouteBelief { epoch: 5, emitted_at_round: 105, hop_count: 8, ..long };
-        assert!(should_adopt(Some(&short), &fresher));
+        assert!(should_adopt(Some(&short), &fresher, &DvDtnParams::default()));
+    }
+
+    /// The metric is a real rule swap, not a tiebreak tweak: under
+    /// NearestFirst a *shorter but older* route beats a fresher long one,
+    /// which is exactly backwards from what ships. (Measured: helps below
+    /// percolation, hurts above it — see DvDtnParams::metric.)
+    #[test]
+    fn nearest_first_prefers_a_shorter_path_over_a_fresher_wave() {
+        let near_but_old = RouteBelief {
+            tower_id: 0,
+            hop_count: 2,
+            next_hop: Some(1),
+            epoch: 4,
+            emitted_at_round: 100,
+        };
+        let far_but_fresh = RouteBelief {
+            hop_count: 9,
+            next_hop: Some(2),
+            epoch: 5,
+            emitted_at_round: 130,
+            ..near_but_old
+        };
+
+        let shipped = DvDtnParams::default();
+        let nearest = DvDtnParams { metric: Metric::NearestFirst, ..Default::default() };
+
+        // Freshest-first takes the newer wave however long its path.
+        assert!(should_adopt(Some(&near_but_old), &far_but_fresh, &shipped));
+        // Nearest-first refuses it, and would take the short one back.
+        assert!(!should_adopt(Some(&near_but_old), &far_but_fresh, &nearest));
+        assert!(should_adopt(Some(&far_but_fresh), &near_but_old, &nearest));
+        // Freshness still breaks ties at equal hop count under nearest-first.
+        let same_hops_fresher =
+            RouteBelief { hop_count: 2, emitted_at_round: 130, ..near_but_old };
+        assert!(should_adopt(Some(&near_but_old), &same_hops_fresher, &nearest));
     }
 
     /// The laundering guard: re-hearing news you already hold must not renew
@@ -422,7 +463,7 @@ use crate::mesh_adjacency::MeshAdjacency;
         // A neighbour relays the very same wave back, one hop longer and
         // stamped as heard right now. It must be rejected outright.
         let echoed = RouteBelief { hop_count: 4, next_hop: Some(2), ..held };
-        assert!(!should_adopt(Some(&held), &echoed));
+        assert!(!should_adopt(Some(&held), &echoed, &DvDtnParams::default()));
     }
 
     /// Cut every tower loose and the whole field must forget, not settle into

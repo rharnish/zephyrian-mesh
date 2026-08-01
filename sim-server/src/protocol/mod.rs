@@ -145,19 +145,19 @@ pub trait MeshProtocol: Send {
 /// iterate over several in one run without a match arm per family.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProtocolSpec {
-    DvDtn,
+    DvDtn(dv_dtn::params::DvDtnParams),
 }
 
 impl Default for ProtocolSpec {
     fn default() -> Self {
-        ProtocolSpec::DvDtn
+        ProtocolSpec::DvDtn(Default::default())
     }
 }
 
 impl ProtocolSpec {
     pub fn build(&self) -> Box<dyn MeshProtocol> {
         match self {
-            ProtocolSpec::DvDtn => Box::new(dv_dtn::DvDtn::new()),
+            ProtocolSpec::DvDtn(p) => Box::new(dv_dtn::DvDtn::with_params(*p)),
         }
     }
 }
@@ -165,9 +165,12 @@ impl ProtocolSpec {
 impl std::str::FromStr for ProtocolSpec {
     type Err = String;
 
+    /// Bare name selects a protocol with its default parameters; parameter
+    /// overrides are deliberately not parsed here yet, since nothing needs
+    /// them from a command line and a half-built syntax is worse than none.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "dv-dtn" => Ok(ProtocolSpec::DvDtn),
+            "dv-dtn" => Ok(ProtocolSpec::DvDtn(Default::default())),
             other => Err(format!("unknown protocol {other:?} (known: dv-dtn)")),
         }
     }

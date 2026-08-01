@@ -14,6 +14,8 @@
 //   cargo run --release --bin bundle_delivery [n_balloons] [rounds]
 
 use sim_server::config::*;
+use sim_server::protocol::dv_dtn::params::{DvDtnParams, Metric};
+use sim_server::protocol::ProtocolSpec;
 use sim_server::sim::{Snapshot, World};
 use sim_server::wind_field::WindField;
 use std::sync::Arc;
@@ -28,10 +30,13 @@ fn advance_round(world: &mut World) -> Snapshot {
 }
 
 /// The slot budget, broken down. A bundle only ever gets
-/// BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS wake slots, so where the
+/// bundle_max_age_rounds / beacon_interval_rounds wake slots, so where the
 /// wasted ones go decides whether it arrives.
-fn report_slots(st: &sim_server::protocol::dv_dtn::bundle::BundleStats) {
-    let budget = BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS;
+fn report_slots(
+    st: &sim_server::protocol::dv_dtn::bundle::BundleStats,
+    params: &sim_server::protocol::dv_dtn::params::DvDtnParams,
+) {
+    let budget = params.bundle_max_age_rounds / params.beacon_interval_rounds;
     let pct = |x: u64| {
         if st.slots_with_bundle == 0 {
             0.0
@@ -75,11 +80,11 @@ fn report_slots(st: &sim_server::protocol::dv_dtn::bundle::BundleStats) {
         "    tower-adjacent balloons {:.1}  ->  delivery ceiling {:.2}/round  |  \
          originated {:.2}/round  |  delivered {:.2}/round  ({:.0}% of ceiling)",
         st.mean_tower_adjacent(),
-        st.delivery_capacity_per_round(),
+        st.delivery_capacity_per_round(params),
         demand,
         served,
-        if st.delivery_capacity_per_round() > 0.0 {
-            100.0 * served / st.delivery_capacity_per_round()
+        if st.delivery_capacity_per_round(params) > 0.0 {
+            100.0 * served / st.delivery_capacity_per_round(params)
         } else {
             0.0
         },
@@ -128,8 +133,9 @@ fn report_slots(st: &sim_server::protocol::dv_dtn::bundle::BundleStats) {
     println!();
 }
 
-fn build(n: u32, coeff: f64) -> World {
-    let mut world = World::new(Arc::new(WindField::zero()));
+fn build(n: u32, coeff: f64, params: DvDtnParams) -> World {
+    let mut world =
+        World::new(Arc::new(WindField::zero())).with_protocol(ProtocolSpec::DvDtn(params));
     for &(lon, lat, h) in INITIAL_TOWERS {
         world.add_tower(lon, lat, h);
     }
@@ -144,22 +150,32 @@ fn main() {
     let n: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1200);
     let rounds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(400);
     // Optional third arg pins phase 1 to a single coefficient, which is what
-    // makes sweeping RELAY_QUEUE_CAPACITY cheap enough to actually do.
+    // makes sweeping relay_queue_capacity cheap enough to actually do.
     let only: Option<f64> = args.get(3).and_then(|s| s.parse().ok());
 
     // PREFER_NEARER=1 runs the same protocol with hop count, not freshness, as
-    // the primary route-selection key. See src/ablation.rs.
+    // the primary route-selection key — now a protocol parameter rather than a
+    // process-global toggle, so it travels with the World it applies to.
     let prefer_nearer = std::env::var("PREFER_NEARER").is_ok_and(|v| v == "1");
-    sim_server::ablation::set_prefer_nearer(prefer_nearer);
-    println!("route selection: {}", if prefer_nearer { "NEAREST-first (ablation)" } else { "FRESHEST-first (shipped)" });
+    let mut params = DvDtnParams::default();
+    if prefer_nearer {
+        params.metric = Metric::NearestFirst;
+    }
+    println!(
+        "route selection: {}",
+        if prefer_nearer { "NEAREST-first" } else { "FRESHEST-first (shipped)" }
+    );
 
     println!(
-        "n={n}  rounds={rounds}  queue={RELAY_QUEUE_CAPACITY}  \
-         originate every {BUNDLE_INTERVAL_ROUNDS}  \
-         1 hop = {BEACON_INTERVAL_ROUNDS} rounds ({:.1} real s, {:.0} sim min)\n",
-        BEACON_INTERVAL_ROUNDS as f64 * COMMS_EVERY_N_TICKS as f64 * TICK_INTERVAL_MS as f64
+        "n={n}  rounds={rounds}  queue={}  originate every {}  \
+         1 hop = {} rounds ({:.1} real s, {:.0} sim min)\n",
+        params.relay_queue_capacity,
+        params.bundle_interval_rounds,
+        params.beacon_interval_rounds,
+        params.beacon_interval_rounds as f64 * COMMS_EVERY_N_TICKS as f64
+            * TICK_INTERVAL_MS as f64
             / 1000.0,
-        BEACON_INTERVAL_ROUNDS as f64 * COMMS_ROUND_SIM_SECONDS / 60.0,
+        params.beacon_interval_rounds as f64 * COMMS_ROUND_SIM_SECONDS / 60.0,
     );
 
     // --- Phase 1: delivery vs. mesh density ---------------------------------
@@ -190,7 +206,7 @@ fn main() {
 
     let coeffs: Vec<f64> = only.map_or_else(|| vec![2.5, 3.0, 3.57, 4.12, 5.0], |c| vec![c]);
     for coeff in coeffs {
-        let mut world = build(n, coeff);
+        let mut world = build(n, coeff, params);
         let mut last = advance_round(&mut world);
         for _ in 1..rounds {
             last = advance_round(&mut world);
@@ -212,7 +228,7 @@ fn main() {
             censored,
             100.0 * st.completion_rate(),
         );
-        report_slots(&st);
+        report_slots(&st, &world.dv_dtn().params);
     }
 
     // --- Phase 2: the resolution invariant ----------------------------------
@@ -224,7 +240,7 @@ fn main() {
     // harness made exactly that mistake.) With no new bundles and no towers,
     // every bundle still in the world must leave circulation.
     println!("\n--- removing every tower: every bundle must resolve ---\n");
-    let mut world = build(n, DEFAULT_HORIZON_REFRACTION_COEFF);
+    let mut world = build(n, DEFAULT_HORIZON_REFRACTION_COEFF, params);
     for _ in 0..rounds {
         advance_round(&mut world);
     }
@@ -247,7 +263,7 @@ fn main() {
     );
     // Long enough for the last legitimately-moving bundle to age out, and for
     // its ack (same age budget) to age out too.
-    let drain = BUNDLE_MAX_AGE_ROUNDS + BUNDLE_INTERVAL_ROUNDS + 50;
+    let drain = params.bundle_max_age_rounds + params.bundle_interval_rounds + 50;
     let mut last_in_flight = u64::MAX;
     let mut last_acks_in_flight = u64::MAX;
     for r in 1..=drain {

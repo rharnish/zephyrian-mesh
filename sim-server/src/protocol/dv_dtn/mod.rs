@@ -18,8 +18,8 @@
 pub mod beacon;
 pub mod bundle;
 pub mod bundle_stats;
+pub mod params;
 
-use crate::config::BUNDLE_INTERVAL_ROUNDS;
 use crate::protocol::{
     CommsEvent, EventKind, LastBundleView, MeshProtocol, NodeCommsView, StepCtx,
 };
@@ -27,6 +27,7 @@ use crate::telemetry::TelemetryRecord;
 use beacon::RouteBelief;
 use bundle::{Ack, Bundle, Channel, OutstandingBundle, ResolvedBundle};
 use bundle_stats::BundleStats;
+use params::DvDtnParams;
 use rand::{Rng, RngCore};
 use std::collections::{HashMap, VecDeque};
 
@@ -77,6 +78,7 @@ pub struct TowerBeacon {
 }
 
 pub struct DvDtn {
+    pub params: DvDtnParams,
     pub nodes: Vec<DvNode>,
     /// Keyed by tower id, not by slot: tower ids are never reused, but slots
     /// shift whenever a tower is removed.
@@ -86,13 +88,22 @@ pub struct DvDtn {
 
 impl Default for DvDtn {
     fn default() -> Self {
-        DvDtn { nodes: Vec::new(), towers: HashMap::new(), stats: BundleStats::default() }
+        DvDtn {
+            params: DvDtnParams::default(),
+            nodes: Vec::new(),
+            towers: HashMap::new(),
+            stats: BundleStats::default(),
+        }
     }
 }
 
 impl DvDtn {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_params(params: DvDtnParams) -> Self {
+        DvDtn { params, ..Self::default() }
     }
 
     /// Acks currently in transit anywhere in the mesh.
@@ -117,8 +128,8 @@ impl MeshProtocol for DvDtn {
     /// `World::spawn_balloon_pool`.
     fn spawn_node(&mut self, rng: &mut dyn RngCore) {
         self.nodes.push(DvNode {
-            next_beacon_round: beacon::initial_slot(rng),
-            next_bundle_round: rng.gen_range(0..BUNDLE_INTERVAL_ROUNDS),
+            next_beacon_round: beacon::initial_slot(&self.params, rng),
+            next_bundle_round: rng.gen_range(0..self.params.bundle_interval_rounds),
             ..Default::default()
         });
     }
@@ -143,6 +154,7 @@ impl MeshProtocol for DvDtn {
             &mut self.towers,
             ctx.towers,
             ctx.adj,
+            &self.params,
             ctx.round,
             rng,
         );
@@ -150,6 +162,7 @@ impl MeshProtocol for DvDtn {
             &mut self.nodes[..n],
             ctx.balloons,
             ctx.adj,
+            &self.params,
             &result.awake,
             ctx.round,
             &mut self.stats,

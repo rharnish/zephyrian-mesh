@@ -104,13 +104,14 @@ fn main() {
     }
 
     // --- Invariants ---------------------------------------------------------
+    let log_capacity = world.dv_dtn().params.comms_log_capacity;
     let mut total_records = 0u64;
     let mut checked_bundles = 0u64;
     for (i, b) in world.balloons[..world.visible_count].iter().enumerate() {
         let node = &world.dv_dtn().nodes[i];
         assert!(
-            node.log.len() <= COMMS_LOG_CAPACITY,
-            "balloon {} log overflowed: {} > {COMMS_LOG_CAPACITY}",
+            node.log.len() <= log_capacity,
+            "balloon {} log overflowed: {} > {log_capacity}",
             b.id,
             node.log.len()
         );
