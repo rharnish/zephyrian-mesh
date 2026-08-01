@@ -139,6 +139,40 @@ The single-seed figures this file previously reported (seed 42) were
 systematically optimistic by 3–6 points at every configuration — directionally
 right on levels, wrong on the relationship between the levers.
 
+## Coda: how this compares to not routing at all
+
+A different axis, included here because the digest+batch configuration above
+is one of its rows. `protocol_compare` runs several protocols over identical
+balloon fields (4 seeds, n = 1200, 400 rounds):
+
+| protocol | completion |
+|---|---|
+| dv-dtn (shipped) | 72.3 ± 7.7% |
+| dv-dtn, digest + mesh=4 | **95.0 ± 1.4%** |
+| binary spray-and-wait, L=4 | 10.9 ± 1.1% |
+| binary spray-and-wait, L=16 | 23.5 ± 3.8% |
+
+Blind replication does badly here, and the protocol-specific counters say why:
+`handoffs_per_delivery` runs 40–58, and `no_candidate` — wake slots where a
+holder had no neighbour lacking the record — is enormous. A random walk rarely
+stumbles onto the ~27 of 1200 balloons that can hear a tower, while dv-dtn
+steers at them. Raising the copy budget helps (10.9% → 23.5%) at 3× the
+handoffs and 340× the blocking, since copies congest the very queues they need.
+
+**This is the design doc's own premise showing up as a measurement.** §1.1
+established that links here are quasi-static — a balloon drifts ~0.4% of link
+range per link round — which is precisely the regime where maintaining a route
+is cheap and worth it. Replication earns its keep when that is false: when
+contacts are brief and a route cannot be kept current long enough to use.
+
+So this is **not** "routing beats replication". It is spray-and-wait run in the
+regime it is worst suited to, at parameters that were not tuned (L=16 against a
+queue capacity of 8 is self-inflicted congestion). The honest claim is
+narrower, and the interesting follow-up is to churn the topology hard enough
+that dv-dtn's beliefs cannot keep up — which is where the ordering should
+invert, and which this simulator can stage by raising the wind or the
+retargeting rate.
+
 ## Limitations
 
 - **Zero wind.** Topology is near-frozen. Real ERA5 wind churns links and
@@ -152,6 +186,8 @@ right on levels, wrong on the relationship between the levers.
   — worth measuring before the parameter is trusted.
 - **n = 600 is uninformative** rather than negative: the error bars swamp
   every effect. More seeds would help there specifically.
+- **The coda's spray-and-wait rows are untuned**, and 4 seeds rather than 24.
+  They establish an ordering in this regime, not a bound on the protocol.
 
 ## Reproducing
 
