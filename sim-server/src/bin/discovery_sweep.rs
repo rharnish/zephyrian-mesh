@@ -58,6 +58,10 @@ const KEYS: &[&str] = &[
     "stall_rate",
     "delivered_per_slot_used",
     "ceiling_utilisation",
+    "delivery_latency_mean",
+    "delivery_latency_p95",
+    "ack_latency_mean",
+    "first_hop_latency_mean",
     "satellite",
     "dropped_loop",
     "dropped_ttl",
@@ -77,6 +81,14 @@ fn main() {
 
     let specs: Vec<(&str, &str)> = vec![
         ("proactive", "dv-dtn"),
+        // The aggregation levers are in this sweep purely for their *latency*.
+        // Their delivery effect was settled at 24 seeds in aggregation-summary
+        // and is not re-litigated here; the open question is whether batching
+        // buys those points with time nobody was measuring.
+        ("proactive+digest", "dv-dtn:ack=digest"),
+        ("proactive+mesh4", "dv-dtn:mesh=4"),
+        ("proactive+digest+mesh4", "dv-dtn:ack=digest,mesh=4"),
+        ("proactive+mesh8", "dv-dtn:mesh=8"),
         ("reactive", "dv-dtn:discovery=reactive"),
         ("reactive+overhear", "dv-dtn:discovery=reactive,overhear=on"),
         ("reactive+ring", "dv-dtn:discovery=reactive,ring=expanding"),

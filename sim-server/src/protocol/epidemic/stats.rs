@@ -1,3 +1,5 @@
+use crate::protocol::stats::LatencyStats;
+
 /// Counters for spray-and-wait. Almost none of `BundleStats` transfers: there
 /// are no beliefs to stall on, no next hops to go stale, no acks to lose, and
 /// no hop budget to exhaust. What replaces them is the cost of replication —
@@ -24,6 +26,14 @@ pub struct EpidemicStats {
     /// lacked the record — the replication equivalent of a stall, and the
     /// thing that limits spread in a sparse field.
     pub no_candidate: u64,
+    /// Origination to first arrival at a tower. Comparable with dv-dtn's key
+    /// of the same name — the one axis where replication has a structural
+    /// argument, since many copies race and only the winner is timed.
+    ///
+    /// There is deliberately no ack latency here: this protocol has no
+    /// receipts, so an origin never finds out at all. That is not a latency of
+    /// infinity, it is the absence of the measurement.
+    pub delivery_latency: LatencyStats,
 }
 
 impl EpidemicStats {

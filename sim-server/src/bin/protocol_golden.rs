@@ -105,4 +105,19 @@ fn run_scenario(label: &str, n_balloons: u32) {
     println!("delivered_hops={:?}", st.delivered_hops);
     println!("satellite_hops={:?}", st.satellite_hops);
     println!("belief_hops={:?}", st.belief_hops);
+    // Timing, pinned as exact sums and counts rather than as means, so a
+    // regression shows up as a changed integer instead of hiding inside a
+    // rounded float. Until these lines existed the fingerprint could not tell
+    // a refactor that delivered the same bundles *later* from one that changed
+    // nothing — which, for a delay-tolerant protocol, is the regression most
+    // worth catching.
+    println!(
+        "delivery_latency=sum:{} n:{}",
+        st.delivery_latency.sum, st.delivery_latency.count
+    );
+    println!("ack_latency=sum:{} n:{}", st.ack_latency.sum, st.ack_latency.count);
+    println!(
+        "first_hop_latency=sum:{} n:{}",
+        st.first_hop_latency.sum, st.first_hop_latency.count
+    );
 }

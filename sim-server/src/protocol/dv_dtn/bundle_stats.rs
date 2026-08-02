@@ -3,6 +3,7 @@
 // the histogram/counter bookkeeping that logic reports into.
 
 use super::params::DvDtnParams;
+use crate::protocol::stats::LatencyStats;
 
 /// Cumulative outcomes. Every bundle that leaves circulation lands in exactly
 /// one of the `delivered` / `dropped_*` / `satellite` counters — the harness
@@ -75,6 +76,27 @@ pub struct BundleStats {
     pub tower_adjacent_samples: u64,
     /// Rounds over which the above was sampled.
     pub rounds_sampled: u64,
+
+    // --- Latency (design doc: the axis that was missing) ---------------------
+    //
+    // Everything above answers "did it arrive?". These answer "how long did that
+    // take?" — the other half of the delay-tolerant trade, and the half that was
+    // unmeasured until now. Three separate clocks, because they answer three
+    // different questions and a mechanism can move them in opposite directions:
+    /// Origination to tower. What the trip cost.
+    pub delivery_latency: LatencyStats,
+    /// Origination to the *origin finding out* — the full round trip, bundle
+    /// out and receipt back. Always at least `delivery_latency`, and the gap
+    /// between them is what the ack mechanism costs. This is the one a balloon
+    /// actually experiences: until it fires, the balloon believes nothing has
+    /// happened.
+    pub ack_latency: LatencyStats,
+    /// Origination to leaving the origin's queue at all. Isolates *discovery*
+    /// wait from *forwarding* wait: a bundle that sat because its balloon had
+    /// no route shows up here, and one that sat in a congested mesh does not.
+    /// The reactive variants were expected to differ from proactive mainly in
+    /// this term.
+    pub first_hop_latency: LatencyStats,
 }
 
 pub fn bump(hist: &mut [u64; 32], n: usize) {

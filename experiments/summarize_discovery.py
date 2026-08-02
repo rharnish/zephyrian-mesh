@@ -32,6 +32,10 @@ from collections import defaultdict
 # (label, baseline it is compared against). None means "no contrast, level only".
 CONTRASTS = [
     ("proactive", None),
+    ("proactive+digest", "proactive"),
+    ("proactive+mesh4", "proactive"),
+    ("proactive+digest+mesh4", "proactive"),
+    ("proactive+mesh8", "proactive"),
     ("reactive", None),
     ("reactive+overhear", "reactive"),
     ("reactive+ring", "reactive"),
@@ -120,17 +124,38 @@ def main():
             f"| {mean(u):.1f} | {mean(s):.3f} |"
         )
 
-    print("\n## Paired contrasts (mean difference ± 1 s.e., points)\n")
-    print("| contrast | Δ completion | Δ delivered/orig |")
-    print("|---|---|---|")
+    print("\n## Latency, in comms rounds (5 rounds = one wake slot)\n")
+    print("| variant | first hop | delivery | p95 | ack round trip |")
+    print("|---|---|---|---|---|")
+    for label, _ in CONTRASTS:
+        if label not in rows:
+            continue
+
+        def m(key):
+            return mean([v.get(key, 0) for v in rows[label].values()])
+
+        print(
+            f"| {label} | {m('first_hop_latency_mean'):.1f} "
+            f"| {m('delivery_latency_mean'):.1f} | {m('delivery_latency_p95'):.0f} "
+            f"| {m('ack_latency_mean'):.1f} |"
+        )
+
+    print("\n## Paired contrasts (mean difference ± 1 s.e.)\n")
+    print(
+        "| contrast | Δ completion | Δ delivered/orig | Δ delivery latency | Δ ack latency |"
+    )
+    print("|---|---|---|---|---|")
     for label, base in CONTRASTS:
         if base is None or label not in rows:
             continue
         c = [x * 100 for x in paired(rows, label, base, "completion_rate")]
         d = [x * 100 for x in paired(rows, label, base, "delivered_per_originated")]
+        lat = paired(rows, label, base, "delivery_latency_mean")
+        ack = paired(rows, label, base, "ack_latency_mean")
         print(
             f"| {label} vs {base} | {mean(c):+.2f} ± {sem(c):.2f} "
-            f"| {mean(d):+.2f} ± {sem(d):.2f} |"
+            f"| {mean(d):+.2f} ± {sem(d):.2f} "
+            f"| {mean(lat):+.1f} ± {sem(lat):.1f} | {mean(ack):+.1f} ± {sem(ack):.1f} |"
         )
 
     print("\n## Mechanism counters (paired means, so *why* it moved)\n")

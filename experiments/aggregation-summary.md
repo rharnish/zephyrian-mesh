@@ -555,6 +555,106 @@ reads **2 → 36.6%, 4 → 47.7%, 16 → 61.7%**, below the earlier small-sample
 figures. Those earlier numbers were taken under randomised neighbour order and
 are not reproducible; these are.
 
+## Coda 3: latency, the axis that was missing
+
+Until now this simulator measured a **delay**-tolerant network without measuring
+delay. Every counter answered "did it arrive?" and none answered "how long did
+that take?" — leaving the defining trade of the field half observed, and letting
+mechanisms that buy delivery by spending time be scored purely on what they
+gained.
+
+Three clocks now run, all in comms rounds, where **5 rounds = one wake slot**:
+
+| clock | from | to | isolates |
+|---|---|---|---|
+| `first_hop_latency` | origination | leaving the origin at all | **discovery** wait |
+| `delivery_latency` | origination | arrival at a tower | the trip |
+| `ack_latency` | origination | the *origin finding out* | the full round trip |
+
+The third is the one a balloon actually experiences. Until it fires, the balloon
+believes nothing has happened.
+
+### The prediction this refutes
+
+`NEXT-STEPS` recorded the expectation that **batching buys delivery with hidden
+latency** — "`mesh=8` waits for a fuller batch, so its +24.8 delivery points may
+be bought with latency nothing currently sees." Measured, paired over 20 seeds:
+
+| | Δ delivery latency | Δ ack latency |
+|---|---|---|
+| `mesh=4` | **−6.8 ± 1.1** | −4.1 ± 0.6 |
+| `mesh=8` | **−7.6 ± 1.2** | −4.3 ± 0.6 |
+| `ack=digest` | −7.5 ± 0.6 | −6.0 ± 0.6 |
+| `digest + mesh=4` | **−20.1 ± 1.2** | −11.2 ± 1.1 |
+
+Batching does not cost latency. **It saves it, substantially**, and p95 delivery
+falls 138 → 79 rounds for digest+batch.
+
+The prediction was wrong because it assumed a mechanism the code does not have.
+Batching here is *opportunistic*, not accumulating: a wake slot carries up to `K`
+bundles **that are already in the queue** (`while ids.len() < batch.mesh_hop`
+peeks at what is present and stops). Nothing ever waits for a batch to fill.
+Classical Nagle-style batching trades latency for efficiency; this trades
+nothing, because the queue is already full of waiting bundles — the constraint
+was never "not enough to send", it was "not enough slots to send it in".
+
+Which sharpens the document's main finding rather than complicating it. Both
+aggregation levers raise **information per wake slot**, and doing so shortens
+every queue in the mesh, so bundles wait behind fewer other bundles. Delivery and
+delay improve together because they were both symptoms of the same scarcity.
+
+### Reactive discovery: the cost, finally measured directly
+
+`stall_no_belief` was always the *symptom*. `first_hop_latency` is the thing
+itself — how long a bundle sits at its origin before it can move at all:
+
+| variant | first hop | delivery |
+|---|---|---|
+| proactive | **7.9** | 52.6 |
+| reactive | **29.9** | 53.9 |
+| reactive + overhear | **15.1** | 49.4 |
+| reactive + expanding ring | **40.7** | 57.1 |
+
+Reactive discovery costs **3.8× the time to get moving**. Reply overhearing
+halves that (29.9 → 15.1), which is the crispest statement yet of what it does:
+it does not improve routes, it removes waiting.
+
+And the expanding ring's negative delivery result is confirmed as a latency
+story rather than inferred from a proxy: **+10.8 rounds before a bundle can
+move**, because each unanswered ring costs a full round trip at one hop per wake
+slot.
+
+### The trap: delivery latency is conditioned on delivery
+
+Read the level table naively and link-state is the fastest protocol in the
+project — 26 rounds against proactive's 53. It is not. **It is only timing the
+bundles it managed to deliver**, and it delivers the easy ones:
+
+| | delivered/orig | delivery latency | believed depth |
+|---|---|---|---|
+| `lsa=2` | 25.8% | **26.0** | 2.69 |
+| `lsa=4` | 34.9% | 28.9 | 3.19 |
+| `lsa=16` | 45.6% | **44.2** | 4.27 |
+
+**Latency rises monotonically as the protocol gets better.** Widening `lsa`
+lets balloons see further, so deeper bundles start arriving — and deeper bundles
+are slower. The fast figure at `lsa=2` is survivorship: only balloons within two
+or three hops of a tower ever get a route, and of course those are quick.
+
+So `delivery_latency` **cannot be compared across protocols with different
+delivery rates.** It is the same class of error as `completion_rate` flattering
+protocols that strand bundles (Coda 2), and it is worth stating as a rule:
+
+> Any metric conditioned on success is only comparable between configurations
+> that succeed at the same rate. Compare it *within* a protocol across a
+> parameter, or pair it with the delivery rate it is conditioned on.
+
+The aggregation contrasts above are safe on this point, and it is worth saying
+why rather than asserting it: digest+batch **raises** delivery from 52% to 85%
+while **lowering** latency 20 rounds. The selection effect pushes in the opposite
+direction to the measured result — a harder set of bundles arriving faster — so
+it cannot be manufacturing that finding.
+
 ## Limitations
 
 - **Zero wind for the main tables.** The protocol comparison has since been
@@ -597,6 +697,11 @@ are not reproducible; these are.
   of whole neighbour lists — are not implemented. Incremental updates are the
   more promising of the two here, since they attack payload size, and payload
   size is what MPR turned out not to be charged for.
+- **Latency is measured only for bundles that arrive.** See Coda 3 — the figure
+  is conditioned on success, so it is not comparable between configurations with
+  different delivery rates. There is deliberately no "latency" for a bundle that
+  went to satellite (that is just the timeout, 150 by construction) or for one
+  still in flight at the cutoff.
 - **Airtime is charged per slot, not per byte.** This is the model choice that
   made MPR's measured gain ten times smaller than predicted (see Coda 2), and it
   applies to every result in this file: any mechanism whose benefit is "fewer

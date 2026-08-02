@@ -165,6 +165,11 @@ Real high-altitude radios cannot afford to listen continuously; they wake,
 transmit, and sleep. If they didn't, every belief would instantly equal ground
 truth and there would be nothing to simulate.
 
+**Measured:** a bundle waits a mean of **7.9 rounds** before it moves at all
+(`first_hop_latency`) — about 1.6 wake slots, since a balloon may also stall on
+the checks in Act 3. Under reactive discovery, where the route has to be
+requested before anything can happen, it is **29.9**.
+
 ---
 
 ## Act 3 — the first hop (round 1005)
@@ -273,6 +278,11 @@ points**, then saturated, at which point the limit moved back into the mesh.
 Our bundle is delivered. `stats.delivered += 1`. Its final `path` is
 `[417, 112, 88, 31]`.
 
+**Measured:** delivery takes a mean of **52.6 rounds** from origination, with a
+p95 of **138** — most of a bundle's 150-round life. Our 40 is a comfortable trip.
+Read that figure carefully, though: it is an average over bundles that *arrived*,
+so it says nothing about the ones that didn't.
+
 ---
 
 ## Act 6 — the receipt
@@ -304,6 +314,12 @@ Measured under source-routed acks at the shipped settings: **37% of delivered
 bundles** are in that band. The origin's `outstanding` sits at `Pending`, then
 times out, and b417 concludes its telemetry was lost. It was not. It is on the
 ground, in a database, being processed.
+
+**Measured:** for the receipts that do get home, the round trip averages **59.1
+rounds** from origination — against 52.6 for the delivery itself. So the last
+~6.5 rounds are the balloon waiting to learn something already true. That gap is
+what the ack mechanism costs, and it is the smaller half of the story: the
+larger half is the 37% for whom the gap never closes at all.
 
 ---
 
@@ -382,6 +398,15 @@ transmission carries several bundles. Worth **+25 points** — the larger lever.
 Together: **72.3% → 95.0%.** They are *substitutes*, not complements — each is
 worth less when the other is in place, because both spend the same currency:
 wake slots.
+
+**And they cost no time — they save it.** Delivery latency falls **20 rounds**
+with both enabled (52.6 → 32.5), p95 falls 138 → 79. That is worth pausing on,
+because the obvious expectation is the opposite: batching normally trades latency
+for efficiency by waiting for a fuller payload. It doesn't here, because a wake
+slot carries whatever is *already queued* and never waits to fill. The queue was
+never short of bundles; it was short of slots. Shorten every queue in the mesh
+and bundles wait behind fewer other bundles, so delay and delivery improve
+together — both were symptoms of the same scarcity.
 
 Which is the lesson to carry out of this document. Route quality was never the
 binding constraint. **Information per wake slot** was.

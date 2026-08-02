@@ -334,7 +334,7 @@ impl MeshProtocol for DvDtn {
         // Origins that heard their own delivery announced this round.
         for a in result.digest_acks {
             if let Some(node) = self.nodes.get_mut(a.node) {
-                bundle::apply_digest_ack(node, a.seq, &mut self.stats);
+                bundle::apply_digest_ack(node, a.seq, ctx.round, &mut self.stats);
             }
         }
         events.extend(result.hops.into_iter().map(|h| CommsEvent {
@@ -413,7 +413,15 @@ impl MeshProtocol for DvDtn {
             .ratio("ack_rate", st.ack_rate())
             .ratio("stall_rate", st.stall_rate())
             .ratio("delivered_per_slot_used", st.delivered_per_slot_used())
-            .ratio("ceiling_utilisation", st.ceiling_utilisation(&self.params));
+            .ratio("ceiling_utilisation", st.ceiling_utilisation(&self.params))
+            // Latency, in comms rounds. Means are exact; percentiles carry
+            // one-bucket (5-round) resolution, which is also one wake slot —
+            // the granularity latency actually moves in here.
+            .ratio("delivery_latency_mean", st.delivery_latency.mean())
+            .ratio("delivery_latency_p95", st.delivery_latency.percentile(0.95))
+            .ratio("ack_latency_mean", st.ack_latency.mean())
+            .ratio("ack_latency_p95", st.ack_latency.percentile(0.95))
+            .ratio("first_hop_latency_mean", st.first_hop_latency.mean());
         if self.params.discovery == Discovery::LinkState {
             let ls = &self.linkstate;
             let (r, u) = (ls.records_redundant, ls.records_useful);
