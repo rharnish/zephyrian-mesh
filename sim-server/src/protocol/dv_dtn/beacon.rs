@@ -13,13 +13,15 @@
 //
 // Consequence, and the point of the design: belief and ground truth drift
 // apart in both directions. A balloon keeps believing in a route for up to
-// BELIEF_MAX_AGE_ROUNDS after the link actually broke, and can believe it is
+// belief_max_age_rounds after the link actually broke, and can believe it is
 // isolated while sitting on a perfectly good path nobody has told it about.
 // Neither is a bug to fix.
 
 use crate::balloon::Balloon;
-use crate::config::*;
-use crate::link_detection::{Edge, NodeKey};
+use super::params::{AckPolicy, DvDtnParams, Metric};
+use super::{DvNode, TowerBeacon};
+use crate::link_detection::NodeKey;
+use crate::mesh_adjacency::MeshAdjacency;
 use crate::tower::Tower;
 use rand::Rng;
 use std::collections::HashMap;
@@ -47,8 +49,8 @@ impl RouteBelief {
     /// neighbour last repeated it. The latter is self-sustaining: balloons cut
     /// off from every tower keep renewing each other's dead routes by passing
     /// them in circles, and the field never forgets.
-    pub fn is_expired(&self, round: u64) -> bool {
-        round.saturating_sub(self.emitted_at_round) > BELIEF_MAX_AGE_ROUNDS
+    pub fn is_expired(&self, round: u64, max_age: u64) -> bool {
+        round.saturating_sub(self.emitted_at_round) > max_age
     }
 
     pub fn age(&self, round: u64) -> u64 {
@@ -56,82 +58,18 @@ impl RouteBelief {
     }
 }
 
-/// Who can hear whom. Rebuilt from the edge list whenever links are
-/// recomputed. Balloon slots are indexed by position in the visible slice
-/// (== balloon id, since ids are assigned sequentially and never reused);
-/// tower slots by position in the tower vec, since tower ids *can* be removed.
-#[derive(Default)]
-pub struct MeshAdjacency {
-    balloon_adj: Vec<Vec<u32>>,
-    tower_adj: Vec<Vec<u32>>,
-    /// A tower this balloon can currently hear directly, if any. Maintained
-    /// alongside `tower_adj` so bundle forwarding can test "can I hand this
-    /// straight to the ground?" without scanning every tower.
-    balloon_tower: Vec<Option<u32>>,
-}
-
-impl MeshAdjacency {
-    pub fn rebuild(&mut self, edges: &[Edge], n_balloons: usize, towers: &[Tower]) {
-        self.balloon_adj.clear();
-        self.balloon_adj.resize(n_balloons, Vec::new());
-        self.tower_adj.clear();
-        self.tower_adj.resize(towers.len(), Vec::new());
-        self.balloon_tower.clear();
-        self.balloon_tower.resize(n_balloons, None);
-
-        let tower_slot: HashMap<u32, usize> =
-            towers.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-
-        for e in edges {
-            match (e.a, e.b) {
-                (NodeKey::Balloon(x), NodeKey::Balloon(y)) => {
-                    // Balloon-to-balloon: symmetric, both directions.
-                    if let Some(v) = self.balloon_adj.get_mut(x as usize) {
-                        v.push(y);
-                    }
-                    if let Some(v) = self.balloon_adj.get_mut(y as usize) {
-                        v.push(x);
-                    }
-                }
-                // Tower-to-balloon is only ever used in the tower->balloon
-                // direction: towers originate beacons, they don't relay them.
-                (NodeKey::Balloon(b_id), NodeKey::Tower(t_id))
-                | (NodeKey::Tower(t_id), NodeKey::Balloon(b_id)) => {
-                    if let Some(&slot) = tower_slot.get(&t_id) {
-                        self.tower_adj[slot].push(b_id);
-                        if let Some(e) = self.balloon_tower.get_mut(b_id as usize) {
-                            *e = Some(t_id);
-                        }
-                    }
-                }
-                (NodeKey::Tower(_), NodeKey::Tower(_)) => {}
-            }
-        }
-    }
-
-    /// Balloons this one can currently hear. Empty if it has no live links.
-    pub fn neighbors(&self, i: usize) -> &[u32] {
-        self.balloon_adj.get(i).map_or(&[], |v| v.as_slice())
-    }
-
-    pub fn is_neighbor(&self, i: usize, id: u32) -> bool {
-        self.neighbors(i).contains(&id)
-    }
-
-    /// A tower this balloon can hand a bundle straight to, if any.
-    pub fn tower_in_range(&self, i: usize) -> Option<u32> {
-        self.balloon_tower.get(i).copied().flatten()
-    }
-}
-
 /// Should `new` replace `cur`? This is the rebroadcast-suppression rule: a
 /// beacon that doesn't improve the belief is dropped rather than relayed,
 /// which is what stops a flood from becoming a broadcast storm.
-fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
+pub(super) fn should_adopt(
+    cur: Option<&RouteBelief>,
+    new: &RouteBelief,
+    params: &DvDtnParams,
+) -> bool {
     let Some(cur) = cur else { return true };
-    if crate::ablation::prefer_nearer() {
-        // Ablation: nearest wins, freshness only breaks ties. Beliefs still drain
-        // when towers go away, because that property comes from expiry (which is
+    if params.metric == Metric::NearestFirst {
+        // Nearest wins, freshness only breaks ties. Beliefs still drain when
+        // towers go away, because that property comes from expiry (which is
         // keyed on emitted_at_round) rather than from this comparison.
         return new.hop_count < cur.hop_count
             || (new.hop_count == cur.hop_count && new.emitted_at_round > cur.emitted_at_round);
@@ -148,16 +86,17 @@ fn should_adopt(cur: Option<&RouteBelief>, new: &RouteBelief) -> bool {
     new.hop_count < cur.hop_count
 }
 
-fn next_slot(round: u64, rng: &mut impl Rng) -> u64 {
-    let jitter = rng.gen_range(0..=(2 * BEACON_JITTER_ROUNDS)) as i64 - BEACON_JITTER_ROUNDS as i64;
-    let interval = (BEACON_INTERVAL_ROUNDS as i64 + jitter).max(1) as u64;
+pub(super) fn next_slot(round: u64, params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
+    let j = params.beacon_jitter_rounds;
+    let jitter = rng.gen_range(0..=(2 * j)) as i64 - j as i64;
+    let interval = (params.beacon_interval_rounds as i64 + jitter).max(1) as u64;
     round + interval
 }
 
 /// Randomized initial beacon phase, so the whole fleet doesn't transmit on the
 /// same round. Called at spawn.
-pub fn initial_slot(rng: &mut impl Rng) -> u64 {
-    rng.gen_range(0..BEACON_INTERVAL_ROUNDS)
+pub fn initial_slot(params: &DvDtnParams, rng: &mut (impl Rng + ?Sized)) -> u64 {
+    rng.gen_range(0..params.beacon_interval_rounds)
 }
 
 /// One beacon transmission from this round, for the wavefront animation
@@ -172,33 +111,54 @@ pub struct BeaconHop {
     pub epoch: u64,
 }
 
+/// An origin learning, from a digest that reached it, that its bundle landed.
+/// Returned rather than applied in place because resolving it also has to
+/// touch stats and the retained telemetry record, which live with bundles.
+pub struct DigestAck {
+    pub node: usize,
+    pub seq: u64,
+}
+
 pub struct BeaconStepResult {
     /// Indices of balloons that woke and transmitted this round. Bundle
     /// forwarding reuses this set rather than keeping its own schedule: a
     /// radio that is awake is awake for both, which is what makes
-    /// BEACON_INTERVAL_ROUNDS the forwarding rate as well (see
+    /// beacon_interval_rounds the forwarding rate as well (see
     /// docs/design/MESH_COMMS_DESIGN.md §4).
     pub awake: Vec<usize>,
     /// Every offer made this round, for whichever tower(s) a client wants to
-    /// animate. Not filtered here — see Snapshot::beacon_hops.
+    /// animate. Not filtered here — see Snapshot::comms_events.
     pub hops: Vec<BeaconHop>,
+    /// Origins that heard their own delivery announced (AckPolicy::Digest).
+    pub digest_acks: Vec<DigestAck>,
 }
 
-/// Advance discovery by one round. `balloons` must be the visible slice — only
-/// visible balloons participate in link detection, so only they can hear or
-/// be heard. (A balloon hidden by the slider keeps its belief until it simply
-/// ages out, and rediscovers from scratch if it becomes visible again.)
+/// Advance discovery by one round. `nodes` and `balloons` must be the visible
+/// slices, index-aligned — only visible balloons participate in link
+/// detection, so only they can hear or be heard. (A balloon hidden by the
+/// slider keeps its belief until it simply ages out, and rediscovers from
+/// scratch if it becomes visible again.)
+///
+/// `balloons` is read-only: discovery reads identity, never physics state.
+// The argument list is wide because all three discovery modes (this,
+// aodv::step, linkstate::step) deliberately share a parallel contract:
+// take the world read-only, mutate protocol state, return the wake set.
+// Bundling them into a struct would hide that symmetry to satisfy a lint.
+#[allow(clippy::too_many_arguments)]
 pub fn step(
-    balloons: &mut [Balloon],
-    towers: &mut [Tower],
+    nodes: &mut [DvNode],
+    balloons: &[Balloon],
+    tower_state: &mut HashMap<u32, TowerBeacon>,
+    towers: &[Tower],
     adj: &MeshAdjacency,
+    params: &DvDtnParams,
     round: u64,
-    rng: &mut impl Rng,
+    rng: &mut (impl Rng + ?Sized),
 ) -> BeaconStepResult {
     // 1. Expire first, so nothing rebroadcasts a belief it should have dropped.
-    for b in balloons.iter_mut() {
-        if b.belief.is_some_and(|bel| bel.is_expired(round)) {
-            b.belief = None;
+    for n in nodes.iter_mut() {
+        if n.belief.is_some_and(|bel| bel.is_expired(round, params.belief_max_age_rounds)) {
+            n.belief = None;
         }
     }
 
@@ -207,21 +167,44 @@ pub fn step(
     //    applying immediately would let a beacon race across many hops within
     //    a single round depending on iteration order, collapsing exactly the
     //    propagation delay we're modelling.
-    let mut offers: Vec<(usize, RouteBelief)> = Vec::new();
+    // (target, belief, index into `digests`). The digest is shared by every
+    // offer one transmitter makes this round, so it is stored once and
+    // referenced — a beacon is a broadcast, and cloning it per neighbour would
+    // be both wasteful and a poor model of one.
+    let mut offers: Vec<(usize, RouteBelief, usize)> = Vec::new();
+    let mut digests: Vec<Vec<(u32, u64)>> = Vec::new();
     let mut hops: Vec<BeaconHop> = Vec::new();
+    let digest_on = params.ack_policy == AckPolicy::Digest;
 
-    for (slot, t) in towers.iter_mut().enumerate() {
-        if round < t.next_beacon_round {
+    for (slot, t) in towers.iter().enumerate() {
+        let ts = tower_state.entry(t.id).or_default();
+        if round < ts.next_round {
             continue;
         }
-        t.next_beacon_round = next_slot(round, rng);
-        t.beacon_epoch += 1;
-        for &b_id in adj.tower_adj.get(slot).into_iter().flatten() {
+        ts.next_round = next_slot(round, params, rng);
+        ts.epoch += 1;
+        let epoch = ts.epoch;
+        // Announce the newest deliveries this tower has taken. Older than a
+        // belief lifetime and the origin has already given up, so saying so
+        // tells it nothing it can act on.
+        let d_idx = digests.len();
+        digests.push(if digest_on {
+            ts.recent
+                .iter()
+                .rev()
+                .filter(|(_, _, at)| round.saturating_sub(*at) <= params.belief_max_age_rounds)
+                .take(params.ack_digest_entries)
+                .map(|(o, s, _)| (*o, *s))
+                .collect()
+        } else {
+            Vec::new()
+        });
+        for &b_id in adj.tower_neighbors(slot) {
             let belief = RouteBelief {
                 tower_id: t.id,
                 hop_count: 1,
                 next_hop: None,
-                epoch: t.beacon_epoch,
+                epoch,
                 emitted_at_round: round,
             };
             hops.push(BeaconHop {
@@ -231,26 +214,31 @@ pub fn step(
                 hop_count: belief.hop_count,
                 epoch: belief.epoch,
             });
-            offers.push((b_id as usize, belief));
+            offers.push((b_id as usize, belief, d_idx));
         }
     }
 
     let mut awake: Vec<usize> = Vec::new();
-    for i in 0..balloons.len() {
-        if round < balloons[i].next_beacon_round {
+    for i in 0..nodes.len() {
+        if round < nodes[i].next_beacon_round {
             continue;
         }
-        balloons[i].next_beacon_round = next_slot(round, rng);
+        nodes[i].next_beacon_round = next_slot(round, params, rng);
         awake.push(i);
         // A balloon with no belief has nothing to say. Silence is itself
         // information the neighbours never get — they can't tell "no route"
         // from "not transmitting".
-        let Some(belief) = balloons[i].belief else { continue };
-        if belief.hop_count >= BEACON_MAX_HOPS {
+        let Some(belief) = nodes[i].belief else { continue };
+        if belief.hop_count >= params.beacon_max_hops {
             continue;
         }
         let id = balloons[i].id;
-        for &n_id in adj.balloon_adj.get(i).into_iter().flatten() {
+        // A relay repeats the announcement it heard, verbatim, exactly as it
+        // repeats `emitted_at_round` — that is what makes the digest flood
+        // outward for free rather than only reaching the tower's neighbours.
+        let d_idx = digests.len();
+        digests.push(if digest_on { nodes[i].ack_digest.clone() } else { Vec::new() });
+        for &n_id in adj.neighbors(i) {
             // `emitted_at_round` is inherited untouched via `..belief` —
             // relaying does not make the news any newer.
             let offer = RouteBelief {
@@ -265,31 +253,53 @@ pub fn step(
                 hop_count: offer.hop_count,
                 epoch: offer.epoch,
             });
-            offers.push((n_id as usize, offer));
+            offers.push((n_id as usize, offer, d_idx));
         }
     }
 
     // 3. Apply.
-    for (idx, offer) in offers {
-        let Some(b) = balloons.get_mut(idx) else { continue };
-        if offer.next_hop == Some(b.id) {
+    let mut digest_acks: Vec<DigestAck> = Vec::new();
+    for (idx, offer, d_idx) in offers {
+        let Some(id) = balloons.get(idx).map(|b| b.id) else { continue };
+        let Some(n) = nodes.get_mut(idx) else { continue };
+
+        // Hearing a delivery announced is independent of whether the route it
+        // arrived on is worth adopting — the balloon received the
+        // transmission either way. Checked before the adoption rules for that
+        // reason, and skipped entirely for the overwhelming majority of
+        // balloons, which have nothing outstanding.
+        if digest_on {
+            if let Some(out) = n.outstanding.as_ref() {
+                if out.state == crate::protocol::dv_dtn::bundle::AckState::Pending
+                    && digests[d_idx].iter().any(|&(o, s)| o == id && s == out.seq)
+                {
+                    digest_acks.push(DigestAck { node: idx, seq: out.seq });
+                }
+            }
+        }
+
+        if offer.next_hop == Some(id) {
             continue; // never learn a route to the ground from yourself
         }
-        if offer.is_expired(round) {
+        if offer.is_expired(round, params.belief_max_age_rounds) {
             continue; // news too old to act on, whoever just repeated it
         }
-        if should_adopt(b.belief.as_ref(), &offer) {
-            b.belief = Some(offer);
+        if should_adopt(n.belief.as_ref(), &offer, params) {
+            n.belief = Some(offer);
+            if digest_on {
+                n.ack_digest = digests[d_idx].clone();
+            }
         }
     }
 
-    BeaconStepResult { awake, hops }
+    BeaconStepResult { awake, hops, digest_acks }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::link_detection::{Edge, NodeKey};
+use crate::mesh_adjacency::MeshAdjacency;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -307,51 +317,97 @@ mod tests {
         Edge { a: node_key(a), b: node_key(b) }
     }
 
+    /// Balloons plus their protocol state plus tower beacon schedules, which
+    /// now live in three places rather than one. Bundling them keeps each test
+    /// about discovery rather than about wiring.
+    struct Field {
+        balloons: Vec<Balloon>,
+        nodes: Vec<DvNode>,
+        towers: Vec<Tower>,
+        tower_state: HashMap<u32, TowerBeacon>,
+        params: DvDtnParams,
+    }
+
+    impl Field {
+        fn new(n: u32, towers: Vec<Tower>) -> Self {
+            Field {
+                balloons: (0..n).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect(),
+                nodes: vec![DvNode::default(); n as usize],
+                tower_state: towers.iter().map(|t| (t.id, TowerBeacon::default())).collect(),
+                towers,
+                params: DvDtnParams::default(),
+            }
+        }
+
+        fn step(&mut self, adj: &MeshAdjacency, round: u64, rng: &mut impl Rng) {
+            super::step(
+                &mut self.nodes,
+                &self.balloons,
+                &mut self.tower_state,
+                &self.towers,
+                adj,
+                &self.params,
+                round,
+                rng,
+            );
+        }
+
+        fn belief(&self, i: usize) -> Option<RouteBelief> {
+            self.nodes[i].belief
+        }
+    }
+
     /// A chain t0 - b0 - b1 - b2 should light up one hop at a time, not all at
     /// once: the propagation delay is the whole point of the design.
     #[test]
     fn belief_propagates_outward_one_hop_at_a_time() {
-        let mut balloons: Vec<Balloon> =
-            (0..3).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect();
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(3, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2")], 3, &towers);
+        adj.rebuild(&[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2")], 3, &f.towers);
         let mut rng = StdRng::seed_from_u64(7);
 
         let mut first_seen = [None; 3];
         for round in 0..60u64 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
-            for (i, b) in balloons.iter().enumerate() {
-                if first_seen[i].is_none() && b.belief.is_some() {
-                    first_seen[i] = Some(round);
+            f.step(&adj, round, &mut rng);
+            for (i, seen) in first_seen.iter_mut().enumerate() {
+                if seen.is_none() && f.belief(i).is_some() {
+                    *seen = Some(round);
                 }
             }
         }
 
         let t = first_seen.map(|x| x.expect("every balloon in the chain should learn a route"));
         assert!(t[0] < t[1] && t[1] < t[2], "beacon should reach nearer balloons first, got {t:?}");
-        assert_eq!(balloons[0].belief.unwrap().hop_count, 1);
-        assert_eq!(balloons[1].belief.unwrap().hop_count, 2);
-        assert_eq!(balloons[2].belief.unwrap().hop_count, 3);
+        assert_eq!(f.belief(0).unwrap().hop_count, 1);
+        assert_eq!(f.belief(1).unwrap().hop_count, 2);
+        assert_eq!(f.belief(2).unwrap().hop_count, 3);
         // Learned next-hop must point back the way the beacon came.
-        assert_eq!(balloons[0].belief.unwrap().next_hop, None);
-        assert_eq!(balloons[1].belief.unwrap().next_hop, Some(0));
-        assert_eq!(balloons[2].belief.unwrap().next_hop, Some(1));
+        assert_eq!(f.belief(0).unwrap().next_hop, None);
+        assert_eq!(f.belief(1).unwrap().next_hop, Some(0));
+        assert_eq!(f.belief(2).unwrap().next_hop, Some(1));
     }
 
     /// The tower's first hop should surface as a hop from the tower node
     /// itself, not from whatever balloon happens to relay it later.
     #[test]
     fn tower_origin_offer_produces_a_hop_from_the_tower() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0")], 1, &towers);
+        adj.rebuild(&[edge("t0", "b0")], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(7);
 
         let mut round = 0u64;
         loop {
-            let result = step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            let result = super::step(
+                &mut f.nodes,
+                &f.balloons,
+                &mut f.tower_state,
+                &f.towers,
+                &adj,
+                &f.params,
+                round,
+                &mut rng,
+            );
             if let Some(hop) = result.hops.iter().find(|h| h.to_balloon == 0) {
                 assert_eq!(hop.from, NodeKey::Tower(0));
                 assert_eq!(hop.hop_count, 1);
@@ -366,44 +422,42 @@ mod tests {
     /// and only then does the balloon consider itself ungrounded.
     #[test]
     fn belief_expires_after_link_is_cut() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[edge("t0", "b0")], 1, &towers);
+        adj.rebuild(&[edge("t0", "b0")], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(11);
 
         let mut round = 0u64;
-        while round < 30 && balloons[0].belief.is_none() {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+        while round < 30 && f.belief(0).is_none() {
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
-        assert!(balloons[0].belief.is_some(), "should have learned a route");
+        assert!(f.belief(0).is_some(), "should have learned a route");
 
         // Sever every link, keep ticking.
-        adj.rebuild(&[], 1, &towers);
+        adj.rebuild(&[], 1, &f.towers);
         let cut_at = round;
-        while balloons[0].belief.is_some() {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+        while f.belief(0).is_some() {
+            f.step(&adj, round, &mut rng);
             round += 1;
             assert!(round - cut_at < 100, "belief should have expired by now");
         }
         // It must outlive the cut by roughly the timeout, not vanish instantly —
         // that lag is the belief/truth divergence we want to visualize.
-        assert!(round - cut_at > BELIEF_MAX_AGE_ROUNDS / 4);
+        assert!(round - cut_at > f.params.belief_max_age_rounds / 4);
     }
 
     /// An isolated balloon must never invent a route. "No signal" and "no
     /// route" have to look the same from inside.
     #[test]
     fn isolated_balloon_never_believes_it_is_grounded() {
-        let mut balloons: Vec<Balloon> = vec![Balloon::new(0, 0.0, 0.0, 10000.0)];
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(1, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&[], 1, &towers);
+        adj.rebuild(&[], 1, &f.towers);
         let mut rng = StdRng::seed_from_u64(3);
         for round in 0..200 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
-            assert!(balloons[0].belief.is_none());
+            f.step(&adj, round, &mut rng);
+            assert!(f.belief(0).is_none());
         }
     }
 
@@ -417,11 +471,46 @@ mod tests {
             emitted_at_round: 100,
         };
         let short = RouteBelief { hop_count: 3, next_hop: Some(2), ..long };
-        assert!(should_adopt(Some(&long), &short));
-        assert!(!should_adopt(Some(&short), &long));
+        assert!(should_adopt(Some(&long), &short, &DvDtnParams::default()));
+        assert!(!should_adopt(Some(&short), &long, &DvDtnParams::default()));
         // A fresher wave supersedes regardless of hop count.
         let fresher = RouteBelief { epoch: 5, emitted_at_round: 105, hop_count: 8, ..long };
-        assert!(should_adopt(Some(&short), &fresher));
+        assert!(should_adopt(Some(&short), &fresher, &DvDtnParams::default()));
+    }
+
+    /// The metric is a real rule swap, not a tiebreak tweak: under
+    /// NearestFirst a *shorter but older* route beats a fresher long one,
+    /// which is exactly backwards from what ships. (Measured: helps below
+    /// percolation, hurts above it — see DvDtnParams::metric.)
+    #[test]
+    fn nearest_first_prefers_a_shorter_path_over_a_fresher_wave() {
+        let near_but_old = RouteBelief {
+            tower_id: 0,
+            hop_count: 2,
+            next_hop: Some(1),
+            epoch: 4,
+            emitted_at_round: 100,
+        };
+        let far_but_fresh = RouteBelief {
+            hop_count: 9,
+            next_hop: Some(2),
+            epoch: 5,
+            emitted_at_round: 130,
+            ..near_but_old
+        };
+
+        let shipped = DvDtnParams::default();
+        let nearest = DvDtnParams { metric: Metric::NearestFirst, ..Default::default() };
+
+        // Freshest-first takes the newer wave however long its path.
+        assert!(should_adopt(Some(&near_but_old), &far_but_fresh, &shipped));
+        // Nearest-first refuses it, and would take the short one back.
+        assert!(!should_adopt(Some(&near_but_old), &far_but_fresh, &nearest));
+        assert!(should_adopt(Some(&far_but_fresh), &near_but_old, &nearest));
+        // Freshness still breaks ties at equal hop count under nearest-first.
+        let same_hops_fresher =
+            RouteBelief { hop_count: 2, emitted_at_round: 130, ..near_but_old };
+        assert!(should_adopt(Some(&near_but_old), &same_hops_fresher, &nearest));
     }
 
     /// The laundering guard: re-hearing news you already hold must not renew
@@ -439,7 +528,7 @@ mod tests {
         // A neighbour relays the very same wave back, one hop longer and
         // stamped as heard right now. It must be rejected outright.
         let echoed = RouteBelief { hop_count: 4, next_hop: Some(2), ..held };
-        assert!(!should_adopt(Some(&held), &echoed));
+        assert!(!should_adopt(Some(&held), &echoed, &DvDtnParams::default()));
     }
 
     /// Cut every tower loose and the whole field must forget, not settle into
@@ -447,9 +536,7 @@ mod tests {
     #[test]
     fn beliefs_drain_completely_once_towers_are_unreachable() {
         let n = 12usize;
-        let mut balloons: Vec<Balloon> =
-            (0..n as u32).map(|i| Balloon::new(i, 0.0, 0.0, 10000.0)).collect();
-        let mut towers = vec![Tower::new(0, 0.0, 0.0, 30.0)];
+        let mut f = Field::new(n as u32, vec![Tower::new(0, 0.0, 0.0, 30.0)]);
         // Tower feeds b0; the rest form a densely interconnected clump, which
         // is the structure that lets stale routes circulate.
         let mut edges = vec![edge("t0", "b0")];
@@ -459,27 +546,27 @@ mod tests {
             }
         }
         let mut adj = MeshAdjacency::default();
-        adj.rebuild(&edges, n, &towers);
+        adj.rebuild(&edges, n, &f.towers);
         let mut rng = StdRng::seed_from_u64(5);
 
         let mut round = 0u64;
         while round < 120 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
         assert!(
-            balloons.iter().all(|b| b.belief.is_some()),
+            (0..n).all(|i| f.belief(i).is_some()),
             "everything should be reachable while the tower is connected"
         );
 
         // Sever only the tower link; the balloon-to-balloon clump stays intact.
-        adj.rebuild(&edges[1..], n, &towers);
+        adj.rebuild(&edges[1..], n, &f.towers);
         let cut_at = round;
         while round < cut_at + 300 {
-            step(&mut balloons, &mut towers, &adj, round, &mut rng);
+            f.step(&adj, round, &mut rng);
             round += 1;
         }
-        let survivors = balloons.iter().filter(|b| b.belief.is_some()).count();
+        let survivors = (0..n).filter(|&i| f.belief(i).is_some()).count();
         assert_eq!(survivors, 0, "{survivors} balloons kept a dead route alive");
     }
 }

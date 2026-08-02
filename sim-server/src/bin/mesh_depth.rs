@@ -51,8 +51,8 @@ fn depths_from_towers(
         let d = depth[&cur];
         if let Some(nbrs) = adj.get(&cur) {
             for &n in nbrs {
-                if !depth.contains_key(&n) {
-                    depth.insert(n, d + 1);
+                if let std::collections::hash_map::Entry::Vacant(slot) = depth.entry(n) {
+                    slot.insert(d + 1);
                     q.push_back(n);
                 }
             }

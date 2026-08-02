@@ -88,8 +88,9 @@ fn main() {
     let sampled: Vec<usize> = (0..world.visible_count).step_by(world.visible_count.max(1) / 3 + 1).collect();
     for i in sampled.iter().take(3) {
         let b = &world.balloons[*i];
-        println!("balloon {} — {} record(s) retained, alt now {:.0} m", b.id, b.log.len(), b.alt);
-        for r in b.log.iter().take(4) {
+        let node = &world.dv_dtn().nodes[*i];
+        println!("balloon {} — {} record(s) retained, alt now {:.0} m", b.id, node.log.len(), b.alt);
+        for r in node.log.iter().take(4) {
             println!(
                 "    seq {:>3}  round {:>5}  ({:>8.2}, {:>7.2}) {:>6.0} m  \
                  T {:>6.2} K  P {:>8.3} hPa  RH {:>6.3}%",
@@ -97,23 +98,25 @@ fn main() {
                 r.pressure_hpa, r.humidity_pct
             );
         }
-        if b.log.len() > 4 {
-            println!("    ... {} more", b.log.len() - 4);
+        if node.log.len() > 4 {
+            println!("    ... {} more", node.log.len() - 4);
         }
     }
 
     // --- Invariants ---------------------------------------------------------
+    let log_capacity = world.dv_dtn().params.comms_log_capacity;
     let mut total_records = 0u64;
     let mut checked_bundles = 0u64;
-    for b in world.balloons[..world.visible_count].iter() {
+    for (i, b) in world.balloons[..world.visible_count].iter().enumerate() {
+        let node = &world.dv_dtn().nodes[i];
         assert!(
-            b.log.len() <= COMMS_LOG_CAPACITY,
-            "balloon {} log overflowed: {} > {COMMS_LOG_CAPACITY}",
+            node.log.len() <= log_capacity,
+            "balloon {} log overflowed: {} > {log_capacity}",
             b.id,
-            b.log.len()
+            node.log.len()
         );
         let mut prev_seq: Option<u64> = None;
-        for r in b.log.iter() {
+        for r in node.log.iter() {
             total_records += 1;
             assert_eq!(r.origin_id, b.id, "record filed under the wrong balloon");
             assert!(
@@ -145,14 +148,15 @@ fn main() {
             prev_seq = Some(r.seq);
         }
         // The copy in flight must match the copy retained.
-        for bd in b.queue.iter() {
+        for bd in node.queue.iter() {
             checked_bundles += 1;
             assert_eq!(bd.record.origin_id, bd.origin_id, "bundle carries another balloon's record");
             assert_eq!(bd.record.seq, bd.seq, "bundle and its record disagree on seq");
         }
     }
 
-    let with_records = world.balloons[..world.visible_count].iter().filter(|b| !b.log.is_empty()).count();
+    let with_records =
+        world.dv_dtn().nodes[..world.visible_count].iter().filter(|n| !n.log.is_empty()).count();
     println!(
         "\n{total_records} record(s) across {with_records}/{} balloons; \
          {checked_bundles} in-flight bundle(s) cross-checked against their origin's log.",

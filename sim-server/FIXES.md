@@ -55,7 +55,7 @@ and tower ids.
 - `link_detection::Edge`, `union_find::UnionFind`, and the link-recompute
   block in `sim.rs` now carry `NodeKey` instead of `String` — no more
   per-node `format!`/`.clone()` on the throttled link-recompute path.
-- `beacon.rs`'s `parse_key` (which re-parsed the strings `Edge` had just
+- `beacon.rs`'s `parse_key` (now `protocol/dv_dtn/beacon.rs`; it re-parsed the strings `Edge` had just
   formatted) is gone; `MeshAdjacency::rebuild` matches on `NodeKey` directly.
 - `bin/mesh_depth.rs` had the same string-keyed adjacency map and was
   updated too (missed by the original review, caught by the build).
@@ -121,6 +121,8 @@ them. Flagging for whoever picks this up next.
   link-recompute block is where the `NodeKey` fix above lives.
 - [src/link_detection.rs](src/link_detection.rs) — `NodeKey` and
   `wire_pair_key`.
-- [src/bundle.rs](src/bundle.rs) and
-  [src/bundle_stats.rs](src/bundle_stats.rs) — the split above.
+- [src/protocol/dv_dtn/bundle.rs](src/protocol/dv_dtn/bundle.rs) and
+  [src/protocol/dv_dtn/bundle_stats.rs](src/protocol/dv_dtn/bundle_stats.rs) —
+  the split above. Both moved under `protocol/` when the comms protocol became
+  pluggable; the split itself is unchanged.
 - [src/main.rs](src/main.rs) — the `*Body` -> `Command` `From` impls.

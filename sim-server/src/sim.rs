@@ -8,6 +8,8 @@ use crate::balloon::Balloon;
 use crate::config::*;
 use crate::geo::{horizon_km, random_global_position};
 use crate::link_detection::{compute_grid_edges, wire_pair_key, NodeKey};
+use crate::mesh_adjacency::MeshAdjacency;
+use crate::protocol::{MeshProtocol, ProtocolSpec, StepCtx};
 use crate::spatial_grid::SpatialGrid;
 use crate::tower::Tower;
 use crate::union_find::UnionFind;
@@ -55,8 +57,8 @@ pub struct BalloonComms {
 #[serde(rename_all = "camelCase")]
 pub struct LastBundleView {
     pub seq: u64,
-    pub state: crate::bundle::AckState,
-    pub channel: Option<crate::bundle::Channel>,
+    pub state: crate::protocol::dv_dtn::bundle::AckState,
+    pub channel: Option<crate::protocol::dv_dtn::bundle::Channel>,
     /// The tower that took delivery. `None` for satellite delivery, dead
     /// ends, and while the bundle is still Pending.
     pub tower_id: Option<u32>,
@@ -85,16 +87,34 @@ pub struct EdgeSnapshot {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-/// One beacon transmission, for the frontend's beacon-wavefront animation
-/// (docs/design/MESH_COMMS_DESIGN.md §3). `from`/`to` are wire node keys —
-/// same format and same `NodeKey` `Display` impl edges already use — so the
-/// frontend's existing `parseNodeKey`/position-lookup needs no changes.
-pub struct BeaconHopWire {
+/// One transmission that happened this comms round, for the frontend's
+/// wavefront animation (docs/design/MESH_COMMS_DESIGN.md §3).
+///
+/// `from`/`to` are wire node keys — same format and same `NodeKey` `Display`
+/// impl edges already use — so the frontend resolves endpoints with the
+/// `parseNodeKey`/position lookup it already has.
+///
+/// Deliberately not beacon-specific: `kind` says what sort of transmission it
+/// was, so a protocol whose discovery is a request/reply flood rather than a
+/// periodic advert animates through the same path with no frontend change.
+pub struct CommsEventWire {
+    pub kind: crate::protocol::EventKind,
     pub from: String,
     pub to: String,
-    pub tower_id: u32,
-    pub hop_count: u32,
-    pub epoch: u64,
+    /// Records riding this one transmission — 1 today, higher once batching
+    /// lands, so a batched hop can draw as one heavier mark than N identical.
+    pub payload: u32,
+    /// `None` under protocols with no tower-rooted routing.
+    pub tower_id: Option<u32>,
+    pub hop_count: Option<u32>,
+    pub epoch: Option<u64>,
+}
+
+/// Derives the protocol's RNG seed from the world's. Any fixed bijection
+/// works; this is the golden-ratio constant used as a bit-mixer, chosen so
+/// adjacent world seeds don't produce adjacent protocol seeds.
+fn protocol_seed(world_seed: u64) -> u64 {
+    world_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x5DEE_CE66_D3F1_A5B7
 }
 
 /// Milliseconds since the Unix epoch. Saturates rather than panicking on a
@@ -129,12 +149,16 @@ pub struct Snapshot {
     /// `None` on ticks where links weren't recomputed (still throttled the
     /// same way main.js throttles it) — client keeps the last edge set.
     pub edges: Option<Vec<EdgeSnapshot>>,
-    /// Beacon transmissions from this comms round, across all towers.
-    /// `None`/omitted when none fired. Broadcast unfiltered to every client,
-    /// same as `edges` — picking which tower to animate is a client-side
-    /// concern (see BeaconLayer in the frontend), not server-side selection
-    /// state, so multiple tabs can watch different towers independently.
-    pub beacon_hops: Option<Vec<BeaconHopWire>>,
+    /// Transmissions from this comms round. `None`/omitted when none
+    /// happened. Broadcast unfiltered to every client, same as `edges` —
+    /// picking which tower to animate is a client-side concern (see
+    /// CommsLayer in the frontend), not server-side selection state, so
+    /// multiple tabs can watch different towers independently.
+    pub comms_events: Option<Vec<CommsEventWire>>,
+    /// What the running protocol can express, so the client can hide UI whose
+    /// underlying concept doesn't exist. Static per protocol, but carried on
+    /// every snapshot so a late-joining client needs no second request.
+    pub capabilities: &'static crate::protocol::Capabilities,
     /// Broadcast so every connected tab's slider stays in sync with
     /// whichever tab last changed it (server is the source of truth).
     pub horizon_refraction_coeff: f64,
@@ -181,13 +205,16 @@ pub struct World {
     believed_grounded_pct: f64,
     belief_stale_pct: f64,
     belief_unaware_pct: f64,
-    bundle_stats: crate::bundle::BundleStats,
-    adjacency: crate::beacon::MeshAdjacency,
+    protocol: Box<dyn MeshProtocol>,
+    adjacency: MeshAdjacency,
     next_balloon_id: u32,
     next_tower_id: u32,
     grid: SpatialGrid,
     union_find: UnionFind,
     rng: StdRng,
+    /// The seed `with_seed` was given, so a later `with_protocol` can derive
+    /// the protocol's stream from it regardless of call order.
+    seed: u64,
     tick_count: u64,
 }
 
@@ -205,36 +232,58 @@ impl World {
             believed_grounded_pct: 0.0,
             belief_stale_pct: 0.0,
             belief_unaware_pct: 0.0,
-            bundle_stats: Default::default(),
+            protocol: ProtocolSpec::default().build(),
             adjacency: Default::default(),
             next_balloon_id: 0,
             next_tower_id: 0,
             grid: SpatialGrid::new(GRID_CELL_SIZE_DEG),
             union_find: UnionFind::new(),
             rng: StdRng::from_entropy(),
+            seed: rand::random(),
             tick_count: 0,
         }
+    }
+
+    /// Runs this world on a different comms protocol. Call before
+    /// `spawn_balloon_pool` — the protocol seeds per-node state as balloons
+    /// are created, so swapping afterwards would leave it empty.
+    pub fn with_protocol(mut self, spec: ProtocolSpec) -> Self {
+        self.protocol = spec.build();
+        self.protocol.reseed(protocol_seed(self.seed));
+        for t in &self.towers {
+            self.protocol.add_tower(t.id);
+        }
+        self
     }
 
     /// Reseeds the RNG driving balloon spawn/drift/duty-cycle jitter. `new`
     /// defaults to entropy (right for a live server); offline harnesses that
     /// want a reproducible run per parameter combo should call this before
     /// `spawn_balloon_pool` so spawn positions/altitudes/jitter are pinned too.
+    ///
+    /// The protocol gets a derived but *independent* stream, so that swapping
+    /// protocols at a fixed seed leaves the balloon field identical — see
+    /// `MeshProtocol::reseed`.
     pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
         self.rng = StdRng::seed_from_u64(seed);
+        self.protocol.reseed(protocol_seed(seed));
         self
     }
 
     /// Spawns the full always-on pool. Call once at startup.
     pub fn spawn_balloon_pool(&mut self, n: u32) {
         self.balloons.clear();
+        self.protocol.clear_nodes();
         for _ in 0..n {
             let (lon, lat) = random_global_position(&mut self.rng);
             let alt = BALLOON_MIN_ALT + self.rng.gen_range(0.0..(BALLOON_MAX_ALT - BALLOON_MIN_ALT));
-            let mut b = Balloon::new(self.next_balloon_id, lon, lat, alt);
-            // Stagger duty-cycle phases so the fleet doesn't transmit in unison.
-            b.next_beacon_round = crate::beacon::initial_slot(&mut self.rng);
-            b.next_bundle_round = self.rng.gen_range(0..BUNDLE_INTERVAL_ROUNDS);
+            let b = Balloon::new(self.next_balloon_id, lon, lat, alt);
+            // Stagger duty-cycle phases so the fleet doesn't transmit in
+            // unison. Drawn here, inside the same iteration that builds the
+            // balloon, so the RNG stream stays exactly as it was — see
+            // DvDtn::spawn_node.
+            self.protocol.spawn_node();
             self.balloons.push(b);
             self.next_balloon_id += 1;
         }
@@ -248,29 +297,51 @@ impl World {
 
     pub fn add_tower(&mut self, lon: f64, lat: f64, height_m: f64) {
         self.towers.push(Tower::new(self.next_tower_id, lon, lat, height_m));
+        self.protocol.add_tower(self.next_tower_id);
         self.next_tower_id += 1;
     }
 
     fn count_carrying(&self) -> u64 {
-        self.balloons[..self.visible_count].iter().map(|b| b.queue.len() as u64).sum()
+        self.protocol.carrying(self.visible_count)
     }
 
     /// Holding a bundle but currently believing no route — waiting, not lost.
     fn count_stranded(&self) -> u64 {
-        self.balloons[..self.visible_count]
-            .iter()
-            .filter(|b| !b.queue.is_empty() && b.belief.is_none())
-            .map(|b| b.queue.len() as u64)
-            .sum()
+        self.protocol.stranded(self.visible_count)
     }
 
-    /// Cumulative bundle outcomes, for offline harnesses.
-    pub fn bundle_stats(&self) -> crate::bundle::BundleStats {
-        self.bundle_stats
+    /// Cumulative bundle outcomes, for offline harnesses. Panics if the world
+    /// isn't running dv-dtn — these counters are that protocol's own, and a
+    /// harness asking for them has already assumed which protocol it drives.
+    pub fn bundle_stats(&self) -> crate::protocol::dv_dtn::bundle::BundleStats {
+        self.dv_dtn().stats
+    }
+
+    /// Whatever the running protocol counts, keyed — works regardless of
+    /// which protocol that is, unlike `bundle_stats`.
+    pub fn stats(&self) -> crate::protocol::stats::StatsTable {
+        self.protocol.stats()
+    }
+
+    /// Read-only access to dv-dtn's internals, for offline harnesses that need
+    /// to inspect queues/logs directly (see bin/telemetry_records.rs). Node
+    /// `i` here is the same node as `balloons[i]`.
+    pub fn dv_dtn(&self) -> &crate::protocol::dv_dtn::DvDtn {
+        self.protocol
+            .as_any()
+            .downcast_ref::<crate::protocol::dv_dtn::DvDtn>()
+            .expect("world is not running the dv-dtn protocol")
+    }
+
+    /// Stop all origination — for offline drain-phase checks (see
+    /// bin/bundle_delivery.rs), not something the live server ever does.
+    pub fn halt_origination(&mut self) {
+        self.protocol.halt_origination();
     }
 
     pub fn remove_tower(&mut self, id: u32) {
         self.towers.retain(|t| t.id != id);
+        self.protocol.remove_tower(id);
     }
 
     pub fn apply(&mut self, cmd: Command) {
@@ -290,15 +361,8 @@ impl World {
                     id: b.id,
                     believed_hops: b.believed_hops,
                     grounded: b.grounded,
-                    last_bundle: b.last_resolved.as_ref().map(|r| LastBundleView {
-                        seq: r.seq,
-                        state: r.state,
-                        channel: r.channel,
-                        tower_id: r.tower_id,
-                        path: Some(r.path.clone()),
-                        ack_hops_completed: r.ack_hops_completed,
-                    }),
-                    log: b.log.iter().rev().cloned().collect(),
+                    last_bundle: self.protocol.last_bundle(id as usize),
+                    log: self.protocol.log(id as usize),
                 });
                 // Best-effort: a dropped receiver just means the HTTP request
                 // that asked was already cancelled (client disconnected).
@@ -321,7 +385,8 @@ impl World {
                 balloons: visible.to_vec(),
                 towers: self.towers.clone(),
                 edges: None,
-                beacon_hops: None,
+                comms_events: None,
+                capabilities: self.protocol.capabilities(),
                 horizon_refraction_coeff: self.horizon_refraction_coeff,
                 paused: true,
                 mean_degree: self.mean_degree,
@@ -329,8 +394,8 @@ impl World {
                 believed_grounded_pct: self.believed_grounded_pct,
                 belief_stale_pct: self.belief_stale_pct,
                 belief_unaware_pct: self.belief_unaware_pct,
-                bundles_delivered: self.bundle_stats.delivered,
-                bundles_lost: self.bundle_stats.resolved() - self.bundle_stats.delivered,
+                bundles_delivered: self.protocol.delivered(),
+                bundles_lost: self.protocol.resolved() - self.protocol.delivered(),
                 bundles_in_flight: self.count_carrying(),
                 bundles_stranded: self.count_stranded(),
             };
@@ -343,7 +408,7 @@ impl World {
         }
 
         self.tick_count += 1;
-        let recompute_links = self.tick_count % LINK_UPDATE_EVERY_N_TICKS as u64 == 0;
+        let recompute_links = self.tick_count.is_multiple_of(LINK_UPDATE_EVERY_N_TICKS as u64);
 
         let edges = if recompute_links {
             let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, self.horizon_refraction_coeff);
@@ -425,41 +490,34 @@ impl World {
         // clock (see config::COMMS_EVERY_N_TICKS). Beacon slots are per-node
         // and jittered, so they don't align with the link-recompute cadence.
         // Only visible balloons take part, since only they have edges.
-        let mut beacon_hops: Option<Vec<BeaconHopWire>> = None;
-        if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
+        let mut comms_events: Option<Vec<CommsEventWire>> = None;
+        if self.tick_count.is_multiple_of(COMMS_EVERY_N_TICKS) {
             let round = self.tick_count / COMMS_EVERY_N_TICKS;
             // Beacons first, so a bundle forwarded this round uses the freshest
             // belief available rather than one a round old. `awake` is the set
             // of radios that transmitted; bundles ride the same duty cycle.
-            let result = crate::beacon::step(
-                &mut self.balloons[..self.visible_count],
-                &mut self.towers,
-                &self.adjacency,
+            let events = self.protocol.step(StepCtx {
                 round,
-                &mut self.rng,
-            );
-            if !result.hops.is_empty() {
-                beacon_hops = Some(
-                    result
-                        .hops
+                balloons: &self.balloons[..self.visible_count],
+                towers: &self.towers,
+                adj: &self.adjacency,
+            });
+            if !events.is_empty() {
+                comms_events = Some(
+                    events
                         .iter()
-                        .map(|h| BeaconHopWire {
-                            from: h.from.to_string(),
-                            to: NodeKey::Balloon(self.balloons[h.to_balloon].id).to_string(),
-                            tower_id: h.tower_id,
-                            hop_count: h.hop_count,
-                            epoch: h.epoch,
+                        .map(|e| CommsEventWire {
+                            kind: e.kind,
+                            from: e.from.to_string(),
+                            to: e.to.to_string(),
+                            payload: e.payload,
+                            tower_id: e.tower_id,
+                            hop_count: e.hop_count,
+                            epoch: e.epoch,
                         })
                         .collect(),
                 );
             }
-            crate::bundle::step(
-                &mut self.balloons[..self.visible_count],
-                &self.adjacency,
-                &result.awake,
-                round,
-                &mut self.bundle_stats,
-            );
         }
 
         // Publish each balloon's *belief* and tally how far it has drifted
@@ -468,8 +526,12 @@ impl World {
         let mut believes = 0u64;
         let mut stale = 0u64;
         let mut unaware = 0u64;
-        for b in &mut self.balloons[..self.visible_count] {
-            b.believed_hops = b.belief.map(|x| x.hop_count);
+        for (i, b) in self.balloons[..self.visible_count].iter_mut().enumerate() {
+            // Copy the protocol's published view onto the balloon, which is
+            // what actually gets serialized to clients.
+            let view = self.protocol.node_view(i);
+            b.believed_hops = view.route_hops;
+            b.last_channel = view.last_channel;
             match (b.believed_hops.is_some(), b.grounded) {
                 (true, true) => believes += 1,
                 (true, false) => {
@@ -491,7 +553,8 @@ impl World {
             balloons: self.balloons[..self.visible_count].to_vec(),
             towers: self.towers.clone(),
             edges,
-            beacon_hops,
+            comms_events,
+            capabilities: self.protocol.capabilities(),
             horizon_refraction_coeff: self.horizon_refraction_coeff,
             paused: false,
             mean_degree: self.mean_degree,
@@ -499,8 +562,8 @@ impl World {
             believed_grounded_pct: self.believed_grounded_pct,
             belief_stale_pct: self.belief_stale_pct,
             belief_unaware_pct: self.belief_unaware_pct,
-            bundles_delivered: self.bundle_stats.delivered,
-            bundles_lost: self.bundle_stats.resolved() - self.bundle_stats.delivered,
+            bundles_delivered: self.protocol.delivered(),
+            bundles_lost: self.protocol.resolved() - self.protocol.delivered(),
             bundles_in_flight: self.count_carrying(),
             bundles_stranded: self.count_stranded(),
         }
@@ -516,6 +579,48 @@ mod tests {
         world.spawn_balloon_pool(10);
         world.set_visible_count(10);
         world
+    }
+
+    /// The reason the protocol has its own RNG stream: comparing two
+    /// protocols at a fixed seed is only meaningful if they are compared over
+    /// the *same* balloon field. Drawing duty-cycle phases from the world's
+    /// stream broke that — a protocol taking one more draw per balloon shifted
+    /// every subsequent position, so the two runs differed in topology as well
+    /// as in routing, and any delivery difference was uninterpretable.
+    #[test]
+    fn protocol_choice_does_not_perturb_the_balloon_field() {
+        use crate::protocol::dv_dtn::params::{DvDtnParams, Metric, QueueDiscipline};
+
+        let variant = DvDtnParams {
+            metric: Metric::NearestFirst,
+            queue_discipline: QueueDiscipline::Lifo,
+            bundle_interval_rounds: 37,
+            beacon_interval_rounds: 9,
+            ..Default::default()
+        };
+
+        let run = |spec: ProtocolSpec| {
+            let mut w = World::new(Arc::new(WindField::zero()))
+                .with_protocol(spec)
+                .with_seed(4242);
+            for &(lon, lat, h) in INITIAL_TOWERS {
+                w.add_tower(lon, lat, h);
+            }
+            w.spawn_balloon_pool(60);
+            w.set_visible_count(60);
+            for _ in 0..200 {
+                w.tick(TICK_DT_SECONDS * TIME_SCALE);
+            }
+            w.balloons.iter().map(|b| (b.lon, b.lat, b.alt)).collect::<Vec<_>>()
+        };
+
+        let shipped = run(ProtocolSpec::default());
+        let tweaked = run(ProtocolSpec::DvDtn(variant));
+        assert_eq!(
+            shipped, tweaked,
+            "changing protocol parameters moved the balloons; the two RNG \
+             streams are not actually independent"
+        );
     }
 
     #[test]

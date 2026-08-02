@@ -23,10 +23,10 @@
 //   cargo run --release --bin beacon_convergence [n_balloons] [rounds]
 
 use sim_server::config::{
-    BEACON_INTERVAL_ROUNDS, BELIEF_MAX_AGE_ROUNDS, COMMS_EVERY_N_TICKS, COMMS_ROUND_SIM_SECONDS,
-    DEFAULT_HORIZON_REFRACTION_COEFF, INITIAL_TOWERS, TICK_DT_SECONDS, TICK_INTERVAL_MS,
-    TIME_SCALE,
+    COMMS_EVERY_N_TICKS, COMMS_ROUND_SIM_SECONDS, DEFAULT_HORIZON_REFRACTION_COEFF, INITIAL_TOWERS,
+    TICK_DT_SECONDS, TICK_INTERVAL_MS, TIME_SCALE,
 };
+use sim_server::protocol::dv_dtn::params::DvDtnParams;
 use sim_server::sim::{Snapshot, World};
 use sim_server::wind_field::WindField;
 use std::sync::Arc;
@@ -55,6 +55,11 @@ fn main() {
     let n: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1200);
     let rounds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(80);
 
+    // The world runs dv-dtn with default params; read them rather than
+    // restating the numbers, so this harness can't drift from what it drives.
+    let params = DvDtnParams::default();
+    let beacon_interval = params.beacon_interval_rounds;
+    let belief_max_age = params.belief_max_age_rounds;
     let mut world = World::new(Arc::new(WindField::zero()));
     for &(lon, lat, h) in INITIAL_TOWERS {
         world.add_tower(lon, lat, h);
@@ -64,7 +69,7 @@ fn main() {
 
     println!(
         "n={n}  coeff={DEFAULT_HORIZON_REFRACTION_COEFF}  towers={}  \
-         beacon interval={BEACON_INTERVAL_ROUNDS} rounds  belief max age={BELIEF_MAX_AGE_ROUNDS} rounds",
+         beacon interval={beacon_interval} rounds  belief max age={belief_max_age} rounds",
         INITIAL_TOWERS.len()
     );
     println!(
@@ -74,8 +79,8 @@ fn main() {
         real_seconds(1),
     );
     println!(
-        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   {}",
-        "round", "truth%", "believes%", "stale%", "unaware%", "discovery"
+        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   discovery",
+        "round", "truth%", "believes%", "stale%", "unaware%"
     );
 
     let mut converged_at: Option<u64> = None;
@@ -109,7 +114,7 @@ fn main() {
             "\n99% of reachable balloons had learned a route by round {t} \
              (~{:.1} beacon intervals, ~{:.0} simulated minutes, \
              ~{:.1} real seconds on screen).",
-            t as f64 / BEACON_INTERVAL_ROUNDS as f64,
+            t as f64 / beacon_interval as f64,
             t as f64 * COMMS_ROUND_SIM_SECONDS / 60.0,
             real_seconds(t),
         ),
@@ -120,11 +125,11 @@ fn main() {
     // belief outlive reality. Truth should crash on the next link recompute
     // while `believes` stays high — those balloons are still confidently
     // routing toward a tower they can no longer reach. The gap is `stale`, and
-    // it should drain away over roughly BELIEF_MAX_AGE_ROUNDS as beliefs age out.
+    // it should drain away over roughly belief_max_age as beliefs age out.
     println!("\n--- collapsing horizon coeff to 2.5 (mesh shatters) ---");
     println!(
-        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   {}",
-        "round", "truth%", "believes%", "stale%", "unaware%", "stale"
+        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   stale",
+        "round", "truth%", "believes%", "stale%", "unaware%"
     );
     world.horizon_refraction_coeff = 2.5;
     let mut peak_stale: f64 = 0.0;
@@ -162,7 +167,7 @@ fn main() {
     // Run past the max-age horizon — the last beacons emitted just before the
     // towers went away are entitled to live exactly that long.
     let start = rounds + 40;
-    for round in (start + 1)..=(start + BELIEF_MAX_AGE_ROUNDS + 20) {
+    for round in (start + 1)..=(start + belief_max_age + 20) {
         let s = advance_round(&mut world);
         if round % 10 == 0 {
             println!(

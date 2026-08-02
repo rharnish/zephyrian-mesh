@@ -21,9 +21,9 @@ import {
   removeTower,
 } from './simClient.js';
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
-import { BalloonLayer } from './balloonLayer.js';
+import { BalloonLayer, OVERLAY_NONE } from './balloonLayer.js';
 import { CommsReplay } from './commsReplay.js';
-import { BeaconLayer } from './beaconLayer.js';
+import { CommsLayer } from './commsLayer.js';
 import { InspectorPanel } from './ui/inspectorPanel.js';
 import { ControlPanel } from './ui/controlPanel.js';
 import { TowerMenu } from './ui/towerMenu.js';
@@ -90,7 +90,7 @@ async function initCesium() {
   };
 
   const commsReplay = new CommsReplay();
-  const beaconLayer = new BeaconLayer();
+  const commsLayer = new CommsLayer();
   const towerMenu = new TowerMenu();
 
   // Which tower's beacon activity is currently animated, if any. A purely
@@ -102,8 +102,20 @@ async function initCesium() {
   function setWatchedTower(id) {
     if (watchedTowerId !== null) towerById.get(watchedTowerId)?.setWatching(false);
     watchedTowerId = id;
-    beaconLayer.reset(viewer);
+    commsLayer.reset(viewer);
     if (watchedTowerId !== null) towerById.get(watchedTowerId)?.setWatching(true);
+  }
+
+  // Capabilities are static per protocol but ride every snapshot, so this is
+  // called constantly; it no-ops unless the protocol actually changed.
+  let appliedCapabilityName = null;
+  function applyCapabilities(caps) {
+    if (!caps || caps.name === appliedCapabilityName) return;
+    appliedCapabilityName = caps.name;
+    controlPanel.applyCapabilities(caps);
+    inspector.applyCapabilities(caps);
+    if (!caps.routeBelief) balloonLayer.setOverlay(OVERLAY_NONE);
+    if (!caps.nextHopPaths) commsReplay.clear(viewer);
   }
 
   function toggleBeaconWatch(id) {
@@ -217,7 +229,11 @@ async function initCesium() {
       linkLayer.sync(viewer, snapshot.edges, resolveNodePosition);
     }
     linkLayer.refreshPositions(resolveNodePosition);
-    beaconLayer.handleSnapshot(viewer, snapshot.beaconHops, watchedTowerId, resolveNodePosition);
+    // The running protocol decides which UI is meaningful at all — a protocol
+    // with no route belief must not show a belief overlay reading "unaware"
+    // for everything. Applied before the panels read the snapshot.
+    applyCapabilities(snapshot.capabilities);
+    commsLayer.handleSnapshot(viewer, snapshot.commsEvents, watchedTowerId, resolveNodePosition);
     controlPanel.syncFromSnapshot(snapshot, () => {
       for (const tower of towerById.values()) tower.refreshRangeCircle(viewer);
     });

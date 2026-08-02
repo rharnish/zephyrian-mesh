@@ -22,7 +22,7 @@
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sim_server::bundle::BundleStats;
+use sim_server::protocol::dv_dtn::bundle::BundleStats;
 use sim_server::config::*;
 use sim_server::sim::World;
 use sim_server::wind_field::WindField;
@@ -135,6 +135,7 @@ fn run_combo(combo: &Combo, wind: &Arc<WindField>, rounds: u64) -> ResultRow {
         last = advance_round(&mut world);
     }
     let st: BundleStats = world.bundle_stats();
+    let params = world.dv_dtn().params;
 
     ResultRow {
         horizon_coeff: combo.horizon_coeff,
@@ -151,7 +152,7 @@ fn run_combo(combo: &Combo, wind: &Arc<WindField>, rounds: u64) -> ResultRow {
         dropped_ttl: st.dropped_ttl,
         completion_rate: st.completion_rate(),
         mean_tower_adjacent: st.mean_tower_adjacent(),
-        delivery_ceiling_per_round: st.delivery_capacity_per_round(),
+        delivery_ceiling_per_round: st.delivery_capacity_per_round(&params),
     }
 }
 

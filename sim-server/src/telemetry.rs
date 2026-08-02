@@ -44,9 +44,9 @@ pub struct TelemetryRecord {
     // `bundle::snapshot_resolved`) — `None`/`Pending` at creation. This is
     // what turns the retained log into the C4 comms-log panel (§3): a
     // per-record history, not just the single most recent outcome.
-    pub channel: Option<crate::bundle::Channel>,
+    pub channel: Option<crate::protocol::dv_dtn::bundle::Channel>,
     pub tower_id: Option<u32>,
-    pub ack_state: crate::bundle::AckState,
+    pub ack_state: crate::protocol::dv_dtn::bundle::AckState,
     pub hops: Option<u32>,
     pub ack_hops_completed: Option<u32>,
 }
@@ -58,10 +58,14 @@ impl TelemetryRecord {
     /// Those are P1 buoyancy state that does not exist yet, and are left out
     /// rather than filled with plausible-looking constants — a stubbed number
     /// that reads as real is worse than an absent one.
-    pub fn sample(balloon: &Balloon, round: u64) -> Self {
+    /// `seq` is passed rather than read off the balloon: the sequence counter
+    /// belongs to the comms protocol (see dv_dtn.rs), not to the balloon's
+    /// physical state, even though the record it stamps is a measurement of
+    /// that balloon.
+    pub fn sample(balloon: &Balloon, seq: u64, round: u64) -> Self {
         TelemetryRecord {
             origin_id: balloon.id,
-            seq: balloon.bundle_seq,
+            seq,
             created_at_round: round,
             lon: balloon.lon,
             lat: balloon.lat,
@@ -71,7 +75,7 @@ impl TelemetryRecord {
             humidity_pct: atmosphere::humidity_pct(balloon.lon, balloon.lat, balloon.alt),
             channel: None,
             tower_id: None,
-            ack_state: crate::bundle::AckState::Pending,
+            ack_state: crate::protocol::dv_dtn::bundle::AckState::Pending,
             hops: None,
             ack_hops_completed: None,
         }
@@ -84,9 +88,8 @@ mod tests {
 
     #[test]
     fn samples_the_atmosphere_at_the_balloons_own_position() {
-        let mut b = Balloon::new(7, 12.0, -34.0, 18_000.0);
-        b.bundle_seq = 3;
-        let r = TelemetryRecord::sample(&b, 42);
+        let b = Balloon::new(7, 12.0, -34.0, 18_000.0);
+        let r = TelemetryRecord::sample(&b, 3, 42);
 
         assert_eq!(r.origin_id, 7);
         assert_eq!(r.seq, 3, "record seq must track the bundle seq it ships with");
@@ -103,8 +106,8 @@ mod tests {
     /// identical telemetry, or the field would look synthetic at a glance.
     #[test]
     fn records_differ_across_the_field() {
-        let a = TelemetryRecord::sample(&Balloon::new(0, 0.0, 0.0, 8_000.0), 0);
-        let b = TelemetryRecord::sample(&Balloon::new(1, 80.0, 25.0, 8_000.0), 0);
+        let a = TelemetryRecord::sample(&Balloon::new(0, 0.0, 0.0, 8_000.0), 0, 0);
+        let b = TelemetryRecord::sample(&Balloon::new(1, 80.0, 25.0, 8_000.0), 0, 0);
         assert!((a.humidity_pct - b.humidity_pct).abs() > 1e-6);
         // Temperature and pressure are altitude-only in the ISA, so those match.
         assert_eq!(a.temperature_k, b.temperature_k);
