@@ -23,8 +23,16 @@ from [`wind-sweep-results.csv`](../../experiments/wind-sweep-results.csv):
 | Distance-vector beacons | `dv-dtn` (default) | 68.9 ± 6.7 |
 | …with digest acks + batching | `dv-dtn:ack=digest,mesh=4` | **94.9 ± 2.0** |
 | Reactive discovery (AODV-style) | `dv-dtn:discovery=reactive` | 52.6 ± 5.3 |
-| Gossiped link-state | `dv-dtn:discovery=link-state` | 48.2 ± 5.4 |
+| Gossiped link-state | `dv-dtn:discovery=link-state` | 47.7 ± 5.4 † |
 | Binary spray-and-wait | `epidemic:copies=16` | 20.4 ± 3.1 |
+
+† Re-measured after a determinism fix. Link-state's breadth-first search picks
+between equal-cost routes by neighbour order, and neighbour order was
+randomised per process by a `HashMap` drain in link detection — so every
+link-state figure before this carried run-to-run spread that was not seed
+variance. The other protocols compare epoch and hop count and were unaffected;
+their numbers are unchanged, and the golden fingerprint confirms it. See
+[`aggregation-summary.md`](../../experiments/aggregation-summary.md) Coda 2.
 
 The two losing families have since been tuned with the three standard mechanisms
 that ought to close the gap — OLSR's multipoint relays, AODV's expanding-ring
@@ -219,7 +227,7 @@ distance-vector variants can make, where "no belief" is indistinguishable from
 
 | parameter | default | effect |
 |---|---|---|
-| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 41.0%, 4 → 52.3%, 16 → 68.0%, 64 → 71.6%**, at which point it has caught proactive by spending 64 records per slot against a hop count's one number. |
+| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 36.6%, 4 → 47.7%, 16 → 61.7%** at 20 seeds, continuing to `64 → 71.6%` (small-sample), at which point it has caught proactive by spending 64 records per slot against a hop count's one number. |
 | `relay=` | `flood` | `mpr` is OLSR's multipoint relays: each balloon names the smallest neighbour subset still covering everything two hops out, and only those rebroadcast for it. Cuts redundant gossip by a third at every `lsa` (0.52 → 0.36 at the default) with only **48%** of neighbours relaying, and coverage provably preserved. Worth **+0.6 ± 0.2 points** — real, but a tenth of what the redundancy figure suggests. See below. |
 
 > **Why MPR barely pays, and what that says about the model.** Measuring gossip

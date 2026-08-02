@@ -13,8 +13,9 @@
 // It also emits **both** delivery ratios, because they disagree here and the
 // disagreement is informative:
 //
-//   completion_rate      = delivered / resolved     (of bundles that finished)
-//   delivered_per_orig   = delivered / originated   (of bundles that started)
+//   completion_rate           = delivered / resolved   (of bundles that finished)
+//   delivered_per_originated  = delivered / originated (of bundles that started)
+//   unresolved_share          = the gap between them, made explicit
 //
 // A protocol that leaves bundles stalled in queues at the end of the run never
 // resolves them, so they leave the first denominator and not the second.
@@ -23,13 +24,24 @@
 // measurement.
 //
 //   cargo run --release --bin discovery_sweep [seeds] [n] [rounds] > out.csv
+//   RAYON_NUM_THREADS=2 ./target/release/discovery_sweep 20 1200 400 > out.csv
+//
+// Runs are independent — own `World`, own seed, sharing only a read-only zero
+// wind field — so this is embarrassingly parallel and uses every core by
+// default. Unlike `aggregation_sweep` and `wind_sweep` it writes the CSV in one
+// pass at the end rather than appending as rows finish, so it does **not**
+// resume: an interrupted run is restarted. That buys byte-identical output
+// across thread counts, which those two give up in exchange for resumability.
+// At ~10 minutes on four cores it is the better trade here.
 
+use rayon::prelude::*;
 use sim_server::config::{
     COMMS_EVERY_N_TICKS, INITIAL_TOWERS, TICK_DT_SECONDS, TIME_SCALE,
 };
 use sim_server::protocol::ProtocolSpec;
 use sim_server::sim::World;
 use sim_server::wind_field::WindField;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Counters worth carrying through to the summary. Kept explicit rather than
@@ -83,12 +95,38 @@ fn main() {
     }
     println!();
 
+    // One job per (variant, seed). Every run builds its own `World` and shares
+    // nothing but a read-only zero wind field, so this parallelises with no
+    // coordination at all — the protocol keeps no global state (the last piece,
+    // ablation.rs's process-wide AtomicBool, was deleted with the trait seam).
     let wind = Arc::new(WindField::zero());
-    for (label, spec_str) in &specs {
-        let spec: ProtocolSpec = spec_str.parse().expect("spec should parse");
-        for seed in 0..seeds {
+    let jobs: Vec<(&str, &str, u64)> = specs
+        .iter()
+        .flat_map(|(label, spec)| (0..seeds).map(move |s| (*label, *spec, s)))
+        .collect();
+
+    eprintln!(
+        "{} runs ({} variants x {} seeds), n={n}, {} rounds, {} threads",
+        jobs.len(),
+        specs.len(),
+        seeds,
+        rounds,
+        rayon::current_num_threads()
+    );
+    let done = AtomicUsize::new(0);
+    let total = jobs.len();
+
+    // `Vec::par_iter().map(..).collect()` is an *indexed* parallel iterator, so
+    // rows come back in job order however the threads interleave. That matters
+    // more than it sounds: it keeps the CSV byte-comparable between runs and
+    // between thread counts, so `RAYON_NUM_THREADS=1` and the default produce
+    // diffable output rather than the same rows shuffled.
+    let rows: Vec<String> = jobs
+        .par_iter()
+        .map(|(label, spec_str, seed)| {
+            let spec: ProtocolSpec = spec_str.parse().expect("spec should parse");
             let mut world =
-                World::new(Arc::clone(&wind)).with_protocol(spec.clone()).with_seed(seed);
+                World::new(Arc::clone(&wind)).with_protocol(spec).with_seed(*seed);
             for &(lon, lat, h) in INITIAL_TOWERS {
                 world.add_tower(lon, lat, h);
             }
@@ -102,15 +140,22 @@ fn main() {
             }
             let table = world.stats();
 
-            print!("{label},{seed}");
+            let mut row = format!("{label},{seed}");
             for k in KEYS {
                 match table.get(k) {
-                    Some(v) => print!(",{v}"),
-                    None => print!(","), // not a counter this variant keeps
+                    Some(v) => row.push_str(&format!(",{v}")),
+                    None => row.push(','), // not a counter this variant keeps
                 }
             }
-            println!();
-        }
-        eprintln!("done {label}");
+            let d = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if d.is_multiple_of(10) || d == total {
+                eprintln!("{d}/{total}");
+            }
+            row
+        })
+        .collect();
+
+    for row in rows {
+        println!("{row}");
     }
 }

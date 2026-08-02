@@ -466,12 +466,11 @@ neighbourhood shapes, not just the hand-built case.
 | contrast | Δ completion | Δ delivered/orig |
 |---|---|---|
 | MPR at `lsa=2` | +0.28 ± 0.22 | +0.22 ± 0.18 |
-| MPR at `lsa=4` | +0.64 ± 0.20 | +0.47 ± 0.16 |
-| MPR at `lsa=16` | +0.87 ± 0.18 | +0.55 ± 0.15 |
+| MPR at `lsa=4` | +0.69 ± 0.16 | +0.54 ± 0.14 |
+| MPR at `lsa=16` | +0.66 ± 0.13 | +0.46 ± 0.11 |
 
-Real, consistent, growing with how much redundancy there was to remove — and
-**about a tenth of what was predicted.** The prediction, made in this repo from
-the redundancy measurement, was +8-10 points at `lsa=4`.
+Real, consistent, and **about a tenth of what was predicted.** The prediction,
+made in this repo from the redundancy measurement, was +8-10 points at `lsa=4`.
 
 **The prediction was wrong for a reason worth recording, because it is about the
 model rather than about OLSR.** The argument was that MPR "does not ask for more
@@ -487,6 +486,54 @@ delivery metric by construction. Charging per record rather than per slot is the
 change that would make this measurable, and it would alter far more than this
 one result.
 
+### A reproducibility bug found while parallelising the sweep
+
+Parallelising `discovery_sweep` across cores turned up something worth more than
+the speedup. Checking that one thread and four threads agreed, they did not —
+but only on link-state rows, and with `gossip_redundant_share` and `mpr_share`
+byte-identical. Running single-threaded three times settled it: **link-state
+had never been reproducible run to run**, same seed, same thread count.
+
+The cause was in shared code, not link-state.
+[`link_detection.rs`](../sim-server/src/link_detection.rs) assembled its edge
+list with `edges_by_pair.into_values().collect()`, and `HashMap` iteration order
+is randomised per map. That order becomes each balloon's neighbour-list order in
+`MeshAdjacency::rebuild`.
+
+Why only link-state noticed:
+
+| | how it uses neighbour order | affected |
+|---|---|---|
+| proactive | compares epoch and hop count; same answer whatever order offers arrive in | no |
+| reactive | same adoption rule | no |
+| **link-state** | BFS returns the **first** tower found at minimum depth — equal-cost routes are chosen between positionally | **yes** |
+
+A probe comparing two identical runs in one process found them diverging by
+round 3: same tower, same hop count, different `next_hop`.
+
+Sorting the edge list fixes it, and the fix is verifiable from three directions:
+every variant now reproduces in-process; one thread, four threads and a re-run
+are byte-identical; and the **golden fingerprint is unchanged**, which
+independently confirms proactive really was order-insensitive.
+
+**What it changes in the numbers.** Every link-state figure previously published
+carried run-to-run spread that was not seed variance — it inflated link-state
+error bars and the noise floor of any contrast built on them. Re-measured
+against the clean build, the reactive contrasts are *byte-identical* to the
+noisy run (the bug never touched them), while the MPR standard errors fall
+20-28% and the point estimates barely move:
+
+| | noisy | clean |
+|---|---|---|
+| MPR at `lsa=4` | +0.64 ± 0.20 | +0.69 ± 0.16 |
+| MPR at `lsa=16` | +0.87 ± 0.18 | +0.66 ± 0.13 |
+
+Link-state *levels* moved more than its contrasts did — `lsa=16` reads 61.7%
+clean against 64.1% noisy — because a canonical tie-break is a fixed arbitrary
+choice where a random one effectively sampled. Neither is more correct as
+routing; the sorted one is reproducible, which is the property every experiment
+in this directory depends on.
+
 ### What this does and does not change
 
 Nothing here reorders the families. Proactive dv-dtn still leads every routing
@@ -500,6 +547,13 @@ The reactive baseline is unchanged by this work: a hop-limit off-by-one
 corrected along the way (a request with `ttl = k` now travels `k` hops rather
 than `k+1`) moves it **−0.07 ± 0.20 points**, and proactive reproduces its
 published figure to +0.001.
+
+Link-state levels *are* affected, by the determinism fix rather than by MPR —
+`dv-dtn:discovery=link-state` reads **47.7 ± 5.4** here against the 48.2 ± 5.4
+published from the wind sweep, and the `lsa` ladder re-measured at 20 seeds
+reads **2 → 36.6%, 4 → 47.7%, 16 → 61.7%**, below the earlier small-sample
+figures. Those earlier numbers were taken under randomised neighbour order and
+are not reproducible; these are.
 
 ## Limitations
 

@@ -125,7 +125,29 @@ pub fn compute_grid_edges(
         }
     }
 
-    edges_by_pair.into_values().collect()
+    // **Sorted, and this is load-bearing rather than tidiness.**
+    //
+    // `HashMap::into_values` yields in iteration order, which Rust randomizes
+    // per map via `RandomState`. That order becomes each balloon's neighbour
+    // list order in `MeshAdjacency::rebuild`, which is fine for anything that
+    // treats neighbours symmetrically — proactive beacon adoption compares
+    // epoch and hop count, so it reaches the same answer whatever order the
+    // offers arrive in — and not fine at all for anything that breaks ties
+    // positionally.
+    //
+    // Gossiped link-state does exactly that: its breadth-first search returns
+    // the *first* tower it reaches at the minimum depth, so two equal-cost
+    // routes are chosen between by neighbour order. The result was that
+    // link-state, alone among the protocols, produced different numbers from
+    // the same seed on every run — measured as a 1-2 point spread on
+    // completion, silently widening every link-state error bar and every
+    // paired contrast built on one.
+    //
+    // Sorting makes the whole simulation reproducible from its seed, which is
+    // the property every experiment in experiments/ is built on.
+    let mut edges: Vec<Edge> = edges_by_pair.into_values().collect();
+    edges.sort_unstable_by_key(|e| ordered_pair(e.a, e.b));
+    edges
 }
 
 /// Ground truth: O(n^2), no spatial grid — checks every pair. Slow, but
@@ -294,6 +316,53 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
+
+    /// Edge order must be a function of the field alone, never of `HashMap`
+    /// iteration order.
+    ///
+    /// It was not, and the consequence was remote from the cause. Edge order
+    /// becomes neighbour-list order in `MeshAdjacency::rebuild`; gossiped
+    /// link-state's breadth-first search returns the *first* tower it reaches
+    /// at the minimum depth, so equal-cost routes were chosen between by
+    /// whatever order a `HashMap` drain happened to produce that run. The
+    /// visible symptom was link-state — alone among the protocols — giving
+    /// different completion figures from the same seed on every run, which
+    /// silently widened every link-state error bar in experiments/.
+    ///
+    /// Two maps in one process get different `RandomState` seeds, so building
+    /// the same field twice here is a real test of the property rather than a
+    /// tautology.
+    #[test]
+    fn edge_order_is_reproducible_across_runs() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let balloons: Vec<Balloon> = (0..400)
+            .map(|i| {
+                Balloon::new(
+                    i,
+                    rng.gen_range(-180.0..180.0),
+                    rng.gen_range(-70.0..70.0),
+                    rng.gen_range(17000.0..20000.0),
+                )
+            })
+            .collect();
+        let towers = vec![Tower::new(0, 10.0, 20.0, 30.0), Tower::new(1, -40.0, -10.0, 40.0)];
+
+        let run = || {
+            let mut grid = SpatialGrid::new(500.0);
+            compute_grid_edges(&balloons, &towers, &mut grid, 1000.0, 4.12)
+                .iter()
+                .map(|e| (e.a, e.b))
+                .collect::<Vec<_>>()
+        };
+
+        let (first, second) = (run(), run());
+        assert!(!first.is_empty(), "setup: the field should produce edges");
+        assert_eq!(first, second, "edge order must not depend on hash iteration order");
+
+        let mut sorted = first.clone();
+        sorted.sort_unstable_by_key(|(a, b)| ordered_pair(*a, *b));
+        assert_eq!(first, sorted, "edges should come out in a canonical order");
+    }
 
     #[test]
     fn grid_matches_brute_force_ground_truth() {
