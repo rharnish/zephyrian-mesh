@@ -428,6 +428,12 @@ impl MeshProtocol for Epidemic {
             .count("handoffs", st.handoffs)
             .count("no_candidate", st.no_candidate)
             .ratio("handoffs_per_delivery", st.handoffs_per_delivery())
+            // Keyed identically to dv-dtn's, so a harness can read the same
+            // ratio off either protocol without knowing which it is driving.
+            .count("unresolved", st.unresolved())
+            .ratio("unresolved_share", st.unresolved_share())
+            .ratio("delivered_per_originated", st.delivered_per_originated())
+            .ratio("satellite_share", st.satellite_share())
     }
 
     fn resolved(&self) -> u64 {

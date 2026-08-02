@@ -39,7 +39,13 @@ const KEYS: &[&str] = &[
     "originated",
     "delivered",
     "resolved",
+    "unresolved",
+    "unresolved_share",
     "completion_rate",
+    "delivered_per_originated",
+    "stall_rate",
+    "delivered_per_slot_used",
+    "ceiling_utilisation",
     "satellite",
     "dropped_loop",
     "dropped_ttl",
@@ -75,7 +81,7 @@ fn main() {
     for k in KEYS {
         print!(",{k}");
     }
-    println!(",delivered_per_orig");
+    println!();
 
     let wind = Arc::new(WindField::zero());
     for (label, spec_str) in &specs {
@@ -103,9 +109,7 @@ fn main() {
                     None => print!(","), // not a counter this variant keeps
                 }
             }
-            let orig = table.get("originated").unwrap_or(0.0);
-            let del = table.get("delivered").unwrap_or(0.0);
-            println!(",{}", if orig == 0.0 { 0.0 } else { del / orig });
+            println!();
         }
         eprintln!("done {label}");
     }

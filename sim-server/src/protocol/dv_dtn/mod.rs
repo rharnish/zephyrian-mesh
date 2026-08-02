@@ -400,7 +400,20 @@ impl MeshProtocol for DvDtn {
             .ratio("mean_tower_adjacent", st.mean_tower_adjacent())
             .ratio("delivery_ceiling_per_round", st.delivery_capacity_per_round(&self.params))
             .ratio("belief_hops_mean", bundle::hist_mean(&st.belief_hops))
-            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops));
+            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops))
+            .ratio("satellite_hops_mean", bundle::hist_mean(&st.satellite_hops))
+            // The bundles `completion_rate` cannot see. Published first among
+            // the derived metrics because it is the one that says how much the
+            // headline figure is leaving out.
+            .count("unresolved", st.unresolved())
+            .ratio("unresolved_share", st.unresolved_share())
+            .ratio("delivered_per_originated", st.delivered_per_originated())
+            .ratio("satellite_share", st.satellite_share())
+            .ratio("mesh_loss_rate", st.mesh_loss_rate())
+            .ratio("ack_rate", st.ack_rate())
+            .ratio("stall_rate", st.stall_rate())
+            .ratio("delivered_per_slot_used", st.delivered_per_slot_used())
+            .ratio("ceiling_utilisation", st.ceiling_utilisation(&self.params));
         if self.params.discovery == Discovery::LinkState {
             let ls = &self.linkstate;
             let (r, u) = (ls.records_redundant, ls.records_useful);

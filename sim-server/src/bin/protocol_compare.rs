@@ -32,7 +32,26 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Keys every delivery protocol reports, and which therefore compare.
-const CANONICAL: &[&str] = &["originated", "delivered", "resolved", "completion_rate"];
+///
+/// `completion_rate` and `delivered_per_originated` are both here because they
+/// are biased in opposite directions and can disagree in sign. The first drops
+/// bundles still in flight at the cutoff, so it flatters a protocol that
+/// strands them; the second counts those as failures, so it penalises one that
+/// is merely slow. `unresolved_share` is the difference between them made
+/// explicit — read it first, and it tells you how much the other two are
+/// arguing about.
+///
+/// A caution on the epidemic rows: their `resolved` is a complete account of
+/// terminal states, but `copies_expired` alongside it counts *copies*, several
+/// per record, where every other counter here counts records.
+const CANONICAL: &[&str] = &[
+    "originated",
+    "delivered",
+    "resolved",
+    "unresolved_share",
+    "completion_rate",
+    "delivered_per_originated",
+];
 
 fn run(
     spec: &ProtocolSpec,
@@ -159,10 +178,12 @@ fn main() {
         print!("{:<w$}", label, w = w);
         for k in CANONICAL {
             let v = all.get(*k).and_then(|m| m.get(label)).cloned().unwrap_or_default();
-            let cell = if *k == "completion_rate" {
-                format!("{:.1}±{:.1}%", mean(&v) * 100.0, sd(&v) * 100.0)
-            } else {
-                format!("{:.0}", mean(&v))
+            let cell = match *k {
+                "completion_rate" | "delivered_per_originated" => {
+                    format!("{:.1}±{:.1}%", mean(&v) * 100.0, sd(&v) * 100.0)
+                }
+                "unresolved_share" => format!("{:.1}%", mean(&v) * 100.0),
+                _ => format!("{:.0}", mean(&v)),
             };
             print!("  {cell:>16}");
         }

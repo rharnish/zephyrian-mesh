@@ -18,6 +18,11 @@ A run that strands bundles in queues never resolves them, so they leave the
 first denominator but not the second. Reactive discovery strands a great many,
 which is exactly why it looks better on the first ratio than on the second.
 Quoting only one would be a choice rather than a measurement.
+
+`unresolved %` is the gap between them made explicit — the share of originated
+bundles still being carried when the run ended. Read it first: it says how much
+the two ratios are arguing about, and a variant with a low value is one where
+they agree and either can be quoted safely.
 """
 import csv
 import math
@@ -101,14 +106,19 @@ def main():
     print(f"# Discovery sweep — {seeds} seeds, paired within seed\n")
 
     print("## Levels\n")
-    print("| variant | completion % | delivered/orig % |")
-    print("|---|---|---|")
+    print("| variant | completion % | delivered/orig % | unresolved % | stall rate |")
+    print("|---|---|---|---|---|")
     for label, _ in CONTRASTS:
         if label not in rows:
             continue
         c = [v["completion_rate"] * 100 for v in rows[label].values()]
-        d = [v["delivered_per_orig"] * 100 for v in rows[label].values()]
-        print(f"| {label} | {mean(c):.1f} ± {sd(c):.1f} | {mean(d):.1f} ± {sd(d):.1f} |")
+        d = [v["delivered_per_originated"] * 100 for v in rows[label].values()]
+        u = [v.get("unresolved_share", 0) * 100 for v in rows[label].values()]
+        s = [v.get("stall_rate", 0) for v in rows[label].values()]
+        print(
+            f"| {label} | {mean(c):.1f} ± {sd(c):.1f} | {mean(d):.1f} ± {sd(d):.1f} "
+            f"| {mean(u):.1f} | {mean(s):.3f} |"
+        )
 
     print("\n## Paired contrasts (mean difference ± 1 s.e., points)\n")
     print("| contrast | Δ completion | Δ delivered/orig |")
@@ -117,7 +127,7 @@ def main():
         if base is None or label not in rows:
             continue
         c = [x * 100 for x in paired(rows, label, base, "completion_rate")]
-        d = [x * 100 for x in paired(rows, label, base, "delivered_per_orig")]
+        d = [x * 100 for x in paired(rows, label, base, "delivered_per_originated")]
         print(
             f"| {label} vs {base} | {mean(c):+.2f} ± {sem(c):.2f} "
             f"| {mean(d):+.2f} ± {sem(d):.2f} |"
