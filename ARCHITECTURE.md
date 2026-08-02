@@ -112,8 +112,10 @@ flowchart TB
   owns all of its own per-node state (a balloon carries only physics plus a
   small published view), so a protocol with no routes at all — epidemic — fits
   as naturally as the shipped distance-vector one. Chosen at startup with
-  `--protocol`; see `./run-all.sh --help` for the spec syntax and what each one
-  measures. Every `Snapshot` carries a `Capabilities` record so the UI hides
+  `--protocol`; see
+  [`docs/design/PROTOCOL_REFERENCE.md`](docs/design/PROTOCOL_REFERENCE.md) for
+  message-flow diagrams of all four and what every parameter is worth, or
+  `./run-all.sh --help` for the spec syntax alone. Every `Snapshot` carries a `Capabilities` record so the UI hides
   controls whose underlying concept the running protocol doesn't have, rather
   than showing meaningless values.
 

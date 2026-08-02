@@ -448,6 +448,8 @@ binary spray-and-wait, which has no routes at all. A balloon keeps only physics 
 published view; everything else belongs to whichever protocol is loaded. Nothing in this document's
 findings changed — the golden fingerprint is byte-identical across the refactor — but the file
 layout it names did, and the constants it treats as global are now fields on `DvDtnParams`.
+[`PROTOCOL_REFERENCE.md`](PROTOCOL_REFERENCE.md) diagrams all four and tabulates what each
+parameter is worth.
 
 Two axes were added that §1–§4 do not cover, both measured in
 [`experiments/aggregation-summary.md`](../../experiments/aggregation-summary.md): **aggregation**
