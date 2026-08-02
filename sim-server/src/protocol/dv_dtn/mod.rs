@@ -334,7 +334,7 @@ impl MeshProtocol for DvDtn {
         // Origins that heard their own delivery announced this round.
         for a in result.digest_acks {
             if let Some(node) = self.nodes.get_mut(a.node) {
-                bundle::apply_digest_ack(node, a.seq, &mut self.stats);
+                bundle::apply_digest_ack(node, a.seq, ctx.round, &mut self.stats);
             }
         }
         events.extend(result.hops.into_iter().map(|h| CommsEvent {
@@ -400,14 +400,44 @@ impl MeshProtocol for DvDtn {
             .ratio("mean_tower_adjacent", st.mean_tower_adjacent())
             .ratio("delivery_ceiling_per_round", st.delivery_capacity_per_round(&self.params))
             .ratio("belief_hops_mean", bundle::hist_mean(&st.belief_hops))
-            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops));
+            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops))
+            .ratio("satellite_hops_mean", bundle::hist_mean(&st.satellite_hops))
+            // The bundles `completion_rate` cannot see. Published first among
+            // the derived metrics because it is the one that says how much the
+            // headline figure is leaving out.
+            .count("unresolved", st.unresolved())
+            .ratio("unresolved_share", st.unresolved_share())
+            .ratio("delivered_per_originated", st.delivered_per_originated())
+            .ratio("satellite_share", st.satellite_share())
+            .ratio("mesh_loss_rate", st.mesh_loss_rate())
+            .ratio("ack_rate", st.ack_rate())
+            .ratio("stall_rate", st.stall_rate())
+            .ratio("delivered_per_slot_used", st.delivered_per_slot_used())
+            .ratio("ceiling_utilisation", st.ceiling_utilisation(&self.params))
+            // Latency, in comms rounds. Means are exact; percentiles carry
+            // one-bucket (5-round) resolution, which is also one wake slot —
+            // the granularity latency actually moves in here.
+            .ratio("delivery_latency_mean", st.delivery_latency.mean())
+            .ratio("delivery_latency_p95", st.delivery_latency.percentile(0.95))
+            .ratio("ack_latency_mean", st.ack_latency.mean())
+            .ratio("ack_latency_p95", st.ack_latency.percentile(0.95))
+            .ratio("first_hop_latency_mean", st.first_hop_latency.mean());
         if self.params.discovery == Discovery::LinkState {
-            let (r, u) = (self.linkstate.records_redundant, self.linkstate.records_useful);
+            let ls = &self.linkstate;
+            let (r, u) = (ls.records_redundant, ls.records_useful);
             let total = r + u;
             return t
                 .count("gossip_records_useful", u)
                 .count("gossip_records_redundant", r)
-                .ratio("gossip_redundant_share", if total == 0 { 0.0 } else { r as f64 / total as f64 });
+                .ratio("gossip_redundant_share", if total == 0 { 0.0 } else { r as f64 / total as f64 })
+                .ratio(
+                    "mpr_share",
+                    if ls.mpr_candidates == 0 {
+                        1.0 // flooding: every neighbour relays
+                    } else {
+                        ls.mpr_selected as f64 / ls.mpr_candidates as f64
+                    },
+                );
         }
         t
     }

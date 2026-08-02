@@ -10,6 +10,7 @@
 > | Every protocol over identical fields (incl. the wind coda) | [`aggregation-summary.md`](aggregation-summary.md) | [`protocol_compare.rs`](../sim-server/src/bin/protocol_compare.rs) |
 > | Protocols crossed with real weather fields | [`aggregation-summary.md`](aggregation-summary.md) | [`wind_sweep.rs`](../sim-server/src/bin/wind_sweep.rs) |
 > | Does wind actually churn the topology? | (in the above) | [`link_churn.rs`](../sim-server/src/bin/link_churn.rs) |
+> | Tuning reactive + link-state (MPR, expanding ring, overhearing) | [`aggregation-summary.md`](aggregation-summary.md) Coda 2 | [`discovery_sweep.rs`](../sim-server/src/bin/discovery_sweep.rs) |
 >
 > Anything taking a `--wind` flag reads a **cached** field rather than
 > fetching one, so runs are reproducible and need no Python backend. See

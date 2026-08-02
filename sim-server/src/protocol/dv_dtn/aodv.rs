@@ -34,7 +34,7 @@
 // that latency is hops × the wake interval, in each direction.
 
 use super::beacon::RouteBelief;
-use super::params::{DvDtnParams, ReplyPolicy};
+use super::params::{DvDtnParams, ReplyOverhearing, ReplyPolicy, RingSearch};
 use super::DvNode;
 use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
@@ -53,9 +53,24 @@ pub struct AodvNode {
     pub to_forward: Vec<Rreq>,
     /// Replies waiting to be relayed back toward a requester.
     pub replies: Vec<Rrep>,
+    /// Hop budget for this node's *next* request. Under
+    /// `RingSearch::Expanding` it doubles each time an attempt goes unanswered
+    /// and resets once a route is found; under `RingSearch::Max` it is unused.
+    /// Zero means "not started", which the issuing path clamps up to one.
+    pub next_ttl: u32,
     /// This node's own outstanding request, if it is looking for a route.
-    pub pending: Option<(u64, u64)>, // (request id, issued at round)
+    pub pending: Option<Pending>,
     pub next_rreq_id: u64,
+}
+
+/// A request this node has out and is waiting on.
+#[derive(Debug, Clone, Copy)]
+pub struct Pending {
+    pub id: u64,
+    pub issued_at: u64,
+    /// How far this attempt was allowed to travel. Under
+    /// `RingSearch::Expanding` the next attempt doubles it.
+    pub ttl: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +78,10 @@ pub struct Rreq {
     pub requester: u32,
     pub id: u64,
     pub hops: u32,
+    /// The requester's hop budget for *this* attempt, carried on the request so
+    /// every rebroadcaster enforces the same ring without needing to be told
+    /// separately. Under `RingSearch::Max` this is always `beacon_max_hops`.
+    pub ttl: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +109,23 @@ impl State {
     }
 }
 
+/// How long a requester waits before concluding an attempt failed.
+///
+/// Under a fixed maximum hop budget this is just the belief lease, which is
+/// what it has always been. Under an expanding ring it has to scale with the
+/// ring, because a request travels **one hop per wake slot** in each direction:
+/// a ring of `ttl` hops cannot possibly be answered in less than `2 * ttl`
+/// slots, so a fixed timeout would abandon wide rings before they could return
+/// and the search would never get past the narrow ones.
+fn attempt_timeout(params: &DvDtnParams, ttl: u32) -> u64 {
+    match params.ring_search {
+        RingSearch::Max => params.belief_max_age_rounds,
+        RingSearch::Expanding => {
+            (2 * ttl as u64 + 1).saturating_mul(params.beacon_interval_rounds)
+        }
+    }
+}
+
 /// One round of reactive discovery. Mirrors `beacon::step`'s contract: expires
 /// stale routes, decides who transmits, and returns the wake set that bundle
 /// forwarding will reuse.
@@ -114,11 +150,13 @@ pub fn step(
         }
     }
     // Forget stale reverse pointers and abandoned requests, or the tables grow
-    // without bound over a long run.
+    // without bound over a long run. Under an expanding ring this is also where
+    // the ring grows: an attempt that timed out becomes the next, wider one.
     for a in state.nodes.iter_mut() {
-        if let Some((_, issued)) = a.pending {
-            if round.saturating_sub(issued) > params.belief_max_age_rounds {
+        if let Some(p) = a.pending {
+            if round.saturating_sub(p.issued_at) > attempt_timeout(params, p.ttl) {
                 a.pending = None;
+                a.next_ttl = (p.ttl.saturating_mul(2)).min(params.beacon_max_hops);
             }
         }
     }
@@ -156,9 +194,16 @@ pub fn step(
             continue; // reverse path gone — the requester will retry
         }
 
-        // Then rebroadcasts.
+        // Then rebroadcasts. The ring the requester asked for is enforced by
+        // every rebroadcaster, not just by the requester — which is the whole
+        // point of carrying `ttl` on the request rather than keeping it at the
+        // origin.
         if let Some(req) = state.nodes[i].to_forward.pop() {
-            if req.hops < params.beacon_max_hops {
+            // `ttl` counts hops the request may *travel*, so a request already
+            // `hops` out may only be passed on if the extra hop stays inside
+            // the budget. Comparing `hops < ttl` instead would let a ring of 1
+            // reach two hops out, which is not a ring of 1.
+            if req.hops + 1 < req.ttl.min(params.beacon_max_hops) {
                 rreq_out.push((i, Rreq { hops: req.hops + 1, ..req }));
             }
             continue;
@@ -169,10 +214,16 @@ pub fn step(
         // per balloon would swamp the mesh it is trying to measure.
         let needs_route = !nodes[i].queue.is_empty() && nodes[i].belief.is_none();
         if needs_route && state.nodes[i].pending.is_none() {
+            let ttl = match params.ring_search {
+                RingSearch::Max => params.beacon_max_hops,
+                RingSearch::Expanding => {
+                    state.nodes[i].next_ttl.clamp(1, params.beacon_max_hops)
+                }
+            };
             let rid = state.nodes[i].next_rreq_id;
             state.nodes[i].next_rreq_id += 1;
-            state.nodes[i].pending = Some((rid, round));
-            rreq_out.push((i, Rreq { requester: id, id: rid, hops: 0 }));
+            state.nodes[i].pending = Some(Pending { id: rid, issued_at: round, ttl });
+            rreq_out.push((i, Rreq { requester: id, id: rid, hops: 0, ttl }));
         }
     }
 
@@ -268,8 +319,55 @@ pub fn step(
         }
         if balloons[to_idx].id == reply.requester {
             state.nodes[to_idx].pending = None; // answered
+            state.nodes[to_idx].next_ttl = 1; // a ring that worked starts small again
         } else {
             state.nodes[to_idx].replies.push(Rrep { hops: reply.hops + 1, ..reply });
+        }
+
+        // Everyone else within earshot of the transmitter learns the same route
+        // on the same transmission. No event is emitted for these: physically
+        // this *is* the one transmission already recorded above, and counting
+        // it once per listener would misreport the airtime the mechanism costs
+        // — which is none, and is the entire argument for it.
+        if params.reply_overhearing == ReplyOverhearing::On {
+            for &nb in adj.neighbors(from_idx) {
+                let nb_idx = nb as usize;
+                if nb_idx >= n || nb == to {
+                    continue;
+                }
+                // **An overhearer adopts only on improvement, never merely on
+                // freshness** — which is the opposite of the rule the addressee
+                // uses, deliberately.
+                //
+                // The addressee asked: the reply is an answer to its own
+                // question, and it is on the reverse path, so the route is
+                // about it. An overhearer has no such standing. It is picking
+                // up a route computed for somebody else, and the transmitter's
+                // own path may well run back through the overhearer — adopting
+                // that produces a two-node loop out of nothing.
+                //
+                // Measured before this gate existed: overhearing cut
+                // `stall_no_belief` by 65% and satellite fallback by 59%,
+                // exactly as intended, and then gave all of it back as
+                // `dropped_loop` (131 -> 610) while mean believed depth *grew*
+                // 5.67 -> 7.26 hops. Freshness-first is the right rule for an
+                // answer and the wrong one for a rumour.
+                let better = match nodes[nb_idx].belief {
+                    None => true,
+                    Some(cur) => {
+                        cur.is_expired(round, params.belief_max_age_rounds)
+                            || installed.hop_count < cur.hop_count
+                    }
+                };
+                if better {
+                    nodes[nb_idx].belief = Some(installed);
+                    // An overhearer with a route no longer needs the one it
+                    // asked for; dropping the request stops it re-flooding on
+                    // its next slot.
+                    state.nodes[nb_idx].pending = None;
+                    state.nodes[nb_idx].next_ttl = 1;
+                }
+            }
         }
     }
 
@@ -465,6 +563,178 @@ mod tests {
         assert_eq!(b2.hop_count, 3, "and it must be the true distance, not an inflated one");
     }
 
+    /// A reply is a radio transmission, so everyone in earshot hears it — not
+    /// only the node on the reverse path. b3 never asked for anything and is
+    /// not on b2's reverse path, but it is a neighbour of b1, so when b1 hands
+    /// the reply to b2 it learns the route too.
+    ///
+    /// The route it picks up must be the same one b2 installs, including the
+    /// unrestamped emission round: overhearing may not become a second way to
+    /// launder a stale route.
+    #[test]
+    fn a_neighbour_overhearing_a_reply_installs_the_route_too() {
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            reply_overhearing: ReplyOverhearing::On,
+            ..Default::default()
+        };
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..4).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..4 {
+            d.spawn_node();
+        }
+        // t0 - b0 - b1 - b2, with b3 also hanging off b1 but never originating,
+        // so it has no reason of its own to look for a route.
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b1", "b3")],
+            4,
+            &towers,
+        );
+        d.nodes[3].next_bundle_round = u64::MAX;
+
+        for round in 0..400u64 {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+        }
+
+        let b3 = d.nodes[3].belief.expect("b3 should have learned from a reply meant for b2");
+        assert_eq!(b3.next_hop, Some(1), "it heard the route from b1, so b1 is the way out");
+        assert_eq!(b3.hop_count, 3, "the same distance b2 installs, not an inflated one");
+    }
+
+    /// With overhearing off, the same b3 stays ignorant — which is what makes
+    /// the test above a measurement of the mechanism rather than of the layout.
+    #[test]
+    fn without_overhearing_a_silent_neighbour_learns_nothing() {
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            reply_overhearing: ReplyOverhearing::Off,
+            ..Default::default()
+        };
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..4).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..4 {
+            d.spawn_node();
+        }
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b1", "b3")],
+            4,
+            &towers,
+        );
+        d.nodes[3].next_bundle_round = u64::MAX;
+
+        for round in 0..400u64 {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+        }
+        assert!(
+            d.nodes[3].belief.is_none(),
+            "b3 asked for nothing and was told nothing: {:?}",
+            d.nodes[3].belief
+        );
+    }
+
+    /// `ttl` is how far a request may *travel*, so a ring of 1 reaches direct
+    /// neighbours and stops. Pinned on its own because the off-by-one is
+    /// invisible end-to-end — a ring one hop too wide still finds the route,
+    /// just without being the ring it claims to be, so every measurement of
+    /// "cost of a ring" would be quietly attributed to the wrong ring.
+    #[test]
+    fn a_ring_of_one_reaches_direct_neighbours_and_stops() {
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            ring_search: RingSearch::Expanding,
+            reply_policy: ReplyPolicy::TowerAdjacent,
+            ..Default::default()
+        };
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..4).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..4 {
+            d.spawn_node();
+        }
+        // t0 - b0 - b1 - b2 - b3, a straight chain: b3's only answer is b0,
+        // three hops away.
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b2", "b3")],
+            4,
+            &towers,
+        );
+        for i in 0..3 {
+            d.nodes[i].next_bundle_round = u64::MAX;
+        }
+        d.nodes[3].next_bundle_round = 0;
+
+        // Through the whole of the first ring's timeout, the request may only
+        // ever have been heard by b2 — which cannot answer — so no reply can
+        // exist and nothing may travel back.
+        let first_ring = attempt_timeout(&d.params, 1);
+        let mut replies = 0;
+        for round in 0..=first_ring {
+            let ev = d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+            replies += ev.iter().filter(|e| e.kind == EventKind::RouteReply).count();
+        }
+        assert_eq!(replies, 0, "a one-hop ring reached something two hops out");
+        assert!(d.nodes[3].belief.is_none());
+    }
+
+    /// And the ring has to actually widen, or the search would stall at one hop
+    /// forever. Same chain; b3 keeps originating, so it keeps asking, and the
+    /// route must eventually come back.
+    #[test]
+    fn an_expanding_ring_widens_until_it_finds_the_route() {
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            ring_search: RingSearch::Expanding,
+            reply_policy: ReplyPolicy::TowerAdjacent,
+            ..Default::default()
+        };
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..4).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..4 {
+            d.spawn_node();
+        }
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b2", "b3")],
+            4,
+            &towers,
+        );
+        for i in 0..3 {
+            d.nodes[i].next_bundle_round = u64::MAX;
+        }
+        d.nodes[3].next_bundle_round = 0;
+
+        // Checked over the run rather than at the end: a reactive balloon that
+        // has nothing left to send correctly lets its route expire, so the
+        // final state is "no route" whether or not discovery ever worked.
+        let mut found = None;
+        for round in 0..600u64 {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+            if found.is_none() {
+                found = d.nodes[3].belief.map(|b| (round, b.hop_count));
+            }
+        }
+        let (round, hops) = found.expect("the ring must widen until it reaches b0");
+        assert_eq!(hops, 4, "three balloon hops plus the ground hop");
+        assert!(
+            round > attempt_timeout(&d.params, 1),
+            "found at round {round}, inside the first ring — the ring never widened"
+        );
+    }
+
     /// The digest rides tower beacons, which reactive discovery doesn't send.
     /// Silently never acknowledging would look like a protocol result rather
     /// than a missing mechanism, so the combination is refused up front.
@@ -475,3 +745,4 @@ mod tests {
         assert!("dv-dtn:discovery=reactive".parse::<ProtocolSpec>().is_ok());
     }
 }
+

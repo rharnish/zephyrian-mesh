@@ -154,6 +154,28 @@ PROTOCOLS
         route is built from first-hand knowledge. Worth only ~3 points here,
         and it makes requests travel further.
 
+    overhear=off|on               (reactive only, default off)
+        Whether a balloon may install a route from a reply it merely overheard
+        rather than one addressed to it. Costs no airtime — the radio is a
+        broadcast medium and route requests already reach every neighbour — so
+        it is free information by construction. An overhearer adopts only on a
+        strictly shorter route, never on freshness alone: it has no standing to
+        treat somebody else's answer as an answer to its own question.
+
+    ring=max|expanding            (reactive only, default max)
+        max floods every request to the hop limit. expanding is AODV's
+        expanding-ring search: ask one hop out, then two, then four, widening
+        after each unanswered attempt. It buys shorter routes and spends
+        latency to get them, and latency is unusually dear here because a ring
+        that fails costs a full round trip at one hop per wake slot.
+
+    relay=flood|mpr               (link-state only, default flood)
+        Who rebroadcasts a gossiped observation. flood means everyone. mpr is
+        OLSR's multipoint relays: each balloon names the smallest subset of its
+        neighbours that still reaches everything two hops out, and only those
+        rebroadcast for it. Coverage is preserved exactly, so this removes
+        duplicate deliveries and nothing else.
+
     copies=N                      (epidemic only, default 4)
         Starting copy budget per bundle, halved at each handoff. Raising it
         buys reach at the cost of congesting the queues the copies need.
@@ -164,7 +186,9 @@ PROTOCOLS
     ./run-all.sh --protocol dv-dtn:ack=digest,mesh=4
     ./run-all.sh --protocol dv-dtn:metric=nearest,queue=lifo
     ./run-all.sh --protocol dv-dtn:discovery=reactive
+    ./run-all.sh --protocol dv-dtn:discovery=reactive,overhear=on
     ./run-all.sh --protocol dv-dtn:discovery=link-state,lsa=16
+    ./run-all.sh --protocol dv-dtn:discovery=link-state,relay=mpr
     ./run-all.sh --protocol epidemic:copies=16
 
   The measured figures above come from experiments/aggregation-summary.md.

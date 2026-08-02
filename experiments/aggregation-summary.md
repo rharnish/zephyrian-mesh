@@ -358,6 +358,303 @@ does not supply that: 4× turnover leaves link half-life at 184 rounds against a
 150-round bundle lifetime. It would take a synthetic mechanism, and the result
 would be about the mechanism rather than about the atmosphere.
 
+## Coda 2: tuning the two losing families
+
+The reactive and link-state rows above were untuned, and the limitations section
+below named the three obvious mechanisms — OLSR's multipoint relays, AODV's
+expanding-ring search, and learning from replies not addressed to you. All three
+are now implemented and measured.
+
+**Data:** [`discovery-sweep-results.csv`](discovery-sweep-results.csv) — 11
+variants × 20 seeds, n = 1200, 400 rounds, zero wind. **Generator:**
+[`discovery_sweep`](../sim-server/src/bin/discovery_sweep.rs) · **Tables:**
+[`summarize_discovery.py`](summarize_discovery.py)
+
+Contrasts are paired within seed, which is not optional here: between-seed
+spread is 5-7 completion points and the effects are 0.3-4, so unpaired means
+cannot tell a small real effect from noise.
+
+### Two delivery ratios, and why they disagree
+
+| | completion | delivered/originated |
+|---|---|---|
+| definition | delivered / **resolved** | delivered / **originated** |
+| ignores | bundles still stranded at the end of the run | nothing |
+
+**`completion_rate` flatters a protocol that strands bundles**, because a bundle
+still sitting in a queue at round 400 never resolves and so leaves the
+denominator. Reactive discovery strands a great many. The two ratios rank the
+overhearing result oppositely, so both are reported throughout; picking one
+would have been a choice rather than a measurement.
+
+### Reply overhearing — `discovery=reactive,overhear=on`
+
+A route reply is a radio transmission, and route *requests* in the same file
+already reach every neighbour of the sender. Restricting a reply to its
+addressee was modelling a wire, not a radio. Letting every neighbour in earshot
+install the route costs **no additional transmissions at all**.
+
+| | Δ completion | Δ delivered/orig |
+|---|---|---|
+| overhear vs reactive | −0.29 ± 0.42 | **+3.91 ± 0.39** |
+
+The mechanism does exactly what it was built to do, and the counters are
+unambiguous:
+
+| | reactive | +overhear |
+|---|---|---|
+| `stall_no_belief` | 24787 | **8791** (−65%) |
+| `satellite` | 692 | **241** (−65%) |
+| `dropped_loop` | 131 | **679** (5.2×) |
+
+Balloons stop sitting on bundles with nowhere to send them, and satellite
+rescues fall by two thirds because bundles now have routes instead of timing
+out. What it gives back is loops. **Opportunistic adoption does not produce a
+globally consistent route set**: an overhearer installs a route computed for
+somebody else, and the transmitter's own path may run back through the
+overhearer.
+
+Gating adoption on improvement — an overhearer takes a route only if strictly
+shorter, never on freshness alone, since it has no standing to treat another
+node's answer as an answer to its own question — was tried and moved loop drops
+barely at all (610 → 638 at 4 seeds). The remaining loops need real destination
+sequence numbers, which is what actual AODV uses and what this simulator's
+`emitted_at_round` only approximates.
+
+So: **a genuine +3.9 points of absolute delivery, a wash on completion, and the
+honest reading is that the stalling problem is solved and replaced by a smaller
+routing-consistency problem.**
+
+### Expanding-ring search — `discovery=reactive,ring=expanding`
+
+| | Δ completion | Δ delivered/orig |
+|---|---|---|
+| ring vs reactive | **−2.01 ± 0.37** | **−2.15 ± 0.29** |
+
+A clean negative, and the mechanism worked — that is what makes it interesting
+rather than a bug. Routes get shorter exactly as the textbook says (believed
+depth 5.91 → 4.51) and loop drops nearly vanish (131 → 28), because a ring finds
+the *nearest* answer instead of whichever answer shouts back first.
+
+It loses on latency, and the counter says so directly: `stall_no_belief` goes
+**24787 → 31104**. Under a duty cycle a failed ring costs a full round trip at
+one hop per wake slot, so the search spends more time waiting than the shorter
+routes save. The textbook motivation for expanding ring is *airtime*, and
+airtime spent on rebroadcasts is not what binds here.
+
+Combining both is worse than overhearing alone (−1.04 on delivered/orig): the
+ring delays the very replies overhearing wants to spread.
+
+### MPR relay selection — `discovery=link-state,relay=mpr`
+
+Each balloon names the smallest subset of its neighbours that still reaches
+everything two hops out, and only those rebroadcast for it. Two-hop knowledge is
+free here, because neighbour lists are the only thing this variant ever sends.
+
+The mechanism works, and cleanly:
+
+| `lsa` | redundant share, flood → MPR | share of neighbours relaying |
+|---|---|---|
+| 2 | 0.31 → **0.20** | 0.48 |
+| 4 | 0.52 → **0.36** | 0.48 |
+| 16 | 0.71 → **0.52** | 0.48 |
+
+Total record-receptions fall ~25% while *useful* records rise slightly, and
+coverage is provably preserved — a property pinned by a randomised test over 200
+neighbourhood shapes, not just the hand-built case.
+
+| contrast | Δ completion | Δ delivered/orig |
+|---|---|---|
+| MPR at `lsa=2` | +0.28 ± 0.22 | +0.22 ± 0.18 |
+| MPR at `lsa=4` | +0.69 ± 0.16 | +0.54 ± 0.14 |
+| MPR at `lsa=16` | +0.66 ± 0.13 | +0.46 ± 0.11 |
+
+Real, consistent, and **about a tenth of what was predicted.** The prediction,
+made in this repo from the redundancy measurement, was +8-10 points at `lsa=4`.
+
+**The prediction was wrong for a reason worth recording, because it is about the
+model rather than about OLSR.** The argument was that MPR "does not ask for more
+airtime, it stops spending existing airtime on records the receiver already
+holds." That is true of a real radio and false of this simulator: gossip and
+bundle forwarding happen on the *same* wake slot here, not competing ones, so
+freeing gossip capacity frees nothing that bundle delivery can spend. MPR saves
+**bytes**, and this model charges for **slots**.
+
+The residual +0.6 is not nothing — it comes from `lsa`-sized batches carrying
+more distinct records — but the mechanism's main benefit is invisible to the
+delivery metric by construction. Charging per record rather than per slot is the
+change that would make this measurable, and it would alter far more than this
+one result.
+
+### A reproducibility bug found while parallelising the sweep
+
+Parallelising `discovery_sweep` across cores turned up something worth more than
+the speedup. Checking that one thread and four threads agreed, they did not —
+but only on link-state rows, and with `gossip_redundant_share` and `mpr_share`
+byte-identical. Running single-threaded three times settled it: **link-state
+had never been reproducible run to run**, same seed, same thread count.
+
+The cause was in shared code, not link-state.
+[`link_detection.rs`](../sim-server/src/link_detection.rs) assembled its edge
+list with `edges_by_pair.into_values().collect()`, and `HashMap` iteration order
+is randomised per map. That order becomes each balloon's neighbour-list order in
+`MeshAdjacency::rebuild`.
+
+Why only link-state noticed:
+
+| | how it uses neighbour order | affected |
+|---|---|---|
+| proactive | compares epoch and hop count; same answer whatever order offers arrive in | no |
+| reactive | same adoption rule | no |
+| **link-state** | BFS returns the **first** tower found at minimum depth — equal-cost routes are chosen between positionally | **yes** |
+
+A probe comparing two identical runs in one process found them diverging by
+round 3: same tower, same hop count, different `next_hop`.
+
+Sorting the edge list fixes it, and the fix is verifiable from three directions:
+every variant now reproduces in-process; one thread, four threads and a re-run
+are byte-identical; and the **golden fingerprint is unchanged**, which
+independently confirms proactive really was order-insensitive.
+
+**What it changes in the numbers.** Every link-state figure previously published
+carried run-to-run spread that was not seed variance — it inflated link-state
+error bars and the noise floor of any contrast built on them. Re-measured
+against the clean build, the reactive contrasts are *byte-identical* to the
+noisy run (the bug never touched them), while the MPR standard errors fall
+20-28% and the point estimates barely move:
+
+| | noisy | clean |
+|---|---|---|
+| MPR at `lsa=4` | +0.64 ± 0.20 | +0.69 ± 0.16 |
+| MPR at `lsa=16` | +0.87 ± 0.18 | +0.66 ± 0.13 |
+
+Link-state *levels* moved more than its contrasts did — `lsa=16` reads 61.7%
+clean against 64.1% noisy — because a canonical tie-break is a fixed arbitrary
+choice where a random one effectively sampled. Neither is more correct as
+routing; the sorted one is reproducible, which is the property every experiment
+in this directory depends on.
+
+### What this does and does not change
+
+Nothing here reorders the families. Proactive dv-dtn still leads every routing
+alternative, and digest+batch still leads everything. What the tuning establishes
+is that **the reactive and link-state deficits are not artefacts of a lazy
+implementation**: the three standard mechanisms that ought to close them were
+implemented faithfully, two of them worked exactly as specified at the mechanism
+level, and the family ordering did not move.
+
+The reactive baseline is unchanged by this work: a hop-limit off-by-one
+corrected along the way (a request with `ttl = k` now travels `k` hops rather
+than `k+1`) moves it **−0.07 ± 0.20 points**, and proactive reproduces its
+published figure to +0.001.
+
+Link-state levels *are* affected, by the determinism fix rather than by MPR —
+`dv-dtn:discovery=link-state` reads **47.7 ± 5.4** here against the 48.2 ± 5.4
+published from the wind sweep, and the `lsa` ladder re-measured at 20 seeds
+reads **2 → 36.6%, 4 → 47.7%, 16 → 61.7%**, below the earlier small-sample
+figures. Those earlier numbers were taken under randomised neighbour order and
+are not reproducible; these are.
+
+## Coda 3: latency, the axis that was missing
+
+Until now this simulator measured a **delay**-tolerant network without measuring
+delay. Every counter answered "did it arrive?" and none answered "how long did
+that take?" — leaving the defining trade of the field half observed, and letting
+mechanisms that buy delivery by spending time be scored purely on what they
+gained.
+
+Three clocks now run, all in comms rounds, where **5 rounds = one wake slot**:
+
+| clock | from | to | isolates |
+|---|---|---|---|
+| `first_hop_latency` | origination | leaving the origin at all | **discovery** wait |
+| `delivery_latency` | origination | arrival at a tower | the trip |
+| `ack_latency` | origination | the *origin finding out* | the full round trip |
+
+The third is the one a balloon actually experiences. Until it fires, the balloon
+believes nothing has happened.
+
+### The prediction this refutes
+
+`NEXT-STEPS` recorded the expectation that **batching buys delivery with hidden
+latency** — "`mesh=8` waits for a fuller batch, so its +24.8 delivery points may
+be bought with latency nothing currently sees." Measured, paired over 20 seeds:
+
+| | Δ delivery latency | Δ ack latency |
+|---|---|---|
+| `mesh=4` | **−6.8 ± 1.1** | −4.1 ± 0.6 |
+| `mesh=8` | **−7.6 ± 1.2** | −4.3 ± 0.6 |
+| `ack=digest` | −7.5 ± 0.6 | −6.0 ± 0.6 |
+| `digest + mesh=4` | **−20.1 ± 1.2** | −11.2 ± 1.1 |
+
+Batching does not cost latency. **It saves it, substantially**, and p95 delivery
+falls 138 → 79 rounds for digest+batch.
+
+The prediction was wrong because it assumed a mechanism the code does not have.
+Batching here is *opportunistic*, not accumulating: a wake slot carries up to `K`
+bundles **that are already in the queue** (`while ids.len() < batch.mesh_hop`
+peeks at what is present and stops). Nothing ever waits for a batch to fill.
+Classical Nagle-style batching trades latency for efficiency; this trades
+nothing, because the queue is already full of waiting bundles — the constraint
+was never "not enough to send", it was "not enough slots to send it in".
+
+Which sharpens the document's main finding rather than complicating it. Both
+aggregation levers raise **information per wake slot**, and doing so shortens
+every queue in the mesh, so bundles wait behind fewer other bundles. Delivery and
+delay improve together because they were both symptoms of the same scarcity.
+
+### Reactive discovery: the cost, finally measured directly
+
+`stall_no_belief` was always the *symptom*. `first_hop_latency` is the thing
+itself — how long a bundle sits at its origin before it can move at all:
+
+| variant | first hop | delivery |
+|---|---|---|
+| proactive | **7.9** | 52.6 |
+| reactive | **29.9** | 53.9 |
+| reactive + overhear | **15.1** | 49.4 |
+| reactive + expanding ring | **40.7** | 57.1 |
+
+Reactive discovery costs **3.8× the time to get moving**. Reply overhearing
+halves that (29.9 → 15.1), which is the crispest statement yet of what it does:
+it does not improve routes, it removes waiting.
+
+And the expanding ring's negative delivery result is confirmed as a latency
+story rather than inferred from a proxy: **+10.8 rounds before a bundle can
+move**, because each unanswered ring costs a full round trip at one hop per wake
+slot.
+
+### The trap: delivery latency is conditioned on delivery
+
+Read the level table naively and link-state is the fastest protocol in the
+project — 26 rounds against proactive's 53. It is not. **It is only timing the
+bundles it managed to deliver**, and it delivers the easy ones:
+
+| | delivered/orig | delivery latency | believed depth |
+|---|---|---|---|
+| `lsa=2` | 25.8% | **26.0** | 2.69 |
+| `lsa=4` | 34.9% | 28.9 | 3.19 |
+| `lsa=16` | 45.6% | **44.2** | 4.27 |
+
+**Latency rises monotonically as the protocol gets better.** Widening `lsa`
+lets balloons see further, so deeper bundles start arriving — and deeper bundles
+are slower. The fast figure at `lsa=2` is survivorship: only balloons within two
+or three hops of a tower ever get a route, and of course those are quick.
+
+So `delivery_latency` **cannot be compared across protocols with different
+delivery rates.** It is the same class of error as `completion_rate` flattering
+protocols that strand bundles (Coda 2), and it is worth stating as a rule:
+
+> Any metric conditioned on success is only comparable between configurations
+> that succeed at the same rate. Compare it *within* a protocol across a
+> parameter, or pair it with the delivery rate it is conditioned on.
+
+The aggregation contrasts above are safe on this point, and it is worth saying
+why rather than asserting it: digest+batch **raises** delivery from 52% to 85%
+while **lowering** latency 20 rounds. The selection effect pushes in the opposite
+direction to the measured result — a harder set of bundles arriving faster — so
+it cannot be manufacturing that finding.
+
 ## Limitations
 
 - **Zero wind for the main tables.** The protocol comparison has since been
@@ -389,15 +686,28 @@ would be about the mechanism rather than about the atmosphere.
   every effect. More seeds would help there specifically.
 - **The coda's spray-and-wait rows are untuned**, and 4 seeds rather than 24.
   They establish an ordering in this regime, not a bound on the protocol.
-- **The reactive rows are not tuned either.** No route caching between
-  requests, no expanding-ring search, no destination sequence numbers (the age
-  field stands in for them). Given the laundering bug found above, treat 57.3%
-  as a floor for the family rather than a measurement of AODV.
-- **Link-state has no topology reduction.** Real deployments cut exactly the
-  cost measured above with areas, designated relays (OLSR's MPRs), and
-  incremental rather than whole-neighbour-list updates. Any of those would move
-  the `lsa` ladder, and MPR-style relay selection is the obvious next
-  experiment, since it targets the measured constraint directly.
+- **The reactive rows are still missing destination sequence numbers.** Coda 2
+  added expanding-ring search and reply overhearing; the age field still stands
+  in for dest-seq, and the loop drops overhearing introduces are exactly what
+  dest-seq exists to prevent. That is the remaining gap between this and AODV
+  proper, and it is now the *only* named one.
+- **Link-state topology reduction is partly addressed.** Coda 2 added MPR relay
+  selection, which cuts redundant gossip by a third at every `lsa`. The other
+  two standard reductions — hierarchical areas, and incremental updates instead
+  of whole neighbour lists — are not implemented. Incremental updates are the
+  more promising of the two here, since they attack payload size, and payload
+  size is what MPR turned out not to be charged for.
+- **Latency is measured only for bundles that arrive.** See Coda 3 — the figure
+  is conditioned on success, so it is not comparable between configurations with
+  different delivery rates. There is deliberately no "latency" for a bundle that
+  went to satellite (that is just the timeout, 150 by construction) or for one
+  still in flight at the cutoff.
+- **Airtime is charged per slot, not per byte.** This is the model choice that
+  made MPR's measured gain ten times smaller than predicted (see Coda 2), and it
+  applies to every result in this file: any mechanism whose benefit is "fewer
+  bytes on the air" is invisible here, while any mechanism whose benefit is
+  "more done per wake" is fully counted. That asymmetry is why batching and the
+  ack digest dominate this document.
 
 ## Reproducing
 
@@ -428,6 +738,18 @@ more seeds by re-running with a larger first argument.
 
 `--wind none` is the default and means zero wind, so every command above
 reproduces the frozen-topology tables unchanged when the flag is omitted.
+
+For Coda 2 (the discovery-mechanism tuning), one command and no wind backend —
+it runs on zero wind throughout, ~45 min on one core:
+
+```bash
+./target/release/discovery_sweep 20 1200 400 > experiments/discovery-sweep-results.csv
+python3 experiments/summarize_discovery.py experiments/discovery-sweep-results.csv
+```
+
+Unlike the sweeps above this one does **not** resume: it writes the whole CSV in
+one pass, so an interrupted run is restarted rather than continued. At 45
+minutes that was not worth the bookkeeping.
 
 Rows append as they finish and are skipped on restart, so the run can be
 interrupted, resumed, or extended with more seeds by re-running with a larger

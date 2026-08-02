@@ -226,7 +226,8 @@ impl std::str::FromStr for ProtocolSpec {
     /// command line.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use dv_dtn::params::{
-            AckPolicy, Discovery, DvDtnParams, Metric, QueueDiscipline, ReplyPolicy,
+            AckPolicy, Discovery, DvDtnParams, Metric, QueueDiscipline, RelayPolicy,
+            ReplyOverhearing, ReplyPolicy, RingSearch,
         };
 
         let (name, rest) = match s.split_once(':') {
@@ -294,6 +295,27 @@ impl std::str::FromStr for ProtocolSpec {
                         }
                     }
                 }
+                "ring" => {
+                    p.ring_search = match v {
+                        "max" | "full" => RingSearch::Max,
+                        "expanding" | "ring" => RingSearch::Expanding,
+                        _ => return Err(format!("ring: expected max|expanding, got {v:?}")),
+                    }
+                }
+                "overhear" => {
+                    p.reply_overhearing = match v {
+                        "on" | "true" => ReplyOverhearing::On,
+                        "off" | "false" => ReplyOverhearing::Off,
+                        _ => return Err(format!("overhear: expected on|off, got {v:?}")),
+                    }
+                }
+                "relay" => {
+                    p.relay_policy = match v {
+                        "flood" => RelayPolicy::Flood,
+                        "mpr" => RelayPolicy::Mpr,
+                        _ => return Err(format!("relay: expected flood|mpr, got {v:?}")),
+                    }
+                }
                 "mesh" => p.batch.mesh_hop = num()?.max(1),
                 "tower" => p.batch.tower_contact = num()?.max(1),
                 "digest_entries" => p.ack_digest_entries = num()?,
@@ -301,7 +323,7 @@ impl std::str::FromStr for ProtocolSpec {
                 other => {
                     return Err(format!(
                         "unknown parameter {other:?} (known: metric, queue, ack, mesh, tower, \
-                         digest_entries, originate, discovery, reply, lsa)"
+                         digest_entries, originate, discovery, reply, ring, overhear, lsa, relay)"
                     ))
                 }
             }

@@ -263,6 +263,11 @@ impl MeshProtocol for Epidemic {
                     // this protocol pays for its robustness.
                     if self.record_outcome(c.origin_id, c.seq, Channel::Radio) {
                         self.stats.delivered += 1;
+                        // Measured on the copy that actually arrived. Under
+                        // replication that is the *fastest* of several racing
+                        // copies, which is the mechanism's one advantage on
+                        // this axis and the reason to measure it here at all.
+                        self.stats.delivery_latency.record(round - c.created_at_round);
                     } else {
                         self.stats.duplicate_arrivals += 1;
                     }
@@ -428,6 +433,14 @@ impl MeshProtocol for Epidemic {
             .count("handoffs", st.handoffs)
             .count("no_candidate", st.no_candidate)
             .ratio("handoffs_per_delivery", st.handoffs_per_delivery())
+            // Keyed identically to dv-dtn's, so a harness can read the same
+            // ratio off either protocol without knowing which it is driving.
+            .count("unresolved", st.unresolved())
+            .ratio("unresolved_share", st.unresolved_share())
+            .ratio("delivered_per_originated", st.delivered_per_originated())
+            .ratio("satellite_share", st.satellite_share())
+            .ratio("delivery_latency_mean", st.delivery_latency.mean())
+            .ratio("delivery_latency_p95", st.delivery_latency.percentile(0.95))
     }
 
     fn resolved(&self) -> u64 {

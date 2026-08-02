@@ -427,6 +427,10 @@ pub fn step(
             if let Some(o) = b.outstanding.as_mut() {
                 if o.seq == seq && o.state == AckState::Pending {
                     o.state = AckState::Acked;
+                    // Measured from the *bundle's* origination, not the ack's
+                    // departure — this is how long the balloon waited to find
+                    // out, which is the quantity that matters to it.
+                    stats.ack_latency.record(round - o.created_at_round);
                 }
             }
             snapshot_resolved(b);
@@ -508,6 +512,7 @@ pub fn step(
                             .expect("checked non-empty");
                         bump(&mut stats.delivered_hops, bd.hops());
                         stats.delivered += 1;
+                        stats.delivery_latency.record(round - bd.created_at_round);
                         if let Some(o) = nodes.get_mut(bd.origin_id as usize) {
                             o.last_channel = Some(Channel::Radio);
                             if let Some(out) = o.outstanding.as_mut() {
@@ -541,6 +546,10 @@ pub fn step(
                         reversed.pop_front(); // drop `i` itself — already here
                         if reversed.is_empty() {
                             stats.acked += 1;
+                            // The origin handed it to the tower itself, so it
+                            // learns at the moment of delivery — the only case
+                            // where the round trip costs nothing.
+                            stats.ack_latency.record(round - bd.created_at_round);
                             if let Some(o) = nodes[i].outstanding.as_mut() {
                                 if o.seq == bd.seq && o.state == AckState::Pending {
                                     o.state = AckState::Acked;
@@ -647,6 +656,13 @@ pub fn step(
             }
             let Some(pos) = position_of(&nodes[mv.from].queue, origin_id, seq) else { continue };
             let mut bundle = nodes[mv.from].queue.remove(pos).expect("just located");
+            // First time this bundle has moved at all. `path` still holds only
+            // its origin, so everything up to now was the origin waiting for a
+            // route and a slot — which is exactly what separates reactive
+            // discovery's cost from congestion elsewhere in the mesh.
+            if bundle.path.len() == 1 {
+                stats.first_hop_latency.record(round - bundle.created_at_round);
+            }
             bundle.path.push(mv.to);
             nodes[to_idx].queue.push_back(bundle);
             sent += 1;
@@ -725,13 +741,19 @@ pub struct StepOutput {
 /// Resolves an origin's own view once it hears its delivery announced. Same
 /// bookkeeping the source-routed path does when an ack completes, minus the
 /// packet that had to survive the trip.
-pub fn apply_digest_ack(node: &mut DvNode, seq: u64, stats: &mut BundleStats) {
+pub fn apply_digest_ack(node: &mut DvNode, seq: u64, round: u64, stats: &mut BundleStats) {
     let Some(o) = node.outstanding.as_mut() else { return };
     if o.seq != seq || o.state != AckState::Pending {
         return;
     }
     o.state = AckState::Acked;
     stats.acked += 1;
+    // Same clock as the source-routed path — origination to the origin finding
+    // out — so the two ack policies are directly comparable. The digest should
+    // win on this axis as well as on airtime, since the announcement rides a
+    // beacon wave that is already propagating rather than queueing behind
+    // ordinary forwarding.
+    stats.ack_latency.record(round - o.created_at_round);
     snapshot_resolved(node);
 }
 
@@ -824,6 +846,84 @@ mod tests {
         // short of it, so the animated-packet view needs this recorded
         // separately to draw the final leg.
         assert_eq!(outstanding.tower_id, Some(0));
+    }
+
+    /// The three clocks measure three different things, and the ordering
+    /// between them is a structural property rather than an accident of this
+    /// scenario: a bundle cannot arrive before it has left, and its origin
+    /// cannot learn of the arrival before the arrival.
+    ///
+    /// Worth pinning because all three are computed from *different* sources —
+    /// `first_hop` from the bundle at handoff, `delivery` from the bundle at
+    /// the tower, `ack` from the origin's own `outstanding` record — and
+    /// nothing but this test stops one of them silently drifting onto the
+    /// wrong reference round.
+    #[test]
+    fn the_three_latency_clocks_nest_in_the_right_order() {
+        let (balloons, mut nodes, _t, adj) = line(4);
+        seed_beliefs(&mut nodes, 0);
+        let mut stats = BundleStats::default();
+        let awake: Vec<usize> = (0..4).collect();
+
+        for b in nodes.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        // Originates at round 3, not 0, so a clock accidentally measuring from
+        // the start of the run rather than from origination would show up.
+        nodes[3].next_bundle_round = 3;
+
+        for round in 0..40 {
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
+            if stats.acked > 0 {
+                break;
+            }
+        }
+
+        assert_eq!(stats.delivered, 1, "setup: exactly one delivery: {stats:?}");
+        assert_eq!(stats.acked, 1, "setup: and it was acknowledged");
+
+        let first = stats.first_hop_latency.mean();
+        let delivery = stats.delivery_latency.mean();
+        let ack = stats.ack_latency.mean();
+
+        assert_eq!(stats.first_hop_latency.count, 1, "one bundle moved once from its origin");
+        assert!(first > 0.0, "it was not created and moved in the same round");
+        assert!(
+            first < delivery,
+            "a bundle cannot arrive before it leaves: first_hop {first} vs delivery {delivery}"
+        );
+        assert!(
+            delivery <= ack,
+            "an origin cannot learn before arrival: delivery {delivery} vs ack {ack}"
+        );
+        // b3 -> b2 -> b1 -> b0 -> tower is three balloon hops, and a bundle
+        // advances at most one hop per round here, so nothing can be faster.
+        assert!(delivery >= 3.0, "three hops cannot take fewer than three rounds: {delivery}");
+    }
+
+    /// A bundle's first hop is counted once, not once per hop. Getting this
+    /// wrong would leave `first_hop_latency` silently measuring "mean age at
+    /// every handoff" — a plausible-looking number answering a question nobody
+    /// asked.
+    #[test]
+    fn first_hop_latency_counts_each_bundle_once() {
+        let (balloons, mut nodes, _t, adj) = line(4);
+        seed_beliefs(&mut nodes, 0);
+        let mut stats = BundleStats::default();
+        let awake: Vec<usize> = (0..4).collect();
+        for b in nodes.iter_mut() {
+            b.next_bundle_round = u64::MAX;
+        }
+        nodes[3].next_bundle_round = 0;
+
+        for round in 0..20 {
+            step(&mut nodes, &balloons, &adj, &DvDtnParams::default(), &awake, round, &mut stats);
+        }
+        assert_eq!(stats.delivered, 1, "setup: {stats:?}");
+        assert_eq!(
+            stats.first_hop_latency.count, 1,
+            "one bundle crossing three hops must record one first-hop sample, not three"
+        );
     }
 
     #[test]

@@ -59,3 +59,7 @@ experiments/protocol-results/json/*json
 # them record exactly which .nc and time step each came from, so a cache can
 # be reconstructed rather than needing to be shared.
 sim-server/.wind-cache/
+
+# Untracked working notes (NEXT-STEPS.local.md and friends) — scratch, not
+# documentation. Anything worth keeping graduates into docs/ or experiments/.
+*.local.md

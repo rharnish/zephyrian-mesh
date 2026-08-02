@@ -3,6 +3,7 @@
 // the histogram/counter bookkeeping that logic reports into.
 
 use super::params::DvDtnParams;
+use crate::protocol::stats::LatencyStats;
 
 /// Cumulative outcomes. Every bundle that leaves circulation lands in exactly
 /// one of the `delivered` / `dropped_*` / `satellite` counters — the harness
@@ -75,6 +76,27 @@ pub struct BundleStats {
     pub tower_adjacent_samples: u64,
     /// Rounds over which the above was sampled.
     pub rounds_sampled: u64,
+
+    // --- Latency (design doc: the axis that was missing) ---------------------
+    //
+    // Everything above answers "did it arrive?". These answer "how long did that
+    // take?" — the other half of the delay-tolerant trade, and the half that was
+    // unmeasured until now. Three separate clocks, because they answer three
+    // different questions and a mechanism can move them in opposite directions:
+    /// Origination to tower. What the trip cost.
+    pub delivery_latency: LatencyStats,
+    /// Origination to the *origin finding out* — the full round trip, bundle
+    /// out and receipt back. Always at least `delivery_latency`, and the gap
+    /// between them is what the ack mechanism costs. This is the one a balloon
+    /// actually experiences: until it fires, the balloon believes nothing has
+    /// happened.
+    pub ack_latency: LatencyStats,
+    /// Origination to leaving the origin's queue at all. Isolates *discovery*
+    /// wait from *forwarding* wait: a bundle that sat because its balloon had
+    /// no route shows up here, and one that sat in a congested mesh does not.
+    /// The reactive variants were expected to differ from proactive mainly in
+    /// this term.
+    pub first_hop_latency: LatencyStats,
 }
 
 pub fn bump(hist: &mut [u64; 32], n: usize) {
@@ -133,11 +155,85 @@ impl BundleStats {
     /// Delivery among bundles that actually finished. `delivered / originated`
     /// counts everything still legitimately in flight at the cutoff as a
     /// failure, which understates delivery badly at these origination rates.
+    ///
+    /// **The bias runs both ways, and neither ratio is the honest one alone.**
+    /// This one drops still-in-flight bundles from its denominator, so it
+    /// *flatters* a protocol that strands them — and stranding is exactly the
+    /// failure mode of reactive discovery, which spends whole wake slots
+    /// holding bundles with nowhere to send them. Measured: reply overhearing
+    /// reads −0.29 ± 0.42 here and **+3.91 ± 0.39** on `delivered_per_originated`,
+    /// an opposite sign from the same runs. Report both, or say which bias you
+    /// are accepting; `unresolved()` below is the quantity that separates them.
     pub fn completion_rate(&self) -> f64 {
         if self.resolved() == 0 {
             return 0.0;
         }
         self.delivered as f64 / self.resolved() as f64
+    }
+
+    /// Bundles originated that never reached *any* terminal state — still being
+    /// carried when the run ended. Precisely what `completion_rate` discards,
+    /// published so that discarding is visible rather than silent.
+    pub fn unresolved(&self) -> u64 {
+        self.originated.saturating_sub(self.resolved())
+    }
+
+    pub fn unresolved_share(&self) -> f64 {
+        ratio(self.unresolved(), self.originated)
+    }
+
+    /// The other delivery ratio: of everything that was *started*, how much
+    /// arrived. Pessimistic by exactly `unresolved_share`.
+    pub fn delivered_per_originated(&self) -> f64 {
+        ratio(self.delivered, self.originated)
+    }
+
+    /// How much of the finished traffic the release valve carried rather than
+    /// the mesh. High values mean the mesh is not doing the job even when the
+    /// completion figure looks survivable.
+    pub fn satellite_share(&self) -> f64 {
+        ratio(self.satellite, self.resolved())
+    }
+
+    /// Loss the mesh is actually responsible for — looped or out of hops.
+    /// Distinct from satellite, which is a change of channel, not a loss.
+    pub fn mesh_loss_rate(&self) -> f64 {
+        ratio(self.dropped_loop + self.dropped_ttl, self.originated)
+    }
+
+    /// Share of delivered bundles whose receipt made it home. Its complement is
+    /// the band where an origin cannot tell "never arrived" from "arrived, and
+    /// the receipt died" — the belief-versus-truth gap in its purest form.
+    pub fn ack_rate(&self) -> f64 {
+        ratio(self.acked, self.delivered)
+    }
+
+    /// Deliveries per wake slot that actually moved something. The
+    /// airtime-normalised view: two protocols can deliver equally while one
+    /// spends twice the radio time doing it.
+    pub fn delivered_per_slot_used(&self) -> f64 {
+        ratio(self.delivered, self.slots_used())
+    }
+
+    /// Delivery rate as a fraction of what the last hop could physically pass.
+    /// Below ~1 the mesh is the constraint; near 1 the tower-adjacent
+    /// population is, and no amount of routing work will help.
+    pub fn ceiling_utilisation(&self, params: &DvDtnParams) -> f64 {
+        let ceiling = self.delivery_capacity_per_round(params);
+        if self.rounds_sampled == 0 || ceiling == 0.0 {
+            return 0.0;
+        }
+        (self.delivered as f64 / self.rounds_sampled as f64) / ceiling
+    }
+}
+
+/// Guarded division, so an empty run reports zero rather than a NaN that would
+/// poison every downstream mean.
+fn ratio(num: u64, den: u64) -> f64 {
+    if den == 0 {
+        0.0
+    } else {
+        num as f64 / den as f64
     }
 }
 

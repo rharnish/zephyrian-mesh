@@ -1,5 +1,11 @@
 # Mesh comms protocols: what rides in a wake slot
 
+> **This is the reference. If you want the narrative, read
+> [`A-BUNDLES-LIFE.md`](A-BUNDLES-LIFE.md) first** — one bundle followed end to
+> end, with a vocabulary box for the borrowed DTN terms and each design decision
+> named where it bites. This page assumes you already know what a wake slot, a
+> belief and a tower-adjacent balloon are.
+
 Four protocols are implemented, selectable at startup with `--protocol` (see
 `./run-all.sh --help` for the spec syntax). They share one hard constraint: a
 balloon's radio is duty-cycled, so **one wake slot is one transmission**.
@@ -23,8 +29,31 @@ from [`wind-sweep-results.csv`](../../experiments/wind-sweep-results.csv):
 | Distance-vector beacons | `dv-dtn` (default) | 68.9 ± 6.7 |
 | …with digest acks + batching | `dv-dtn:ack=digest,mesh=4` | **94.9 ± 2.0** |
 | Reactive discovery (AODV-style) | `dv-dtn:discovery=reactive` | 52.6 ± 5.3 |
-| Gossiped link-state | `dv-dtn:discovery=link-state` | 48.2 ± 5.4 |
+| Gossiped link-state | `dv-dtn:discovery=link-state` | 47.7 ± 5.4 † |
 | Binary spray-and-wait | `epidemic:copies=16` | 20.4 ± 3.1 |
+
+† Re-measured after a determinism fix. Link-state's breadth-first search picks
+between equal-cost routes by neighbour order, and neighbour order was
+randomised per process by a `HashMap` drain in link detection — so every
+link-state figure before this carried run-to-run spread that was not seed
+variance. The other protocols compare epoch and hop count and were unaffected;
+their numbers are unchanged, and the golden fingerprint confirms it. See
+[`aggregation-summary.md`](../../experiments/aggregation-summary.md) Coda 2.
+
+The two losing families have since been tuned with the three standard mechanisms
+that ought to close the gap — OLSR's multipoint relays, AODV's expanding-ring
+search, and learning from replies not addressed to you. Two worked exactly as
+specified at the mechanism level; **the ordering did not move.** Per-parameter
+figures are in each section below, the full account in
+[`aggregation-summary.md`](../../experiments/aggregation-summary.md) Coda 2.
+
+> **Read `completion` with its denominator in mind.** It is
+> `delivered / resolved`, so bundles still stranded in a queue when the run ends
+> never enter it — which **flatters a protocol that strands bundles**, and
+> reactive discovery strands a great many. On `delivered / originated` the same
+> table reads 52.3 / 38.4 / 35.5 for proactive / reactive / link-state. The two
+> ratios rank reply overhearing oppositely, which is why the discovery sweep
+> reports both.
 
 ---
 
@@ -132,6 +161,17 @@ direction.
 | parameter | default | effect |
 |---|---|---|
 | `reply=` | `intermediate` | Any node holding a live route may answer (what AODV does). `reply=tower` restricts answers to nodes that hear a tower directly: worth **~3 points**, and it makes requests travel further. |
+| `overhear=` | `off` | `on` lets any neighbour in earshot install a route from a reply addressed to someone else — free, since the radio is a broadcast medium and requests already reach every neighbour. **+3.9 ± 0.4 points of delivered/originated**, a wash on completion. Cuts `stall_no_belief` 65% and satellite fallback 65%; gives some back as loop drops (131 → 679). |
+| `ring=` | `max` | `expanding` is AODV's expanding-ring search. **−2.0 ± 0.4 points** — a clean negative. Routes do get shorter (5.9 → 4.5 hops) and loops nearly vanish, but a failed ring costs a full round trip at one hop per wake slot, and `stall_no_belief` rises 24.8k → 31.1k. Expanding ring exists to save airtime; airtime is not what binds here. |
+
+> **Why overhearing does not close the gap.** It solves the waiting problem
+> almost completely and replaces it with a smaller one: **opportunistic adoption
+> does not produce a globally consistent route set.** An overhearer installs a
+> route computed for somebody else, and the transmitter's own path may run back
+> through the overhearer. Gating adoption on strict improvement barely helped.
+> Closing this needs real destination sequence numbers — the same mechanism the
+> laundering bug below points at, and the one remaining gap between this and
+> AODV proper.
 
 > **A bug worth remembering.** Reactive first measured 23.2% with a believed
 > depth of 13.6 hops. A node answering from its own route was stamping the reply
@@ -193,7 +233,24 @@ distance-vector variants can make, where "no belief" is indistinguishable from
 
 | parameter | default | effect |
 |---|---|---|
-| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 41.0%, 4 → 52.3%, 16 → 68.0%, 64 → 71.6%**, at which point it has caught proactive by spending 64 records per slot against a hop count's one number. |
+| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 36.6%, 4 → 47.7%, 16 → 61.7%** at 20 seeds, continuing to `64 → 71.6%` (small-sample), at which point it has caught proactive by spending 64 records per slot against a hop count's one number. |
+| `relay=` | `flood` | `mpr` is OLSR's multipoint relays: each balloon names the smallest neighbour subset still covering everything two hops out, and only those rebroadcast for it. Cuts redundant gossip by a third at every `lsa` (0.52 → 0.36 at the default) with only **48%** of neighbours relaying, and coverage provably preserved. Worth **+0.6 ± 0.2 points** — real, but a tenth of what the redundancy figure suggests. See below. |
+
+> **Why MPR barely pays, and what that says about the model.** Measuring gossip
+> redundancy first — 52% of arriving records teach the receiver nothing at
+> `lsa=4` — made MPR look like a large win, and the prediction from that figure
+> was +8–10 points. Measured: **+0.64 ± 0.20**.
+>
+> The argument was that MPR "does not ask for more airtime, it stops spending
+> existing airtime on records the receiver already holds." That is true of a real
+> radio and false of this simulator: **gossip and bundle forwarding ride the same
+> wake slot here, not competing ones**, so freeing gossip capacity frees nothing
+> bundle delivery can spend. MPR saves *bytes*; this model charges for *slots*.
+>
+> The asymmetry generalizes, and it explains the shape of this whole document:
+> any mechanism whose benefit is "fewer bytes on the air" is invisible here,
+> while any mechanism whose benefit is "more done per wake" is fully counted —
+> which is why batching and the ack digest dominate everything else measured.
 
 ---
 

@@ -31,7 +31,12 @@ belief-vs-truth divergence is plotted in
 | `experiments/` | Offline sweep binaries and their results. |
 | `docs/` | Written-up investigations and protocol diagrams. |
 
-Design notes worth reading first:
+**New to the comms side? Start with
+[`docs/design/A-BUNDLES-LIFE.md`](docs/design/A-BUNDLES-LIFE.md)** — one telemetry
+record followed from measurement to acknowledgement, with each design decision
+named where it bites. It is the on-ramp to everything below.
+
+Then the design notes:
 [`docs/design/MESH_COMMS_DESIGN.md`](docs/design/MESH_COMMS_DESIGN.md) (the comms protocol),
 [`docs/design/PROTOCOL_REFERENCE.md`](docs/design/PROTOCOL_REFERENCE.md) (all four protocols, diagrammed),
 [`docs/design/TIMING_MODEL.md`](docs/design/TIMING_MODEL.md) (every clock in the system, in seconds),
