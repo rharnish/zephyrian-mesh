@@ -260,31 +260,83 @@ queue capacity of 8 is self-inflicted congestion). The honest claim is
 narrower, and the obvious follow-up was to churn the topology until dv-dtn's
 beliefs could not keep up, which is where the ordering should invert.
 
-### That follow-up ran, and the ordering did not invert
+### That follow-up ran across seven weather fields, and the ordering did not invert
 
-Every table above is zero wind. Repeating the comparison on a real ERA5 field
-(1978-06-09T03:00, same seeds, same n, `--wind`) moves essentially nothing:
+**Data:** [`wind-sweep-results.csv`](wind-sweep-results.csv) — 960 rows: 8 wind
+conditions (zero, plus seven hourly ERA5 fields from 1978-06-09) × 20 seeds × 6
+protocols, n = 1200, 400 rounds. ~3h on two cores.
+**Generator:** [`wind_sweep`](../sim-server/src/bin/wind_sweep.rs) ·
+**Tables:** [`summarize_wind.py`](summarize_wind.py)
 
-| protocol | zero wind | real wind |
-|---|---|---|
-| dv-dtn (shipped) | 72.3 ± 7.7% | 72.9 ± 8.7% |
-| dv-dtn digest + mesh=4 | 95.0 ± 1.4% | 93.0 ± 3.6% |
-| dv-dtn reactive | 57.3 ± 5.0% | 53.4 ± 7.7% |
-| dv-dtn link-state | 52.4 ± 5.7% | 51.0 ± 6.3% |
-| spray-and-wait L=4 | 10.4 ± 1.2% | 10.8 ± 1.6% |
-| spray-and-wait L=16 | 23.5 ± 3.4% | 23.7 ± 4.6% |
+Completion %, mean ± sd across 20 seeds:
+
+| protocol | zero wind | real wind (7 fields pooled) | difference |
+|---|---|---|---|
+| dv-dtn (shipped) | 68.9 ± 6.7 | 70.2 ± 6.1 | +1.3 ± 1.6 |
+| dv-dtn digest + mesh=4 | **94.9 ± 2.0** | 92.8 ± 2.8 | **−2.0 ± 0.5** |
+| dv-dtn reactive | 52.6 ± 5.3 | 50.2 ± 5.4 | −2.4 ± 1.3 |
+| dv-dtn link-state | 48.2 ± 5.4 | 48.4 ± 4.7 | +0.2 ± 1.3 |
+| spray-and-wait L=4 | 9.4 ± 1.7 | 10.2 ± 1.6 | +0.8 ± 0.4 |
+| spray-and-wait L=16 | 20.4 ± 3.1 | 21.8 ± 3.2 | +1.4 ± 0.7 |
+
+**Compared within every (wind, seed) cell, dv-dtn beats spray-and-wait L=16 in
+160 of 160 cells.** The narrowest margin anywhere is **+38.0 points**. This is
+not a close call that weather might tip.
 
 **The churn is real and it reached the protocol.** `link_churn` measures link
 turnover rising 4.1× (0.091% → 0.376% per round, half-life 757 → 184 rounds) at
-unchanged density, and dv-dtn's own counter agrees almost exactly:
-`stall_stale_next_hop` goes 50 → 212, a 4.3× rise. Believed depth grows 7.12 →
-7.47 and loop drops double. Routes are going stale four times as often, and
-completion does not move.
+unchanged density, and dv-dtn's own counter agrees: `stall_stale_next_hop` goes
+42 → ~197, a 4.7× rise, consistent across all seven fields. Mean degree does not
+move (6.22 → 6.22). Routes go stale nearly five times as often and delivery
+does not care.
 
-**The reason is that store-carry-forward already absorbs exactly this.** A
-balloon whose next hop has gone does not drop the bundle — it keeps carrying it
-and forwards later, by a different route. `dropped_ttl` actually *falls*
-(2.25 → 1.50). Churn converts into delay, not loss.
+**Store-carry-forward absorbs it.** A balloon whose next hop has gone keeps
+carrying the bundle and forwards it later by another route. Churn becomes delay
+rather than loss.
+
+### Weather matters ~10× less than which balloon field you drew
+
+The reason the single-field result was safe, quantified — sd of the per-weather
+means against the typical sd across seeds *within* one weather:
+
+| protocol | sd across weather fields | sd across seeds |
+|---|---|---|
+| dv-dtn | 0.58 | 6.22 |
+| dv-dtn digest + mesh=4 | 0.41 | 2.74 |
+| dv-dtn reactive | 0.49 | 5.54 |
+| spray-and-wait L=16 | 0.15 | 3.29 |
+
+An order of magnitude apart at every row. Which hour of weather you simulate is
+nearly irrelevant next to which balloon field you happened to draw — so the
+earlier one-field result was not luck, and adding more weather would not change
+it. This is the measurement that turns "wind changed nothing that afternoon"
+into a statement about wind.
+
+### The one real effect: batching is what churn can hurt
+
+Only one row moves outside two standard errors, and it is the *best* one:
+digest + mesh=4 loses **2.0 ± 0.5** points. The counters say why —
+`dropped_ttl` rises 11.4 → 19.4 (1.7×), while plain dv-dtn's barely moves
+(1.2 → 1.8).
+
+So churn does convert into delay, exactly as claimed above — but **delay is
+only free when there is slack to absorb it.** At 95% completion the mesh is
+running near its ceiling, queues drain instead of backing up, and a bundle that
+loses its route rides until its TTL expires rather than waiting in a queue that
+was going to be slow anyway. The configuration with the most throughput has the
+least room to absorb disruption, and is the only one where churn costs
+deliveries.
+
+That is a refinement of the store-carry-forward argument rather than a
+counterexample to it, and it is a caution worth carrying into any tuning work:
+**the gains from aggregation are slightly softer under real weather than the
+frozen-topology tables suggest**, and 4 seeds on one field could not resolve it
+(the same comparison there read −2.0 ± 1.9, a hair over one standard error).
+
+Note also that both replication rows gain slightly under wind (+0.8, +1.4).
+That is the mechanism replication exists for — motion carrying copies within
+earshot of towers they could not otherwise reach — showing up with the right
+sign and an entirely irrelevant magnitude against a 48-point deficit.
 
 This also corrects a prediction made from these same measurements. Reading the
 churn figures, I first estimated path survival — a 7-hop path is in transit ~35
@@ -314,17 +366,18 @@ would be about the mechanism rather than about the atmosphere.
   batching levers act on airtime rather than on route validity, there is no
   particular reason to expect wind to change them — but that is an argument,
   not a measurement.
-- **One weather sample.** The coda's wind result rests on a single ERA5 time
-  step (1978-06-09T03:00, shear 7.3 ± 5.6 m/s across the balloon altitude
-  band), which is a mild field. The cache keys on time step precisely so that
-  wind can become a factor crossed with the seed, but the file currently on
-  disk holds only one step, so that awaits more data. A winter jet would churn
-  considerably harder.
-- **The wind comparison is 4 seeds and unpaired across wind conditions.**
-  Balloon positions diverge once wind is applied, so the two columns are not
-  paired the way the within-table comparisons are. The null result is safe at
-  this effect size — the counters independently confirm the churn arrived — but
-  a small effect would be invisible here.
+- **One day of weather.** The wind sweep uses seven hourly fields from a single
+  date (1978-06-09), so it samples the diurnal cycle but not the seasonal one.
+  Between-weather variance is ~10x smaller than between-seed variance across
+  those seven, which is strong evidence the result does not hinge on the hour —
+  but a winter jet is a different regime and is not represented. The cache keys
+  on the source file's bytes, so adding one is a download rather than a code
+  change.
+- **Wind conditions are unpaired with each other.** Balloons advect differently
+  once wind is applied, so "zero wind, seed 3" and "06:00, seed 3" are different
+  fields; only the within-cell protocol comparisons are paired. Differences
+  across wind therefore carry the full spread, which is why the −2.0 point
+  batching effect needed 20 seeds to resolve.
 - **`originate = 200` throughout.** Both levers raise capacity; none of this
   says where the mesh breaks under heavier demand. With completion at 94% and
   ceiling utilisation at 31%, raising demand is the obvious next experiment.
@@ -360,13 +413,18 @@ populated once, with `weather-data-server` running; after that it is read from
 disk and the Python side can be stopped:
 
 ```bash
-cargo run --release --bin wind_cache -- steps        # what the .nc holds
-cargo run --release --bin wind_cache -- fetch        # cache the configured step
+cargo run --release --bin wind_cache -- steps          # what the .nc holds
+cargo run --release --bin wind_cache -- fetch 0 4 8 12 16 20   # cache a spread
 cargo run --release --bin wind_cache -- list
 
-./target/release/link_churn 1978-06-09T03:00:00 1200 400        # is there churn?
-./target/release/protocol_compare --wind 1978-06-09T03:00:00 4 1200 400
+./target/release/link_churn 1978-06-09T04:00:00 1200 400   # is there churn?
+RAYON_NUM_THREADS=2 nohup ./target/release/wind_sweep 20 400 &
+python3 experiments/summarize_wind.py experiments/wind-sweep-results.csv
 ```
+
+`wind_sweep` resumes like `aggregation_sweep`: finished rows are appended
+immediately and skipped on restart, so it can be interrupted or extended with
+more seeds by re-running with a larger first argument.
 
 `--wind none` is the default and means zero wind, so every command above
 reproduces the frozen-topology tables unchanged when the flag is omitted.
