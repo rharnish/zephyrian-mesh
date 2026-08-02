@@ -382,7 +382,7 @@ impl MeshProtocol for DvDtn {
     fn stats(&self) -> crate::protocol::stats::StatsTable {
         use crate::protocol::stats::StatsTable;
         let st = &self.stats;
-        StatsTable::new()
+        let t = StatsTable::new()
             .count("originated", st.originated)
             .count("delivered", st.delivered)
             .count("resolved", st.resolved())
@@ -400,7 +400,16 @@ impl MeshProtocol for DvDtn {
             .ratio("mean_tower_adjacent", st.mean_tower_adjacent())
             .ratio("delivery_ceiling_per_round", st.delivery_capacity_per_round(&self.params))
             .ratio("belief_hops_mean", bundle::hist_mean(&st.belief_hops))
-            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops))
+            .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops));
+        if self.params.discovery == Discovery::LinkState {
+            let (r, u) = (self.linkstate.records_redundant, self.linkstate.records_useful);
+            let total = r + u;
+            return t
+                .count("gossip_records_useful", u)
+                .count("gossip_records_redundant", r)
+                .ratio("gossip_redundant_share", if total == 0 { 0.0 } else { r as f64 / total as f64 });
+        }
+        t
     }
 
     fn resolved(&self) -> u64 {

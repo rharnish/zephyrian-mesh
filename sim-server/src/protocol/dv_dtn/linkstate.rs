@@ -85,6 +85,13 @@ pub struct LsNode {
 #[derive(Debug, Default)]
 pub struct State {
     pub nodes: Vec<LsNode>,
+    /// Records that arrived carrying nothing new — the receiver already held
+    /// that origin at an equal or newer sequence. This is the headroom an
+    /// MPR-style relay scheme would be competing for: every one of these
+    /// consumed a slice of somebody's wake slot and taught nobody anything.
+    pub records_redundant: u64,
+    /// Records that did teach the receiver something.
+    pub records_useful: u64,
 }
 
 impl State {
@@ -169,6 +176,7 @@ pub fn step(
     // 4. Apply. Every neighbour in range hears the whole batch — one
     //    transmission, several records, which is what `payload` on the event
     //    is for.
+    let (mut redundant, mut useful) = (0u64, 0u64);
     for (from_idx, batch) in out {
         let from_id = balloons[from_idx].id;
         for &nb in adj.neighbors(from_idx) {
@@ -194,8 +202,10 @@ pub fn step(
                 // without being relayed, which is what stops the flood.
                 let newer = ls.db.get(&rec.origin).is_none_or(|cur| rec.seq > cur.seq);
                 if !newer {
+                    redundant += 1;
                     continue;
                 }
+                useful += 1;
                 ls.db.insert(rec.origin, rec.clone());
                 ls.dirty = true;
                 if !ls.to_relay.contains(&rec.origin) {
@@ -204,6 +214,9 @@ pub fn step(
             }
         }
     }
+
+    state.records_redundant += redundant;
+    state.records_useful += useful;
 
     // 5. Recompute routes. Only for balloons that transmitted this round and
     //    whose map actually moved — the search is the expensive part of this
