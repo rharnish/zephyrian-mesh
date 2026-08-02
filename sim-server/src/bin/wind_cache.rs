@@ -76,7 +76,7 @@ fn cmd_steps() -> Result<(), String> {
         base.time_step_count
     );
     let cache = WindCache::open().map_err(|e| format!("opening cache: {e}"))?;
-    println!("{:>5}  {:<21}  {}", "index", "validTime", "cached");
+    println!("{:>5}  {:<21}  cached", "index", "validTime");
     println!("{}", "-".repeat(40));
     for i in 0..base.time_step_count {
         let m = fetch_source(Some(i))?;
@@ -95,7 +95,7 @@ fn cmd_list() -> Result<(), String> {
         return Ok(());
     }
     let total: u64 = entries.iter().map(|e| e.bytes).sum();
-    println!("{:<21}  {:<16}  {:>7}  {:>5}  {}", "label", "key", "MB", "lvls", "grid");
+    println!("{:<21}  {:<16}  {:>7}  {:>5}  grid", "label", "key", "MB", "lvls");
     println!("{}", "-".repeat(66));
     for e in &entries {
         println!(

@@ -408,7 +408,7 @@ impl World {
         }
 
         self.tick_count += 1;
-        let recompute_links = self.tick_count % LINK_UPDATE_EVERY_N_TICKS as u64 == 0;
+        let recompute_links = self.tick_count.is_multiple_of(LINK_UPDATE_EVERY_N_TICKS as u64);
 
         let edges = if recompute_links {
             let max_range_km = 2.0 * horizon_km(BALLOON_MAX_ALT, self.horizon_refraction_coeff);
@@ -491,7 +491,7 @@ impl World {
         // and jittered, so they don't align with the link-recompute cadence.
         // Only visible balloons take part, since only they have edges.
         let mut comms_events: Option<Vec<CommsEventWire>> = None;
-        if self.tick_count % COMMS_EVERY_N_TICKS == 0 {
+        if self.tick_count.is_multiple_of(COMMS_EVERY_N_TICKS) {
             let round = self.tick_count / COMMS_EVERY_N_TICKS;
             // Beacons first, so a bundle forwarded this round uses the freshest
             // belief available rather than one a round old. `awake` is the set

@@ -122,11 +122,11 @@ pub fn step(
 
     // 2. Wake set — the same duty cycle as everything else.
     let mut awake = Vec::new();
-    for i in 0..n {
-        if round < nodes[i].next_beacon_round {
+    for (i, node) in nodes.iter_mut().enumerate().take(n) {
+        if round < node.next_beacon_round {
             continue;
         }
-        nodes[i].next_beacon_round = super::beacon::next_slot(round, params, rng);
+        node.next_beacon_round = super::beacon::next_slot(round, params, rng);
         awake.push(i);
     }
 
@@ -303,8 +303,10 @@ mod tests {
     }
 
     fn linkstate() -> super::super::DvDtn {
-        let mut p = DvDtnParams::default();
-        p.discovery = Discovery::LinkState;
+        let p = DvDtnParams {
+            discovery: Discovery::LinkState,
+            ..Default::default()
+        };
         let mut d = super::super::DvDtn::with_params(p);
         d.reseed(5);
         d

@@ -79,8 +79,8 @@ fn main() {
         real_seconds(1),
     );
     println!(
-        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   {}",
-        "round", "truth%", "believes%", "stale%", "unaware%", "discovery"
+        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   discovery",
+        "round", "truth%", "believes%", "stale%", "unaware%"
     );
 
     let mut converged_at: Option<u64> = None;
@@ -128,8 +128,8 @@ fn main() {
     // it should drain away over roughly belief_max_age as beliefs age out.
     println!("\n--- collapsing horizon coeff to 2.5 (mesh shatters) ---");
     println!(
-        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   {}",
-        "round", "truth%", "believes%", "stale%", "unaware%", "stale"
+        "{:>5}  {:>7}  {:>9}  {:>7}  {:>8}   stale",
+        "round", "truth%", "believes%", "stale%", "unaware%"
     );
     world.horizon_refraction_coeff = 2.5;
     let mut peak_stale: f64 = 0.0;

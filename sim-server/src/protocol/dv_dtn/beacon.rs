@@ -140,6 +140,11 @@ pub struct BeaconStepResult {
 /// scratch if it becomes visible again.)
 ///
 /// `balloons` is read-only: discovery reads identity, never physics state.
+// The argument list is wide because all three discovery modes (this,
+// aodv::step, linkstate::step) deliberately share a parallel contract:
+// take the world read-only, mutate protocol state, return the wake set.
+// Bundling them into a struct would hide that symmetry to satisfy a lint.
+#[allow(clippy::too_many_arguments)]
 pub fn step(
     nodes: &mut [DvNode],
     balloons: &[Balloon],
@@ -364,9 +369,9 @@ use crate::mesh_adjacency::MeshAdjacency;
         let mut first_seen = [None; 3];
         for round in 0..60u64 {
             f.step(&adj, round, &mut rng);
-            for i in 0..3 {
-                if first_seen[i].is_none() && f.belief(i).is_some() {
-                    first_seen[i] = Some(round);
+            for (i, seen) in first_seen.iter_mut().enumerate() {
+                if seen.is_none() && f.belief(i).is_some() {
+                    *seen = Some(round);
                 }
             }
         }

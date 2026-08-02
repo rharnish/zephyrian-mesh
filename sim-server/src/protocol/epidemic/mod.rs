@@ -481,8 +481,7 @@ mod tests {
     /// route — there are none — so the record can only reach the ground by
     /// being copied along until some holder happens to be in tower range.
     fn chain(copies: u32) -> (Epidemic, Vec<Balloon>, Vec<Tower>, MeshAdjacency) {
-        let mut p = EpidemicParams::default();
-        p.copies = copies;
+        let p = EpidemicParams { copies, ..Default::default() };
         let mut e = Epidemic::with_params(p);
         e.reseed(11);
         let balloons: Vec<Balloon> =

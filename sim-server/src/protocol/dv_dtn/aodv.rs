@@ -125,11 +125,11 @@ pub fn step(
 
     // 2. Wake set — same duty cycle as everything else.
     let mut awake = Vec::new();
-    for i in 0..n {
-        if round < nodes[i].next_beacon_round {
+    for (i, node) in nodes.iter_mut().enumerate().take(n) {
+        if round < node.next_beacon_round {
             continue;
         }
-        nodes[i].next_beacon_round = super::beacon::next_slot(round, params, rng);
+        node.next_beacon_round = super::beacon::next_slot(round, params, rng);
         awake.push(i);
     }
 
@@ -276,7 +276,7 @@ pub fn step(
     // A balloon that can hear a tower needs no discovery at all — it is
     // already at the destination. Recorded directly so the last hop behaves
     // identically in both modes.
-    for i in 0..n {
+    for (i, node) in nodes.iter_mut().enumerate().take(n) {
         if let Some(tower_id) = adj.tower_in_range(i) {
             let direct = RouteBelief {
                 tower_id,
@@ -285,8 +285,8 @@ pub fn step(
                 epoch: 0,
                 emitted_at_round: round,
             };
-            if super::beacon::should_adopt(nodes[i].belief.as_ref(), &direct, params) {
-                nodes[i].belief = Some(direct);
+            if super::beacon::should_adopt(node.belief.as_ref(), &direct, params) {
+                node.belief = Some(direct);
             }
         }
     }
@@ -316,8 +316,10 @@ mod tests {
     /// discovered across two hops and answered back across two.
     #[test]
     fn a_route_is_discovered_on_demand_and_a_bundle_follows_it() {
-        let mut p = DvDtnParams::default();
-        p.discovery = Discovery::Reactive;
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            ..Default::default()
+        };
         let mut d = super::super::DvDtn::with_params(p);
         d.reseed(5);
         let balloons: Vec<Balloon> =
@@ -348,8 +350,10 @@ mod tests {
     /// proactive mode, where a route shows up whether or not it is wanted.
     #[test]
     fn no_bundle_means_no_discovery_traffic() {
-        let mut p = DvDtnParams::default();
-        p.discovery = Discovery::Reactive;
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            ..Default::default()
+        };
         let mut d = super::super::DvDtn::with_params(p);
         d.reseed(5);
         let balloons: Vec<Balloon> =
@@ -392,8 +396,10 @@ mod tests {
     #[test]
     fn an_answer_from_a_stale_route_does_not_pass_it_off_as_current() {
         const NEWS: u64 = 40;
-        let mut p = DvDtnParams::default();
-        p.discovery = Discovery::Reactive;
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            ..Default::default()
+        };
         let mut d = super::super::DvDtn::with_params(p);
         d.reseed(5);
         let balloons: Vec<Balloon> =
@@ -435,9 +441,11 @@ mod tests {
     /// found it. Cheap to state, and it keeps the parameter honest.
     #[test]
     fn tower_adjacent_gating_still_finds_the_route() {
-        let mut p = DvDtnParams::default();
-        p.discovery = Discovery::Reactive;
-        p.reply_policy = ReplyPolicy::TowerAdjacent;
+        let p = DvDtnParams {
+            discovery: Discovery::Reactive,
+            reply_policy: ReplyPolicy::TowerAdjacent,
+            ..Default::default()
+        };
         let mut d = super::super::DvDtn::with_params(p);
         d.reseed(5);
         let balloons: Vec<Balloon> =

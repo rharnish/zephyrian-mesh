@@ -781,8 +781,8 @@ mod tests {
 
     /// Give every balloon a correct belief pointing one hop closer to the tower.
     fn seed_beliefs(nodes: &mut [DvNode], round: u64) {
-        for i in 0..nodes.len() {
-            nodes[i].belief = Some(RouteBelief {
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.belief = Some(RouteBelief {
                 tower_id: 0,
                 hop_count: i as u32 + 1,
                 next_hop: if i == 0 { None } else { Some(i as u32 - 1) },
