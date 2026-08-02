@@ -1,5 +1,11 @@
 # Mesh comms protocols: what rides in a wake slot
 
+> **This is the reference. If you want the narrative, read
+> [`A-BUNDLES-LIFE.md`](A-BUNDLES-LIFE.md) first** — one bundle followed end to
+> end, with a vocabulary box for the borrowed DTN terms and each design decision
+> named where it bites. This page assumes you already know what a wake slot, a
+> belief and a tower-adjacent balloon are.
+
 Four protocols are implemented, selectable at startup with `--protocol` (see
 `./run-all.sh --help` for the spec syntax). They share one hard constraint: a
 balloon's radio is duty-cycled, so **one wake slot is one transmission**.
