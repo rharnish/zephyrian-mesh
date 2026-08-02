@@ -38,7 +38,7 @@
 // maps to stay current.
 
 use super::beacon::RouteBelief;
-use super::params::DvDtnParams;
+use super::params::{DvDtnParams, RelayPolicy};
 use super::DvNode;
 use crate::link_detection::NodeKey;
 use crate::mesh_adjacency::MeshAdjacency;
@@ -61,6 +61,14 @@ pub struct Lsa {
     /// A tower this balloon can hand a bundle straight to, if any. The only
     /// thing that makes a node a destination worth routing toward.
     pub tower: Option<u32>,
+    /// Under `RelayPolicy::Mpr`, the neighbours this balloon is asking to
+    /// rebroadcast on its behalf. Empty under `RelayPolicy::Flood`, where
+    /// everyone rebroadcasts and nobody needs to be asked.
+    ///
+    /// This is why the selection has to be *announced* rather than merely
+    /// computed: the decision is made by the sender, but acted on by the
+    /// receiver, which cannot work out on its own whether it was chosen.
+    pub mprs: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -92,6 +100,14 @@ pub struct State {
     pub records_redundant: u64,
     /// Records that did teach the receiver something.
     pub records_useful: u64,
+    /// Under `RelayPolicy::Mpr`, how many neighbours have been named as relays,
+    /// summed over every selection made. Divided by `mpr_candidates` this gives
+    /// the share of the neighbourhood that rebroadcasts — the quantity the
+    /// scheme exists to shrink, and the one that says whether a given field has
+    /// enough neighbour overlap for it to be worth anything.
+    pub mpr_selected: u64,
+    /// Neighbours considered across those same selections.
+    pub mpr_candidates: u64,
 }
 
 impl State {
@@ -143,9 +159,25 @@ pub fn step(
     //    nobody else can supply, and dropping it would leave a balloon
     //    invisible to the mesh while it forwarded gossip about others.
     let mut out: Vec<(usize, Vec<Lsa>)> = Vec::new();
+    let mut mpr_selected = 0u64;
+    let mut mpr_candidates = 0u64;
     for &i in &awake {
         let id = balloons[i].id;
         let ls = &mut state.nodes[i];
+
+        // Who this balloon is asking to rebroadcast for it. Computed from the
+        // map it has already assembled — no extra traffic is needed to learn
+        // the two-hop neighbourhood, because neighbour lists are the only thing
+        // this variant ever sends.
+        let mprs = match params.relay_policy {
+            RelayPolicy::Flood => Vec::new(),
+            RelayPolicy::Mpr => {
+                let m = select_mprs(&ls.db, id, adj.neighbors(i));
+                mpr_selected += m.len() as u64;
+                mpr_candidates += adj.neighbors(i).len() as u64;
+                m
+            }
+        };
 
         ls.seq += 1;
         let own = Lsa {
@@ -154,6 +186,7 @@ pub fn step(
             emitted_at_round: round,
             neighbors: adj.neighbors(i).to_vec(),
             tower: adj.tower_in_range(i),
+            mprs,
         };
         ls.db.insert(id, own.clone());
         ls.dirty = true;
@@ -180,6 +213,16 @@ pub fn step(
     for (from_idx, batch) in out {
         let from_id = balloons[from_idx].id;
         for &nb in adj.neighbors(from_idx) {
+            // Was this neighbour asked to rebroadcast for the sender? Under
+            // flooding everyone is; under MPR only the named subset is, and the
+            // rest still *absorb* everything below — they simply do not pass it
+            // on. Nothing is dropped from anyone's map, which is what makes
+            // this a duplicate-suppression scheme rather than a reachability
+            // trade.
+            let relays_for_sender = match params.relay_policy {
+                RelayPolicy::Flood => true,
+                RelayPolicy::Mpr => batch[0].mprs.contains(&nb),
+            };
             let nb_idx = nb as usize;
             if nb_idx >= n {
                 continue;
@@ -208,7 +251,7 @@ pub fn step(
                 useful += 1;
                 ls.db.insert(rec.origin, rec.clone());
                 ls.dirty = true;
-                if !ls.to_relay.contains(&rec.origin) {
+                if relays_for_sender && !ls.to_relay.contains(&rec.origin) {
                     ls.to_relay.push_back(rec.origin);
                 }
             }
@@ -217,6 +260,8 @@ pub fn step(
 
     state.records_redundant += redundant;
     state.records_useful += useful;
+    state.mpr_selected += mpr_selected;
+    state.mpr_candidates += mpr_candidates;
 
     // 5. Recompute routes. Only for balloons that transmitted this round and
     //    whose map actually moved — the search is the expensive part of this
@@ -231,6 +276,93 @@ pub fn step(
     }
 
     (awake, events)
+}
+
+/// Pick the smallest set of neighbours that still reaches every balloon two
+/// hops out — OLSR's multipoint relay selection, over the map this balloon has
+/// already gossiped its way into holding.
+///
+/// The classical greedy, which is where the guarantee comes from: it is the
+/// standard set-cover approximation, so the result is within `ln|N2|` of the
+/// true minimum, and — more importantly than the size bound — **coverage is
+/// exact**. Every two-hop node is reachable through some selected neighbour, so
+/// no record fails to propagate. The saving is entirely in duplicates.
+///
+/// Two-hop knowledge comes free here. In real OLSR it is why HELLO messages
+/// carry neighbour lists; in this variant neighbour lists are *the only thing
+/// that is ever sent*, so the input to the selection is already sitting in the
+/// database for its own sake.
+fn select_mprs(db: &HashMap<u32, Lsa>, self_id: u32, neighbors: &[u32]) -> Vec<u32> {
+    let n1: HashSet<u32> = neighbors.iter().copied().collect();
+
+    // Sorted so selection is deterministic under ties. Two neighbours often
+    // cover exactly the same count, and letting hash order break that would
+    // make a seeded run unreproducible.
+    let mut sorted: Vec<u32> = neighbors.to_vec();
+    sorted.sort_unstable();
+
+    let mut selected: Vec<u32> = Vec::new();
+    let mut cover: Vec<(u32, HashSet<u32>)> = Vec::new();
+    for &nb in &sorted {
+        match db.get(&nb) {
+            // No observation from this neighbour yet, so there is no way to
+            // know what it uniquely reaches. Selecting it is the safe reading:
+            // an unnecessary relay costs a slice of airtime, where a missing
+            // one costs coverage. This is also what makes the cold start behave
+            // — before any gossip has arrived every neighbour is unknown, so
+            // the scheme floods and then tightens as the map fills in.
+            None => selected.push(nb),
+            Some(rec) => {
+                let reach: HashSet<u32> = rec
+                    .neighbors
+                    .iter()
+                    .copied()
+                    .filter(|x| *x != self_id && !n1.contains(x))
+                    .collect();
+                cover.push((nb, reach));
+            }
+        }
+    }
+
+    let mut uncovered: HashSet<u32> = cover.iter().flat_map(|(_, s)| s.iter().copied()).collect();
+
+    // Step 1: any neighbour that is the *only* way to reach some two-hop node
+    // is not optional. Taking these first is what keeps the greedy honest —
+    // without it the loop below can pick a high-degree neighbour whose coverage
+    // is entirely redundant and still be forced to add the mandatory one after.
+    for (nb, reach) in &cover {
+        let sole = reach
+            .iter()
+            .any(|x| cover.iter().filter(|(_, other)| other.contains(x)).count() == 1);
+        if sole {
+            selected.push(*nb);
+            for x in reach {
+                uncovered.remove(x);
+            }
+        }
+    }
+
+    // Step 2: greedily take whichever remaining neighbour closes the most of
+    // what is left, until nothing is left.
+    while !uncovered.is_empty() {
+        let best = cover
+            .iter()
+            .filter(|(nb, _)| !selected.contains(nb))
+            .map(|(nb, reach)| (reach.iter().filter(|x| uncovered.contains(*x)).count(), *nb))
+            .filter(|(gain, _)| *gain > 0)
+            // `max_by_key` keeps the last maximum, and `sorted` is ascending,
+            // so reversing the id makes ties resolve to the lowest id.
+            .max_by_key(|(gain, nb)| (*gain, std::cmp::Reverse(*nb)));
+        let Some((_, nb)) = best else { break }; // nothing left can help
+        selected.push(nb);
+        if let Some((_, reach)) = cover.iter().find(|(x, _)| *x == nb) {
+            for x in reach {
+                uncovered.remove(x);
+            }
+        }
+    }
+
+    selected
 }
 
 /// Breadth-first search from `self_id` to the nearest balloon that can hear a
@@ -391,16 +523,16 @@ mod tests {
         let mut db = HashMap::new();
         db.insert(
             0,
-            Lsa { origin: 0, seq: 1, emitted_at_round: 100, neighbors: vec![1], tower: None },
+            Lsa { origin: 0, seq: 1, emitted_at_round: 100, neighbors: vec![1], tower: None, mprs: vec![] },
         );
         // The middle observation is much older than the ones on either side.
         db.insert(
             1,
-            Lsa { origin: 1, seq: 1, emitted_at_round: 20, neighbors: vec![0, 2], tower: None },
+            Lsa { origin: 1, seq: 1, emitted_at_round: 20, neighbors: vec![0, 2], tower: None, mprs: vec![] },
         );
         db.insert(
             2,
-            Lsa { origin: 2, seq: 1, emitted_at_round: 99, neighbors: vec![1], tower: Some(7) },
+            Lsa { origin: 2, seq: 1, emitted_at_round: 99, neighbors: vec![1], tower: Some(7), mprs: vec![] },
         );
 
         let r = shortest_route(&db, 0, &DvDtnParams::default()).expect("a path exists");
@@ -441,6 +573,109 @@ mod tests {
             !kinds.contains(&EventKind::RouteAd) && !kinds.contains(&EventKind::RouteReply),
             "link-state advertises no routes, only observations: {kinds:?}"
         );
+    }
+
+    fn lsa(origin: u32, neighbors: Vec<u32>) -> Lsa {
+        Lsa { origin, seq: 1, emitted_at_round: 0, neighbors, tower: None, mprs: vec![] }
+    }
+
+    /// The case MPR exists for. Self (0) has four neighbours; 1 and 2 both
+    /// reach the same two-hop node 10, and 3 and 4 both reach 11. Two relays
+    /// suffice, so two of the four must be dropped.
+    #[test]
+    fn mpr_selection_drops_neighbours_whose_reach_is_already_covered() {
+        let mut db = HashMap::new();
+        db.insert(0, lsa(0, vec![1, 2, 3, 4]));
+        db.insert(1, lsa(1, vec![0, 10]));
+        db.insert(2, lsa(2, vec![0, 10]));
+        db.insert(3, lsa(3, vec![0, 11]));
+        db.insert(4, lsa(4, vec![0, 11]));
+
+        let mprs = select_mprs(&db, 0, &[1, 2, 3, 4]);
+        assert_eq!(mprs.len(), 2, "two relays cover both 2-hop nodes: {mprs:?}");
+        assert!(mprs.contains(&1) || mprs.contains(&2), "10 must stay reachable: {mprs:?}");
+        assert!(mprs.contains(&3) || mprs.contains(&4), "11 must stay reachable: {mprs:?}");
+    }
+
+    /// The guarantee that makes this a duplicate-suppression scheme rather than
+    /// a reachability trade: whatever the greedy picks, **every** two-hop node
+    /// is still reachable through something selected. Checked over a spread of
+    /// shapes rather than one hand-built case, since the failure mode would be
+    /// a shape the greedy handles badly rather than an outright bug.
+    #[test]
+    fn every_two_hop_node_stays_reachable_through_some_selected_relay() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        for _ in 0..200 {
+            let n1: Vec<u32> = (1..=8).collect();
+            let mut db = HashMap::new();
+            db.insert(0, lsa(0, n1.clone()));
+            for &nb in &n1 {
+                let two_hop: Vec<u32> =
+                    (100..112).filter(|_| rng.gen_bool(0.3)).collect();
+                let mut nbrs = vec![0];
+                nbrs.extend(two_hop);
+                db.insert(nb, lsa(nb, nbrs));
+            }
+
+            let mprs = select_mprs(&db, 0, &n1);
+            let reached: HashSet<u32> = mprs
+                .iter()
+                .flat_map(|m| db[m].neighbors.iter().copied())
+                .filter(|x| *x != 0 && !n1.contains(x))
+                .collect();
+            let all: HashSet<u32> = n1
+                .iter()
+                .flat_map(|nb| db[nb].neighbors.iter().copied())
+                .filter(|x| *x != 0 && !n1.contains(x))
+                .collect();
+            assert_eq!(reached, all, "MPR set {mprs:?} left a two-hop node unreachable");
+        }
+    }
+
+    /// Cold start: with an empty map a balloon knows nothing about what its
+    /// neighbours reach, so it must select all of them. Getting this wrong
+    /// would be silent and fatal — nobody would relay, no map would form, and
+    /// the variant would simply stop working rather than fail visibly.
+    #[test]
+    fn an_ignorant_balloon_selects_every_neighbour() {
+        let db = HashMap::new();
+        assert_eq!(select_mprs(&db, 0, &[1, 2, 3]), vec![1, 2, 3]);
+    }
+
+    /// End to end: MPR must reach the same routes flooding does. The chain is
+    /// long enough that a broken relay rule would leave b4 without a route
+    /// rather than merely with a worse one.
+    #[test]
+    fn mpr_relaying_still_converges_on_a_route() {
+        let p = DvDtnParams {
+            discovery: Discovery::LinkState,
+            relay_policy: super::super::params::RelayPolicy::Mpr,
+            ..Default::default()
+        };
+        let mut d = super::super::DvDtn::with_params(p);
+        d.reseed(5);
+        let balloons: Vec<Balloon> =
+            (0..5).map(|i| Balloon::new(i, i as f64, 0.0, 18000.0)).collect();
+        for _ in 0..5 {
+            d.spawn_node();
+        }
+        let towers = vec![Tower::new(0, -1.0, 0.0, 30.0)];
+        let mut adj = MeshAdjacency::default();
+        adj.rebuild(
+            &[edge("t0", "b0"), edge("b0", "b1"), edge("b1", "b2"), edge("b2", "b3"),
+              edge("b3", "b4")],
+            5,
+            &towers,
+        );
+
+        for round in 0..300u64 {
+            d.step(StepCtx { round, balloons: &balloons, towers: &towers, adj: &adj });
+        }
+
+        let b4 = d.nodes[4].belief.expect("b4 should have a route under MPR relaying");
+        assert_eq!(b4.hop_count, 5, "four balloon hops plus the ground hop");
+        assert_eq!(b4.next_hop, Some(3));
     }
 
     /// Like reactive discovery, this variant sends no tower beacons, so the

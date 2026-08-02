@@ -402,12 +402,21 @@ impl MeshProtocol for DvDtn {
             .ratio("belief_hops_mean", bundle::hist_mean(&st.belief_hops))
             .ratio("delivered_hops_mean", bundle::hist_mean(&st.delivered_hops));
         if self.params.discovery == Discovery::LinkState {
-            let (r, u) = (self.linkstate.records_redundant, self.linkstate.records_useful);
+            let ls = &self.linkstate;
+            let (r, u) = (ls.records_redundant, ls.records_useful);
             let total = r + u;
             return t
                 .count("gossip_records_useful", u)
                 .count("gossip_records_redundant", r)
-                .ratio("gossip_redundant_share", if total == 0 { 0.0 } else { r as f64 / total as f64 });
+                .ratio("gossip_redundant_share", if total == 0 { 0.0 } else { r as f64 / total as f64 })
+                .ratio(
+                    "mpr_share",
+                    if ls.mpr_candidates == 0 {
+                        1.0 // flooding: every neighbour relays
+                    } else {
+                        ls.mpr_selected as f64 / ls.mpr_candidates as f64
+                    },
+                );
         }
         t
     }

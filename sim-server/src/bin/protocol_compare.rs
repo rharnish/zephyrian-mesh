@@ -112,7 +112,23 @@ fn main() {
             "dv-dtn reactive, tower-only replies",
             "dv-dtn:discovery=reactive,reply=tower".parse().unwrap(),
         ),
+        (
+            "dv-dtn reactive, overhearing",
+            "dv-dtn:discovery=reactive,overhear=on".parse().unwrap(),
+        ),
+        (
+            "dv-dtn reactive, expanding ring",
+            "dv-dtn:discovery=reactive,ring=expanding".parse().unwrap(),
+        ),
+        (
+            "dv-dtn reactive, overhearing + ring",
+            "dv-dtn:discovery=reactive,overhear=on,ring=expanding".parse().unwrap(),
+        ),
         ("dv-dtn link-state (gossip)", "dv-dtn:discovery=link-state".parse().unwrap()),
+        (
+            "dv-dtn link-state, MPR relays",
+            "dv-dtn:discovery=link-state,relay=mpr".parse().unwrap(),
+        ),
         ("spray-and-wait L=4", "epidemic:copies=4".parse().unwrap()),
         ("spray-and-wait L=16", "epidemic:copies=16".parse().unwrap()),
     ];

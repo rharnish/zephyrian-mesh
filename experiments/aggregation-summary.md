@@ -358,6 +358,149 @@ does not supply that: 4× turnover leaves link half-life at 184 rounds against a
 150-round bundle lifetime. It would take a synthetic mechanism, and the result
 would be about the mechanism rather than about the atmosphere.
 
+## Coda 2: tuning the two losing families
+
+The reactive and link-state rows above were untuned, and the limitations section
+below named the three obvious mechanisms — OLSR's multipoint relays, AODV's
+expanding-ring search, and learning from replies not addressed to you. All three
+are now implemented and measured.
+
+**Data:** [`discovery-sweep-results.csv`](discovery-sweep-results.csv) — 11
+variants × 20 seeds, n = 1200, 400 rounds, zero wind. **Generator:**
+[`discovery_sweep`](../sim-server/src/bin/discovery_sweep.rs) · **Tables:**
+[`summarize_discovery.py`](summarize_discovery.py)
+
+Contrasts are paired within seed, which is not optional here: between-seed
+spread is 5-7 completion points and the effects are 0.3-4, so unpaired means
+cannot tell a small real effect from noise.
+
+### Two delivery ratios, and why they disagree
+
+| | completion | delivered/originated |
+|---|---|---|
+| definition | delivered / **resolved** | delivered / **originated** |
+| ignores | bundles still stranded at the end of the run | nothing |
+
+**`completion_rate` flatters a protocol that strands bundles**, because a bundle
+still sitting in a queue at round 400 never resolves and so leaves the
+denominator. Reactive discovery strands a great many. The two ratios rank the
+overhearing result oppositely, so both are reported throughout; picking one
+would have been a choice rather than a measurement.
+
+### Reply overhearing — `discovery=reactive,overhear=on`
+
+A route reply is a radio transmission, and route *requests* in the same file
+already reach every neighbour of the sender. Restricting a reply to its
+addressee was modelling a wire, not a radio. Letting every neighbour in earshot
+install the route costs **no additional transmissions at all**.
+
+| | Δ completion | Δ delivered/orig |
+|---|---|---|
+| overhear vs reactive | −0.29 ± 0.42 | **+3.91 ± 0.39** |
+
+The mechanism does exactly what it was built to do, and the counters are
+unambiguous:
+
+| | reactive | +overhear |
+|---|---|---|
+| `stall_no_belief` | 24787 | **8791** (−65%) |
+| `satellite` | 692 | **241** (−65%) |
+| `dropped_loop` | 131 | **679** (5.2×) |
+
+Balloons stop sitting on bundles with nowhere to send them, and satellite
+rescues fall by two thirds because bundles now have routes instead of timing
+out. What it gives back is loops. **Opportunistic adoption does not produce a
+globally consistent route set**: an overhearer installs a route computed for
+somebody else, and the transmitter's own path may run back through the
+overhearer.
+
+Gating adoption on improvement — an overhearer takes a route only if strictly
+shorter, never on freshness alone, since it has no standing to treat another
+node's answer as an answer to its own question — was tried and moved loop drops
+barely at all (610 → 638 at 4 seeds). The remaining loops need real destination
+sequence numbers, which is what actual AODV uses and what this simulator's
+`emitted_at_round` only approximates.
+
+So: **a genuine +3.9 points of absolute delivery, a wash on completion, and the
+honest reading is that the stalling problem is solved and replaced by a smaller
+routing-consistency problem.**
+
+### Expanding-ring search — `discovery=reactive,ring=expanding`
+
+| | Δ completion | Δ delivered/orig |
+|---|---|---|
+| ring vs reactive | **−2.01 ± 0.37** | **−2.15 ± 0.29** |
+
+A clean negative, and the mechanism worked — that is what makes it interesting
+rather than a bug. Routes get shorter exactly as the textbook says (believed
+depth 5.91 → 4.51) and loop drops nearly vanish (131 → 28), because a ring finds
+the *nearest* answer instead of whichever answer shouts back first.
+
+It loses on latency, and the counter says so directly: `stall_no_belief` goes
+**24787 → 31104**. Under a duty cycle a failed ring costs a full round trip at
+one hop per wake slot, so the search spends more time waiting than the shorter
+routes save. The textbook motivation for expanding ring is *airtime*, and
+airtime spent on rebroadcasts is not what binds here.
+
+Combining both is worse than overhearing alone (−1.04 on delivered/orig): the
+ring delays the very replies overhearing wants to spread.
+
+### MPR relay selection — `discovery=link-state,relay=mpr`
+
+Each balloon names the smallest subset of its neighbours that still reaches
+everything two hops out, and only those rebroadcast for it. Two-hop knowledge is
+free here, because neighbour lists are the only thing this variant ever sends.
+
+The mechanism works, and cleanly:
+
+| `lsa` | redundant share, flood → MPR | share of neighbours relaying |
+|---|---|---|
+| 2 | 0.31 → **0.20** | 0.48 |
+| 4 | 0.52 → **0.36** | 0.48 |
+| 16 | 0.71 → **0.52** | 0.48 |
+
+Total record-receptions fall ~25% while *useful* records rise slightly, and
+coverage is provably preserved — a property pinned by a randomised test over 200
+neighbourhood shapes, not just the hand-built case.
+
+| contrast | Δ completion | Δ delivered/orig |
+|---|---|---|
+| MPR at `lsa=2` | +0.28 ± 0.22 | +0.22 ± 0.18 |
+| MPR at `lsa=4` | +0.64 ± 0.20 | +0.47 ± 0.16 |
+| MPR at `lsa=16` | +0.87 ± 0.18 | +0.55 ± 0.15 |
+
+Real, consistent, growing with how much redundancy there was to remove — and
+**about a tenth of what was predicted.** The prediction, made in this repo from
+the redundancy measurement, was +8-10 points at `lsa=4`.
+
+**The prediction was wrong for a reason worth recording, because it is about the
+model rather than about OLSR.** The argument was that MPR "does not ask for more
+airtime, it stops spending existing airtime on records the receiver already
+holds." That is true of a real radio and false of this simulator: gossip and
+bundle forwarding happen on the *same* wake slot here, not competing ones, so
+freeing gossip capacity frees nothing that bundle delivery can spend. MPR saves
+**bytes**, and this model charges for **slots**.
+
+The residual +0.6 is not nothing — it comes from `lsa`-sized batches carrying
+more distinct records — but the mechanism's main benefit is invisible to the
+delivery metric by construction. Charging per record rather than per slot is the
+change that would make this measurable, and it would alter far more than this
+one result.
+
+### What this does and does not change
+
+Nothing here reorders the families. Proactive dv-dtn still leads every routing
+alternative, and digest+batch still leads everything. What the tuning establishes
+is that **the reactive and link-state deficits are not artefacts of a lazy
+implementation**: the three standard mechanisms that ought to close them were
+implemented faithfully, two of them worked exactly as specified at the mechanism
+level, and the family ordering did not move.
+
+The reactive baseline is unchanged by this work: a hop-limit off-by-one
+corrected along the way (a request with `ttl = k` now travels `k` hops rather
+than `k+1`) moves it **−0.07 ± 0.20 points**, and proactive reproduces its
+published figure to +0.001.
+
 ## Limitations
 
 - **Zero wind for the main tables.** The protocol comparison has since been
@@ -389,15 +532,23 @@ would be about the mechanism rather than about the atmosphere.
   every effect. More seeds would help there specifically.
 - **The coda's spray-and-wait rows are untuned**, and 4 seeds rather than 24.
   They establish an ordering in this regime, not a bound on the protocol.
-- **The reactive rows are not tuned either.** No route caching between
-  requests, no expanding-ring search, no destination sequence numbers (the age
-  field stands in for them). Given the laundering bug found above, treat 57.3%
-  as a floor for the family rather than a measurement of AODV.
-- **Link-state has no topology reduction.** Real deployments cut exactly the
-  cost measured above with areas, designated relays (OLSR's MPRs), and
-  incremental rather than whole-neighbour-list updates. Any of those would move
-  the `lsa` ladder, and MPR-style relay selection is the obvious next
-  experiment, since it targets the measured constraint directly.
+- **The reactive rows are still missing destination sequence numbers.** Coda 2
+  added expanding-ring search and reply overhearing; the age field still stands
+  in for dest-seq, and the loop drops overhearing introduces are exactly what
+  dest-seq exists to prevent. That is the remaining gap between this and AODV
+  proper, and it is now the *only* named one.
+- **Link-state topology reduction is partly addressed.** Coda 2 added MPR relay
+  selection, which cuts redundant gossip by a third at every `lsa`. The other
+  two standard reductions — hierarchical areas, and incremental updates instead
+  of whole neighbour lists — are not implemented. Incremental updates are the
+  more promising of the two here, since they attack payload size, and payload
+  size is what MPR turned out not to be charged for.
+- **Airtime is charged per slot, not per byte.** This is the model choice that
+  made MPR's measured gain ten times smaller than predicted (see Coda 2), and it
+  applies to every result in this file: any mechanism whose benefit is "fewer
+  bytes on the air" is invisible here, while any mechanism whose benefit is
+  "more done per wake" is fully counted. That asymmetry is why batching and the
+  ack digest dominate this document.
 
 ## Reproducing
 
@@ -428,6 +579,18 @@ more seeds by re-running with a larger first argument.
 
 `--wind none` is the default and means zero wind, so every command above
 reproduces the frozen-topology tables unchanged when the flag is omitted.
+
+For Coda 2 (the discovery-mechanism tuning), one command and no wind backend —
+it runs on zero wind throughout, ~45 min on one core:
+
+```bash
+./target/release/discovery_sweep 20 1200 400 > experiments/discovery-sweep-results.csv
+python3 experiments/summarize_discovery.py experiments/discovery-sweep-results.csv
+```
+
+Unlike the sweeps above this one does **not** resume: it writes the whole CSV in
+one pass, so an interrupted run is restarted rather than continued. At 45
+minutes that was not worth the bookkeeping.
 
 Rows append as they finish and are skipped on restart, so the run can be
 interrupted, resumed, or extended with more seeds by re-running with a larger

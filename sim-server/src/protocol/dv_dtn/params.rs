@@ -53,6 +53,81 @@ pub enum ReplyPolicy {
     TowerAdjacent,
 }
 
+/// Which neighbours rebroadcast a gossiped observation, under
+/// `Discovery::LinkState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RelayPolicy {
+    /// Everyone relays everything they learn. Simple, and the reason gossip
+    /// converges quickly — but measured at `lsa = 4`, **52% of arriving records
+    /// teach the receiver nothing it did not already hold**, and that share
+    /// rises to 79% at `lsa = 64`. Every one of those consumed a slice of a
+    /// wake slot.
+    #[default]
+    Flood,
+    /// OLSR's multipoint relays: each balloon names the smallest subset of its
+    /// neighbours that still reaches every balloon two hops out, and announces
+    /// that subset. Only a neighbour that was named rebroadcasts what it hears
+    /// from the namer; everyone else absorbs the records and stays quiet.
+    ///
+    /// Coverage is preserved exactly — every two-hop node still receives every
+    /// record — so this is not a reachability/airtime trade. It removes
+    /// *duplicate* deliveries only, which is why it is the right lever for the
+    /// redundancy measured above.
+    ///
+    /// It needs two-hop knowledge to compute, which a balloon only has once its
+    /// neighbours' observations have arrived. A neighbour whose observation is
+    /// missing is selected unconditionally, so a cold start floods and the
+    /// scheme tightens as the map fills in rather than dropping records while
+    /// it is ignorant.
+    Mpr,
+}
+
+/// How far a route request is allowed to travel, under `Discovery::Reactive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RingSearch {
+    /// Every request floods to `beacon_max_hops`. What the reactive mode has
+    /// always done, and the baseline the measurements were taken against.
+    #[default]
+    Max,
+    /// AODV's expanding ring: ask one hop out first, then two, four, and only
+    /// then the whole mesh, re-issuing after each ring goes unanswered.
+    ///
+    /// The textbook motivation is airtime — a nearby destination is found
+    /// without disturbing the far side of the network — and airtime is exactly
+    /// this simulator's scarce resource, since a rebroadcast consumes the same
+    /// wake slot a bundle would have moved on.
+    ///
+    /// The countervailing cost is latency, and here it is unusually steep: a
+    /// ring that fails costs a full round trip at one hop per wake slot before
+    /// the next one starts. Whether that trade pays depends on how far the
+    /// tower actually is, which is a property of the field rather than of the
+    /// protocol — so it is measured, not assumed.
+    Expanding,
+}
+
+/// Whether a balloon may learn from a reply that was not addressed to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplyOverhearing {
+    /// A reply is consumed only by the node on the reverse path. What the
+    /// reactive mode has always done.
+    #[default]
+    Off,
+    /// Every neighbour in range of the transmitting node installs the route
+    /// too.
+    ///
+    /// This costs nothing and invents nothing: the radio is a broadcast medium
+    /// — route *requests* in this same file are already delivered to every
+    /// neighbour of the sender — so a reply passing overhead is physically
+    /// audible to the whole neighbourhood whether or not it was meant for
+    /// them. Restricting it to the addressee was modelling a wire, not a radio.
+    ///
+    /// The route an overhearing balloon installs is the same one the addressee
+    /// installs — `hops + 1` through the transmitter — carrying the same
+    /// unrestamped `emitted_at_round`, so it is subject to the same expiry and
+    /// the same anti-laundering rule. It cannot manufacture freshness.
+    On,
+}
+
 /// Which route a balloon prefers when two offers compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Metric {
@@ -179,6 +254,15 @@ pub struct DvDtnParams {
     /// Who may answer a route request. Only consulted under
     /// `Discovery::Reactive`.
     pub reply_policy: ReplyPolicy,
+    /// How far a route request floods before giving up. Only consulted under
+    /// `Discovery::Reactive`.
+    pub ring_search: RingSearch,
+    /// Whether neighbours may install a route from a reply they merely
+    /// overheard. Only consulted under `Discovery::Reactive`.
+    pub reply_overhearing: ReplyOverhearing,
+    /// Who rebroadcasts a gossiped observation. Only consulted under
+    /// `Discovery::LinkState`.
+    pub relay_policy: RelayPolicy,
     /// Under `Discovery::LinkState`, how many observations ride one
     /// transmission — this balloon's own, plus relayed ones. The same
     /// information-per-transmission dial as `BatchPolicy`, applied to gossip
@@ -323,6 +407,9 @@ impl Default for DvDtnParams {
             metric: Metric::default(),
             discovery: Discovery::default(),
             reply_policy: ReplyPolicy::default(),
+            ring_search: RingSearch::default(),
+            reply_overhearing: ReplyOverhearing::default(),
+            relay_policy: RelayPolicy::default(),
             lsa_per_transmission: 4,
             bundle_interval_rounds: 200,
             bundle_max_age_rounds: 150,
