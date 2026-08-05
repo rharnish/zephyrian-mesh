@@ -58,8 +58,9 @@ function commsLogRowHtml(record) {
 
 export class InspectorPanel {
   // `onClose` deselects; `onReplay` re-runs the packet animation for the
-  // currently selected balloon.
-  constructor({ onClose, onReplay }) {
+  // currently selected balloon; `onTraceToggle` starts/stops drawing its
+  // flight path.
+  constructor({ onClose, onReplay, onTraceToggle }) {
     this.comms = null; // last-fetched GET /api/balloons/:id/comms response
     // What the running protocol can express. Null until the first snapshot;
     // treated as "everything" until then, since this only ever hides rows.
@@ -86,8 +87,16 @@ export class InspectorPanel {
     // Delegated: the body's innerHTML is fully rebuilt every snapshot (~50ms),
     // so a listener bound directly to #commsReplayBtn would need rebinding
     // just as often.
-    this.body.addEventListener('click', (e) => {
+    //
+    // 'pointerdown', not 'click': a real click's mousedown and mouseup can
+    // straddle one of those rebuilds, swapping the button out from under the
+    // cursor mid-gesture — browsers then have no coherent element to fire
+    // 'click' on, and the press is silently dropped. 'pointerdown' fires the
+    // instant the button is pressed, synchronously, before any later rebuild
+    // can interleave, so it can't be raced out from under a real click.
+    this.body.addEventListener('pointerdown', (e) => {
       if (e.target.id === 'commsReplayBtn') onReplay();
+      if (e.target.id === 'traceToggleBtn') onTraceToggle();
     });
 
     // Comms log panel (bottom-right, shown alongside the inspector): a row per
@@ -186,8 +195,9 @@ export class InspectorPanel {
   }
 
   // `b` is the selected balloon in the latest snapshot, or null if it isn't in
-  // the active set any more.
-  update(b) {
+  // the active set any more. `isTracing` reflects TrailLayer's own state
+  // (the source of truth) rather than anything this panel remembers itself.
+  update(b, isTracing) {
     if (!b) {
       this.body.innerHTML =
         `<div style="opacity:0.7;">Not in the active set right now (raise the balloon count to bring it back).</div>`;
@@ -211,7 +221,14 @@ export class InspectorPanel {
       ${row('Verdict', BELIEF_VERDICT[key], BELIEF_CSS[key])}`
       : row('Actually grounded', b.grounded ? 'yes' : 'no');
     const dKey = deliveryKey(b);
+    const traceBtnHtml = isTracing
+      ? `<button id="traceToggleBtn" title="Stop tracing this balloon's path" style="font-size:11px; padding:1px 6px; cursor:pointer; color:#ffe14d; border-color:#ffe14d;">&#9679; Tracing&hellip; stop</button>`
+      : `<button id="traceToggleBtn" title="Draw this balloon's flight path in yellow" style="font-size:11px; padding:1px 6px; cursor:pointer;">Trace path</button>`;
     this.body.innerHTML = `
+      <div style="${ROW} align-items:center;">
+        <span>Flight path</span>
+        ${traceBtnHtml}
+      </div>
       ${row('Latitude', fmtLat(b.lat))}
       ${row('Longitude', fmtLon(b.lon))}
       ${row('Altitude', `${(b.alt / 1000).toFixed(2)} km`)}

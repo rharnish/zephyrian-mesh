@@ -22,6 +22,7 @@ import {
 } from './simClient.js';
 import { LinkLayer, parseNodeKey } from './linkLayer.js';
 import { BalloonLayer, OVERLAY_NONE } from './balloonLayer.js';
+import { TrailLayer } from './trailLayer.js';
 import { CommsReplay } from './commsReplay.js';
 import { CommsLayer } from './commsLayer.js';
 import { InspectorPanel } from './ui/inspectorPanel.js';
@@ -78,6 +79,7 @@ async function initCesium() {
   // Cesium entities against sim-server's snapshots (add/update/remove) --
   // no local physics or link-detection state lives here anymore.
   const balloonLayer = new BalloonLayer();
+  const trailLayer = new TrailLayer();
   const towerById = new Map(); // id -> Tower (rendering wrapper)
 
   // Towers are static once placed, so their Cartesian3 is derived on demand
@@ -127,6 +129,19 @@ async function initCesium() {
     onReplay: () => {
       if (balloonLayer.selectedId !== null) fetchAndAnimateComms(balloonLayer.selectedId);
     },
+    // Toggles tracing for whichever balloon is currently selected. Starting a
+    // new trace replaces any trail in progress (only one is drawn at a time);
+    // deselecting/closing the inspector deliberately leaves an in-progress
+    // trail running so it can be watched without keeping the panel open.
+    onTraceToggle: () => {
+      const id = balloonLayer.selectedId;
+      if (id === null) return;
+      if (trailLayer.isTracing(id)) {
+        trailLayer.stop(viewer);
+      } else {
+        trailLayer.start(viewer, id);
+      }
+    },
   });
 
   async function fetchAndAnimateComms(id) {
@@ -152,7 +167,10 @@ async function initCesium() {
 
   function updateInspectorFromSnapshot(snapshot) {
     if (balloonLayer.selectedId === null) return;
-    inspector.update(snapshot.balloons.find((x) => x.id === balloonLayer.selectedId) ?? null);
+    inspector.update(
+      snapshot.balloons.find((x) => x.id === balloonLayer.selectedId) ?? null,
+      trailLayer.isTracing(balloonLayer.selectedId)
+    );
   }
 
   viewer.scene.morphComplete.addEventListener(() => balloonLayer.refreshRenderMode());
@@ -224,6 +242,9 @@ async function initCesium() {
   // subsystem that reacts to a snapshot is fanned out from here.
   connectSimServer((snapshot) => {
     balloonLayer.reconcile(viewer, snapshot.balloons);
+    if (trailLayer.tracedId !== null) {
+      trailLayer.record(viewer, snapshot.tick, balloonLayer.positionOf(trailLayer.tracedId));
+    }
     reconcileTowers(snapshot.towers);
     if (snapshot.edges) {
       linkLayer.sync(viewer, snapshot.edges, resolveNodePosition);
