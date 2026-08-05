@@ -107,7 +107,7 @@ delivery rather than merely tidying bookkeeping.
 |---|---|---|
 | `ack=digest` | source-routed | Announce deliveries inside beacons already going out instead of sending receipt packets. **+11.1 ± 1.8 points**, and ack loss to zero by construction. |
 | `mesh=N` | 1 | Bundles per balloon-to-balloon hop. The larger lever: **+24.8 ± 3.8 points**. Substitutes with the digest rather than compounding — both buy back the same wake slots. |
-| `tower=N` | 4 | Bundles per tower contact. The last-hop cap: only ~27 of 1200 balloons hear a tower at once. Best config reaches **62%** at `tower=1` vs **94%** at `tower=4`. |
+| `tower=N` | 4 | Bundles per tower contact. The last-hop cap: only ~23 of 1200 balloons hear a tower at once. Best config reaches **62%** at `tower=1` vs **94%** at `tower=4`. |
 | `metric=` | `freshest` | `nearest` prefers fewer hops; helps below percolation and **hurts above it**, which is where the mesh normally sits. |
 | `queue=` | `fifo` | `lifo` serves the newest first, so what moves still has TTL budget — at the cost of starving the bottom of the queue. |
 

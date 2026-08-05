@@ -44,7 +44,8 @@ buoyancy state that does not exist yet and a plausible-looking fake number is wo
 one; and the synthesized humidity is a smooth function of position rather than an RNG draw, since
 `bundle::step` takes no RNG and threading one in would make the seeded sweeps in
 `bin/protocol_sweep.rs` irreproducible for the sake of a cosmetic field. A record exists in two
-copies — one **retained** by the origin in `Balloon::log` (bounded by `COMMS_LOG_CAPACITY`, and the
+copies — one **retained** by the origin in `Balloon::log` (bounded by the protocol's
+`comms_log_capacity` param, and the
 thing C3's hash chain will sign), one **carried** inside the `Bundle` and consumed at a tower. Destination is not "any grounded tower" — the balloon has no way to
 know which towers are grounded. It is "whichever tower this balloon currently *believes* it has a
 route to," which may be wrong or absent.

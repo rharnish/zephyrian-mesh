@@ -14,8 +14,11 @@ global grid, all pressure levels, JSON-encoded nested float arrays: ~356MB, ~55s
 
 Two independent clients fetch that same payload:
 
-- **sim-server** (`sim-server/src/main.rs:77`, `fetch_wind_field()`) — once at startup, into a
-  Rust `WindField`. **This is the copy that actually advects balloons.**
+- **sim-server** (`sim-server/src/main.rs:57`, `load_wind_field(wind_from_args())`) — once at
+  startup, into a Rust `WindField`. **This is the copy that actually advects balloons.** The
+  startup path now branches on a `--wind`/`ZM_WIND` flag (`wind_from_args()`, line 141) into a
+  zero field, a cached snapshot via the `wind_cache` module, or (the `Auto` default) a live
+  fetch from Python via `fetch_wind_field()` (line 263) with the result cached for next time.
 - **browser** (`src/main.js:111`) — the *same* payload again, used **only** for the optional
   wind-vector-arrow visualization. Balloon physics is server-owned; the client's copy is
   purely decorative (see comment at `src/main.js:106-114`).

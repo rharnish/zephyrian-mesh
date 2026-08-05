@@ -45,6 +45,11 @@ protocol's pace can be tuned without disturbing either of the other two — see 
 | Belief expiry | `BELIEF_MAX_AGE_ROUNDS = 60` | **24 s** | 2 hours |
 | Full discovery (measured, 1200 balloons) | ~38 rounds | **15 s** | ~76 min |
 
+The first three rows (`TICK_INTERVAL_MS`, `LINK_UPDATE_EVERY_N_TICKS`, `COMMS_EVERY_N_TICKS`)
+are still `config.rs` constants. The beacon/belief rows have since moved to `DvDtnParams` fields
+(`sim-server/src/protocol/dv_dtn/params.rs`) — the values above are their `Default` impl and are
+still current, but `config.rs` no longer defines them.
+
 In plain terms: **a balloon speaks every 2 seconds; a belief it cannot refresh dies after 24
 seconds; a beacon takes about 15 seconds to cross the planet.** In simulated terms: a 10-minute
 radio duty cycle, a 2-hour route-belief lifetime.

@@ -46,8 +46,8 @@ inevitable once you know where they came from.
   and the thing every mechanism here is competing for.
 - **Round** — the comms tick. A balloon wakes every 5 of them by default.
 - **Tower-adjacent** — a balloon that can hand a bundle straight to a ground
-  station. Only ~27 of 1200 at any moment, which is the bottleneck this whole
-  document circles.
+  station. Only ~23 of 1200 at any moment, which is the bottleneck this whole
+  document circles (see §4 of `MESH_COMMS_DESIGN.md`).
 
 ---
 
@@ -116,7 +116,11 @@ Two independent gates must pass:
 - **Queue room.** `queue.len() < 8`. This capacity is shared with other people's
   traffic in transit.
 - **Nothing of its own outstanding.** A balloon may have only one of *its own*
-  bundles in flight.
+  bundles in flight — checked as "no bundle with my `origin_id` still sitting
+  in my own queue," not by looking at ack state. The two usually coincide, but
+  a bundle that's aged out to the satellite fallback leaves the queue while
+  its ack is still pending, so this gate can pass slightly before the
+  bundle's outstanding status actually resolves.
 
 > **A design error worth knowing about**, because the fix is the reason there
 > are two limits and not one. These were once conflated into a single slot. That
