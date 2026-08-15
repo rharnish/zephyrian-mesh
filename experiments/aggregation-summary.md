@@ -168,6 +168,74 @@ range per link round — which is precisely the regime where maintaining a route
 is cheap and worth it. Replication earns its keep when that is false: when
 contacts are brief and a route cannot be kept current long enough to use.
 
+### Does this hold across density?
+
+The table above is one density (n=1200, 4 seeds). Both numbers it rests on —
+72.3 ± 7.7% and 95.0 ± 1.4% — came from a handful of seeds at a single
+balloon count, and this project's own history is full of rankings that moved
+once density or seed count changed (§"Density, and where the ground link
+still binds" above; the reactive-discovery bug below). So: does digest+mesh4's
+lead hold as n changes, or was n=1200 special?
+
+**Data:** [`density-sweep-results.csv`](density-sweep-results.csv) — 3,465
+rows: all 11 `protocol_compare` variants × {100, 200, 400, 600, 800, 1200,
+1600, 2000, 3000} balloons × 35 seeds, 400 rounds, zero wind. ~3h47m on four
+cores. [`ground-truth-sweep-results.csv`](ground-truth-sweep-results.csv) —
+315 rows, the same n × seed grid but protocol-independent (`grounded_pct` is
+computed from union-find over balloon positions before any protocol is
+consulted, so it only needs one run per (n, seed), not per protocol). ~19.5
+min on four cores.
+**Generators:** [`density_sweep.rs`](../sim-server/src/bin/density_sweep.rs) ·
+[`ground_truth_sweep.rs`](../sim-server/src/bin/ground_truth_sweep.rs)
+**Chart:** [`protocol-results/density-sweep.png`](protocol-results/density-sweep.png) ·
+[`plot_density_sweep.py`](plot_density_sweep.py)
+
+| protocol | n=1200, 4 seeds (original) | n=1200, 35 seeds |
+|---|---|---|
+| dv-dtn (shipped) | 72.3 ± 7.7% | 69.1 ± 1.0% |
+| dv-dtn, digest + mesh=4 | 95.0 ± 1.4% | 95.3 ± 0.3% |
+
+Both land within the original's much wider interval — the 4-seed table's
+ranking wasn't a fluke — and 35 seeds shrinks the error bars 5-25×, tight
+enough to separate protocols whose n=1200 intervals used to touch.
+
+**The ranking holds, and digest+mesh4's lead widens rather than shrinks as
+density rises.** It tracks shipped dv-dtn closely below n=600, then pulls
+ahead through the percolation transition and keeps extending its lead out to
+n=3000 (96.5%, vs. dv-dtn's own best of 83.9%). Spray-and-wait never
+recovers either — L=16 caps at 23.8% completion even at 3000 balloons, so its
+n=1200 loss wasn't an under-provisioning artifact.
+
+**Below ~600 balloons, protocol choice barely matters.** Every variant —
+proactive, reactive, link-state, even spray-and-wait — sits within a couple
+of points of every other one (4-16% completion). The network isn't
+percolated yet: there is rarely a route to route well, so nothing a protocol
+does can show up as a difference. The interesting separation starts only
+once the physical topology has enough paths for routing quality to matter.
+
+**Ground truth explains where the remaining gap goes.** `grounded_pct` — the
+share of balloons whose physical component contains a tower, computed before
+`self.protocol` is ever consulted — jumps from 29.9% at n=600 to 98.2% at
+n=1200 and is indistinguishable from 100% by n=2000. Every protocol keeps
+climbing well past that point, which means the gap between a protocol's
+completion rate and 100% at high n is now **entirely routing overhead**, not
+missing physical paths: at n=3000, with the network fully percolated,
+digest+mesh4 still leaves ~3.5 points on the table and shipped dv-dtn leaves
+~16. digest+mesh4 is the only variant whose curve visibly hugs the ground-truth
+curve through the percolation transition (n=600-1200); everything else peels
+off earlier and never closes the gap.
+
+**One tuning conclusion from Coda 2 turns out to be density-dependent.**
+Reply overhearing (`reactive+overhear`) was a wash against plain reactive at
+n=1200 in both this table (52.3 ± 0.9% vs. 52.8 ± 0.8%) and in Coda 2's own
+20-seed study at the same density. At n=3000 it isn't: 67.0 ± 0.4% vs. plain
+reactive's 55.2 ± 0.3%, a gap far outside either error bar, and by then
+overhearing beats every other reactive or link-state variant including
+`reply=tower` (57.7%) — the tweak that *did* help at n=1200. A single-density
+tuning sweep could not have found this: the benefit of overhearing scales
+with how many neighbours there are to overhear, so it stays invisible until
+density is high enough to matter, which n=1200 wasn't.
+
 ### Reactive discovery, and a bug worth recording
 
 The reactive rows cost 15 points against maintaining routes continuously, and
@@ -754,3 +822,21 @@ minutes that was not worth the bookkeeping.
 Rows append as they finish and are skipped on restart, so the run can be
 interrupted, resumed, or extended with more seeds by re-running with a larger
 first argument.
+
+For the density-sweep coda, two binaries, neither wind-backed (zero wind
+throughout) and neither resumable — both write their whole CSV in one pass,
+same tradeoff as `discovery_sweep`:
+
+```bash
+./target/release/density_sweep 35 400 > experiments/density-sweep-results.csv       # ~3h47m, 4 cores
+./target/release/ground_truth_sweep 35 400 > experiments/ground-truth-sweep-results.csv  # ~20 min, 4 cores
+python3 experiments/plot_density_sweep.py experiments/density-sweep-results.csv \
+  --out experiments/protocol-results/density-sweep.png \
+  --truth experiments/ground-truth-sweep-results.csv
+```
+
+`density_sweep`'s job count is protocols × n-grid × seeds; the first argument
+is seeds, so halving it roughly halves the runtime at the cost of wider error
+bars. `ground_truth_sweep` shares the same n-grid and seed count but drops the
+protocol dimension, since `grounded_pct` is computed before any protocol is
+consulted and is therefore identical across protocols at a given (n, seed).
