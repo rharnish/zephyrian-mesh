@@ -12,7 +12,9 @@ here because `TICK_DT_SECONDS` and `TIME_SCALE` set how fast the physics below a
 The simulator models balloons minimally: **pure wind advection** horizontally and a
 **proportional "thermostat"** vertically that drives altitude toward a randomly-drifting target
 (`sim-server/src/balloon.rs`). There is no mass, gas, ballast, buoyancy force, or per-balloon
-command input; only `id/lon/lat/alt` reach the frontend.
+command input. Of the *physics* state only `id/lon/lat/alt` reach the frontend; the
+snapshot also carries `believedHops`, `grounded` and `lastChannel`, which the running
+comms protocol publishes through `Balloon` each tick rather than the physics owning them.
 
 The vision below adds: (1) realistic vertical dynamics driven by ballast + gas, and (2) a command
 uplink (satellite/radio) that drives those actuators.
@@ -107,4 +109,5 @@ on comms.
 
 - ISA pressure↔altitude math to port into `atmosphere.rs`: `weather-data-server/wind_backend.py`.
 - Command/REST + Snapshot protocol to extend: `sim-server/src/sim.rs`, `sim-server/src/main.rs`.
-- Per-balloon billboard / altitude-glyph rendering to extend: `src/main.js`.
+- Per-balloon billboard / altitude-glyph rendering to extend: `src/balloonIcon.js`
+  (`buildBalloonIcon`) and `src/balloonLayer.js`.

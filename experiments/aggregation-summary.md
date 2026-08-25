@@ -11,7 +11,7 @@ wind, coeff 4.12. 2.8h on four cores.
 
 [`MESH_COMMS_DESIGN.md`](../docs/design/MESH_COMMS_DESIGN.md) §4 closed a long
 investigation with the finding that delivery is limited by the **last hop**:
-only ~23 of 1200 balloons can hear a tower at any moment. Widening the tower
+only ~22 of 1200 balloons can hear a tower at any moment. Widening the tower
 contact window from 1 to 4 bought +16 points of completion and then saturated,
 at which point the limit moved *back into the mesh* — and the doc stopped
 there: "the remaining loss is now a different problem from the one investigated
@@ -103,7 +103,7 @@ while making the delivery figures look better.
 
 | n | best completion (digest, mesh=8), tower=4 | tower=1 |
 |---|---|---|
-| 600 | 34.7 ± 13.6 | 32.4 ± 12.6 |
+| 600 | 34.7 ± 13.6 | 29.3 ± 12.1 |
 | 1200 | 94.4 ± 2.5 | 62.1 ± 8.1 |
 | 2000 | 96.2 ± 1.5 | — |
 
@@ -119,8 +119,10 @@ last-hop finding survives intact — **the ground link has to stop binding
 before mesh airtime becomes worth spending**, and that part of the provisional
 reading was right.
 
-Ceiling utilisation at tower_contact = 4 runs 19–31%, so the ground link is
-now far from saturated and the mesh is squarely the constraint again.
+Ceiling utilisation at tower_contact = 4 runs 19–31% at n ≥ 1200, so the
+ground link is now far from saturated and the mesh is squarely the constraint
+again. At n = 600 it is only 8–11%, which is the same percolation story from
+the other side: the mesh cannot even fill the last hop it has.
 
 ## On method
 
@@ -143,24 +145,37 @@ right on levels, wrong on the relationship between the levers.
 
 A different axis, included here because the digest+batch configuration above
 is one of its rows. `protocol_compare` runs several protocols over identical
-balloon fields (4 seeds, n = 1200, 400 rounds):
+balloon fields — n = 1200, 400 rounds, zero wind. Console capture:
+[`measurements/protocol-compare.txt`](measurements/protocol-compare.txt).
 
-| protocol | completion |
-|---|---|
-| dv-dtn (shipped) | 72.3 ± 7.7% |
-| dv-dtn, digest + mesh=4 | **95.0 ± 1.4%** |
-| dv-dtn, reactive discovery (AODV-style) | 57.3 ± 5.0% |
-| dv-dtn, reactive, tower-only replies | 60.0 ± 5.8% |
-| dv-dtn, gossiped link-state | 52.4 ± 5.7% |
-| binary spray-and-wait, L=4 | 11.0 ± 1.8% |
-| binary spray-and-wait, L=16 | 23.4 ± 4.5% |
+Where Coda 2's discovery sweep covers the same variant its figure is quoted
+instead, because it has 20 seeds against this harness's 8:
+
+| protocol | completion | seeds |
+|---|---|---|
+| dv-dtn (shipped) | 68.9 ± 6.7% | 20 |
+| dv-dtn, digest + mesh=4 | **94.9 ± 2.0%** | 20 |
+| dv-dtn, reactive discovery (AODV-style) | 52.5 ± 5.3% | 20 |
+| dv-dtn, gossiped link-state | 47.7 ± 5.4% | 20 |
+| dv-dtn, reactive, tower-only replies | 58.4 ± 6.6% | 8 |
+| binary spray-and-wait, L=4 | 10.2 ± 1.4% | 8 |
+| binary spray-and-wait, L=16 | 21.8 ± 3.3% | 8 |
+
+> **The two harnesses agree exactly.** Restricted to the same 8 seeds,
+> `discovery_sweep` reproduces every `protocol_compare` figure above to the
+> decimal, standard deviations included — 70.4 ± 8.2 for dv-dtn, 49.9 ± 6.0 for
+> link-state, and so on for all eight overlapping variants. The only reason the
+> table's first four rows differ from the capture file is the wider seed sample,
+> not the harness. `reply=tower` and the two spray-and-wait budgets have no
+> 20-seed source, so they stay at 8.
 
 Blind replication does badly here, and the protocol-specific counters say why:
-`handoffs_per_delivery` runs 40–58, and `no_candidate` — wake slots where a
-holder had no neighbour lacking the record — is enormous. A random walk rarely
-stumbles onto the ~27 of 1200 balloons that can hear a tower, while dv-dtn
-steers at them. Raising the copy budget helps (10.9% → 23.5%) at 3× the
-handoffs and 340× the blocking, since copies congest the very queues they need.
+`handoffs_per_delivery` runs 43–63, and `no_candidate` — wake slots where a
+holder had no neighbour lacking the record — is enormous (27,452 at L=16). A
+random walk rarely stumbles onto the ~22 of 1200 balloons that can hear a
+tower, while dv-dtn steers at them. Raising the copy budget helps (10.2% →
+21.8%) at 3.2× the handoffs and 292× the blocking, since copies congest the
+very queues they need.
 
 **This is the design doc's own premise showing up as a measurement.** §1.1
 established that links here are quasi-static — a balloon drifts ~0.4% of link
@@ -170,15 +185,15 @@ contacts are brief and a route cannot be kept current long enough to use.
 
 ### Does this hold across density?
 
-The table above is one density (n=1200, 4 seeds). Both numbers it rests on —
-72.3 ± 7.7% and 95.0 ± 1.4% — came from a handful of seeds at a single
-balloon count, and this project's own history is full of rankings that moved
+The table above is one density (n=1200). When this question was first asked it
+rested on a 4-seed run reading 72.3 ± 7.7% and 95.0 ± 1.4% — a handful of seeds
+at a single balloon count, and this project's own history is full of rankings that moved
 once density or seed count changed (§"Density, and where the ground link
 still binds" above; the reactive-discovery bug below). So: does digest+mesh4's
 lead hold as n changes, or was n=1200 special?
 
 **Data:** [`density-sweep-results.csv`](density-sweep-results.csv) — 3,465
-rows: all 11 `protocol_compare` variants × {100, 200, 400, 600, 800, 1200,
+rows: all 11 `density_sweep` protocol variants × {100, 200, 400, 600, 800, 1200,
 1600, 2000, 3000} balloons × 35 seeds, 400 rounds, zero wind. ~3h47m on four
 cores. [`ground-truth-sweep-results.csv`](ground-truth-sweep-results.csv) —
 315 rows, the same n × seed grid but protocol-independent (`grounded_pct` is
@@ -188,16 +203,24 @@ min on four cores.
 **Generators:** [`density_sweep.rs`](../sim-server/src/bin/density_sweep.rs) ·
 [`ground_truth_sweep.rs`](../sim-server/src/bin/ground_truth_sweep.rs)
 **Chart:** [`protocol-results/density-sweep.png`](protocol-results/density-sweep.png) ·
-[`plot_density_sweep.py`](plot_density_sweep.py)
+[`plot_density_sweep.py`](plot_density_sweep.py). Same chart, interactive
+(hover for every protocol's value at a given n, click a legend entry to isolate
+one of the eleven): [`protocol-results/density-sweep.html`](protocol-results/density-sweep.html) ·
+[`plot_density_sweep_html.py`](plot_density_sweep_html.py). GitHub shows `.html`
+files in a repo as source, so the HTML needs Pages or a local open; the PNG is
+what embeds in Markdown, and stays the canonical figure.
 
-| protocol | n=1200, 4 seeds (original) | n=1200, 35 seeds |
+| protocol | n=1200, 4 seeds (original, sd) | n=1200, 35 seeds (SEM) |
 |---|---|---|
 | dv-dtn (shipped) | 72.3 ± 7.7% | 69.1 ± 1.0% |
 | dv-dtn, digest + mesh=4 | 95.0 ± 1.4% | 95.3 ± 0.3% |
 
 Both land within the original's much wider interval — the 4-seed table's
-ranking wasn't a fluke — and 35 seeds shrinks the error bars 5-25×, tight
-enough to separate protocols whose n=1200 intervals used to touch.
+ranking wasn't a fluke — and the intervals tighten 4.7–7.7×, enough to
+separate protocols whose n=1200 intervals used to touch. Note the two columns
+are not the same statistic: the 4-seed figures are standard deviations, the
+35-seed ones standard errors (6.2/√35 = 1.05), so the comparison is of
+*reported interval width*, not of spread.
 
 **The ranking holds, and digest+mesh4's lead widens rather than shrinks as
 density rises.** It tracks shipped dv-dtn closely below n=600, then pulls
@@ -206,9 +229,11 @@ n=3000 (96.5%, vs. dv-dtn's own best of 83.9%). Spray-and-wait never
 recovers either — L=16 caps at 23.8% completion even at 3000 balloons, so its
 n=1200 loss wasn't an under-provisioning artifact.
 
-**Below ~600 balloons, protocol choice barely matters.** Every variant —
-proactive, reactive, link-state, even spray-and-wait — sits within a couple
-of points of every other one (4-16% completion). The network isn't
+**Below ~600 balloons, protocol choice barely matters.** At n = 400 every
+routing variant — proactive, reactive, link-state — sits within about two
+points of every other one (14.1–16.7% completion), and the two spray-and-wait
+configurations trail below at 6.9% and 9.6%, for a total spread of under ten
+points where the percolated regime spreads more than sixty. The network isn't
 percolated yet: there is rarely a route to route well, so nothing a protocol
 does can show up as a difference. The interesting separation starts only
 once the physical topology has enough paths for routing quality to matter.
@@ -240,10 +265,11 @@ density is high enough to matter, which n=1200 wasn't.
 
 The reactive rows cost 15 points against maintaining routes continuously, and
 the counters say the cost is exactly what the mechanism predicts:
-`stall_no_belief` is **23,259** against proactive's **1,118** — balloons sitting
+`stall_no_belief` is **24,787** against proactive's **991** — balloons sitting
 on a bundle with nowhere to send it, waiting out a flood in each direction at
-one hop per wake slot. Believed depth is *shorter* than proactive (5.63 hops
-vs 7.12), because an on-demand route is built fresh rather than inherited.
+one hop per wake slot. Believed depth is *shorter* than proactive (5.91 hops
+vs 7.57), because an on-demand route is built fresh rather than inherited.
+(All four from `discovery-sweep-results.csv`, 20 seeds.)
 
 That is the honest reading only after a fix. Reactive first measured **23.2%**
 with a believed depth of **13.6 hops** and 586 loop drops, and the tempting
@@ -255,13 +281,17 @@ beat a genuinely current two-hop reply arriving beside it. Routes inflated
 instead of converging. Carrying the age through — the same anti-laundering rule
 the proactive side already had — moved it 23.2% → 57.3% and 13.6 → 5.63 hops.
 Real AODV prevents this with destination sequence numbers; this is the same
-defect those exist to close.
+defect those exist to close. (Those are the before/after of that single fix, on
+the run that caught it. On the current 20-seed sweep reactive reads 52.5% at
+5.91 hops; the size of the bug, not the exact landing point, is the finding.)
 
 Gating replies to tower-adjacent nodes only (`reply=tower`) was the fix I
-expected to need, and it turns out to be worth almost nothing once the ages are
-honest: +2.7 points, inside the spread, and it *raises* `stall_no_belief` to
-29,482 because every request now has to reach the edge of the mesh. Worth
-keeping as a parameter, not as a finding.
+expected to need, and it turns out to be worth little once the ages are honest:
++3.8 points, within about half the ±6.5 spread on either row, and it *raises*
+`stall_no_belief` from 24,088 to 29,990 because every request now has to reach
+the edge of the mesh. Worth keeping as a parameter, not as a finding. (From
+[`measurements/protocol-compare.txt`](measurements/protocol-compare.txt) at 8
+seeds — `reply=` is the one dial the discovery sweep does not cover.)
 
 The general lesson is the one this simulator keeps producing: **a protocol
 comparison measures the implementation, not the family.** A 34-point result was
@@ -277,11 +307,18 @@ assembles. Against proactive dv-dtn:
 
 | | link-state | proactive |
 |---|---|---|
-| believed depth | **3.15 hops** | 7.12 |
-| `dropped_loop` | **0.5** | 72.3 |
-| `stall_stale_next_hop` | **0.0** | 50.0 |
-| `stall_no_belief` | **34,212** | 1,118 |
-| completion | 52.4% | 72.3% |
+| believed depth | **3.19 hops** | 7.57 |
+| `dropped_loop` | **1.1** | 82.8 |
+| `stall_stale_next_hop` | **never** † | 68.4 |
+| `stall_no_belief` | **36,449** | 991 |
+| completion | 47.7% | 68.9% |
+
+All rows but one from `discovery-sweep-results.csv` at 20 seeds. † link-state
+does not report `stall_stale_next_hop` at all — it recomputes from its own map
+rather than following an inherited pointer, so the counter has nothing to count;
+proactive's 68.4 is from
+[`measurements/protocol-compare.txt`](measurements/protocol-compare.txt), the
+one run where both are printed side by side.
 
 Every quality measure is better and by a wide margin — the routes it finds are
 less than half as long, it never forwards to a dead next hop, and it essentially
@@ -293,18 +330,29 @@ The mechanism is gossip bandwidth, and the `lsa` dial confirms it directly.
 information-per-transmission lever as `mesh`, applied to discovery instead of
 to payload:
 
+All four rows are from `discovery-sweep-results.csv` at 20 seeds, n = 1200, 400
+rounds, after the determinism fix:
+
 | lsa | completion | believed depth | `stall_no_belief` |
 |---|---|---|---|
-| 2 | 41.0 ± 4.3% | 2.67 | 40,547 |
-| 4 (default) | 52.3 ± 5.7% | 3.15 | 34,207 |
-| 16 | 68.0 ± 6.4% | 4.13 | 22,363 |
-| 64 | 71.6 ± 6.9% | 5.57 | 8,067 |
+| 2 | 36.6 ± 4.5% | 2.69 | 42,582 |
+| 4 (default) | 47.7 ± 5.4% | 3.19 | 36,449 |
+| 16 | 61.7 ± 6.1% | 4.27 | 23,694 |
+| 64 | 64.6 ± 6.8% | 5.70 | 9,764 |
 
 Monotone in both directions at once: more gossip per slot means fewer balloons
 stranded without a map, *and* longer routes, because a fuller map can see paths
-that a partial one simply did not contain. At `lsa = 64` link-state converges on
-proactive dv-dtn's 72.3% — it needs 64 records per transmission to match what a
-hop count achieves with one number.
+that a partial one simply did not contain.
+
+**But it does not converge on proactive, and the ladder flattens before it
+could.** Proactive reads 68.9% on the same sweep; `lsa = 64` reaches 64.6% and
+is still 4.3 points short — having bought only 2.9 points over `lsa = 16` for
+four times the records per slot. An earlier, pre-determinism-fix run of this
+table put `lsa = 64` at 71.6% and had it overtaking proactive; that figure does
+not survive re-measurement, and the "catches up given enough airtime" reading
+that went with it does not either. What the airtime demonstrably buys is
+knowledge, not delivery: `stall_no_belief` falls 4.4× across the ladder while
+completion gains 28 points and then stalls.
 
 **This is the classical objection to link-state routing, arrived at from the
 other end.** The textbook version is an asymptotic argument about flooding
@@ -343,20 +391,28 @@ Completion %, mean ± sd across 20 seeds:
 | dv-dtn (shipped) | 68.9 ± 6.7 | 70.2 ± 6.1 | +1.3 ± 1.6 |
 | dv-dtn digest + mesh=4 | **94.9 ± 2.0** | 92.8 ± 2.8 | **−2.0 ± 0.5** |
 | dv-dtn reactive | 52.6 ± 5.3 | 50.2 ± 5.4 | −2.4 ± 1.3 |
-| dv-dtn link-state | 48.2 ± 5.4 | 48.4 ± 4.7 | +0.2 ± 1.3 |
+| dv-dtn link-state | 47.7 ± 5.4 | 48.0 ± 4.7 | +0.4 ± 1.3 |
 | spray-and-wait L=4 | 9.4 ± 1.7 | 10.2 ± 1.6 | +0.8 ± 0.4 |
 | spray-and-wait L=16 | 20.4 ± 3.1 | 21.8 ± 3.2 | +1.4 ± 0.7 |
+
+The link-state row was regenerated after the link-detection determinism fix;
+the other five predate it and did not need to be, having been verified
+bit-identical across the fix. At zero wind the regenerated column now matches
+`discovery-sweep-results.csv` on all 20 seeds exactly, so the two CSVs agree.
 
 **Compared within every (wind, seed) cell, dv-dtn beats spray-and-wait L=16 in
 160 of 160 cells.** The narrowest margin anywhere is **+38.0 points**. This is
 not a close call that weather might tip.
 
-**The churn is real and it reached the protocol.** `link_churn` measures link
+**The churn is real and it reached the protocol.**
+(Console capture: [`measurements/link-churn-zero.txt`](measurements/link-churn-zero.txt)
+and [`measurements/link-churn-wind.txt`](measurements/link-churn-wind.txt).)
+`link_churn` measures link
 turnover rising 4.1× (0.091% → 0.376% per round, half-life 757 → 184 rounds) at
 unchanged density, and dv-dtn's own counter agrees: `stall_stale_next_hop` goes
-42 → ~197, a 4.7× rise, consistent across all seven fields. Mean degree does not
-move (6.22 → 6.22). Routes go stale nearly five times as often and delivery
-does not care.
+42 → ~197, a 4.7× rise, consistent across all seven fields. Mean degree is
+effectively unchanged (6.22 → 6.23). Routes go stale nearly five times as often
+and delivery does not care.
 
 **Store-carry-forward absorbs it.** A balloon whose next hop has gone keeps
 carrying the bundle and forwards it later by another route. Churn becomes delay
@@ -433,8 +489,8 @@ below named the three obvious mechanisms — OLSR's multipoint relays, AODV's
 expanding-ring search, and learning from replies not addressed to you. All three
 are now implemented and measured.
 
-**Data:** [`discovery-sweep-results.csv`](discovery-sweep-results.csv) — 11
-variants × 20 seeds, n = 1200, 400 rounds, zero wind. **Generator:**
+**Data:** [`discovery-sweep-results.csv`](discovery-sweep-results.csv) — 320
+rows: 16 variants × 20 seeds, n = 1200, 400 rounds, zero wind. **Generator:**
 [`discovery_sweep`](../sim-server/src/bin/discovery_sweep.rs) · **Tables:**
 [`summarize_discovery.py`](summarize_discovery.py)
 
@@ -510,8 +566,11 @@ one hop per wake slot, so the search spends more time waiting than the shorter
 routes save. The textbook motivation for expanding ring is *airtime*, and
 airtime spent on rebroadcasts is not what binds here.
 
-Combining both is worse than overhearing alone (−1.04 on delivered/orig): the
-ring delays the very replies overhearing wants to spread.
+Combining both is worse than overhearing alone (−4.95 ± 0.35 on
+delivered/orig), and worse than plain reactive too (−1.04 ± 0.27): the ring
+delays the very replies overhearing wants to spread. Against the ring alone it
+is a modest gain (+1.11 ± 0.27), so overhearing still helps — just far less
+than it does without a ring in front of it.
 
 ### MPR relay selection — `discovery=link-state,relay=mpr`
 
@@ -617,11 +676,19 @@ than `k+1`) moves it **−0.07 ± 0.20 points**, and proactive reproduces its
 published figure to +0.001.
 
 Link-state levels *are* affected, by the determinism fix rather than by MPR —
-`dv-dtn:discovery=link-state` reads **47.7 ± 5.4** here against the 48.2 ± 5.4
-published from the wind sweep, and the `lsa` ladder re-measured at 20 seeds
-reads **2 → 36.6%, 4 → 47.7%, 16 → 61.7%**, below the earlier small-sample
-figures. Those earlier numbers were taken under randomised neighbour order and
-are not reproducible; these are.
+`dv-dtn:discovery=link-state` reads **47.7 ± 5.4**, against 48.2 ± 5.4 as the
+wind sweep originally published it. That gap was the wind sweep's CSV being
+older than the fix, not a disagreement between experiments: its link-state
+column has since been regenerated and now matches this one on all 20 seeds
+exactly. The `lsa` ladder re-measured at 20 seeds reads **2 → 36.6%, 4 → 47.7%,
+16 → 61.7%, 64 → 64.6%**, below the earlier small-sample figures at every rung.
+Those earlier numbers were taken under randomised neighbour order and are not
+reproducible; these are.
+
+`lsa = 64` had never actually been swept — it was quoted from a single
+pre-fix run at 71.6%, which had link-state overtaking proactive. Measured
+properly it reaches 64.6% and does not overtake. That is the one conclusion in
+this file the re-measurement reverses rather than merely tightens.
 
 ## Coda 3: latency, the axis that was missing
 
@@ -703,6 +770,7 @@ bundles it managed to deliver**, and it delivers the easy ones:
 | `lsa=2` | 25.8% | **26.0** | 2.69 |
 | `lsa=4` | 34.9% | 28.9 | 3.19 |
 | `lsa=16` | 45.6% | **44.2** | 4.27 |
+| `lsa=64` | 47.5% | **50.7** | 5.70 |
 
 **Latency rises monotonically as the protocol gets better.** Widening `lsa`
 lets balloons see further, so deeper bundles start arriving — and deeper bundles
@@ -800,6 +868,12 @@ RAYON_NUM_THREADS=2 nohup ./target/release/wind_sweep 20 400 &
 python3 experiments/summarize_wind.py experiments/wind-sweep-results.csv
 ```
 
+`link_churn` and `protocol_compare` print a table and write no CSV, so their
+runs are captured as console output under
+[`measurements/`](measurements/) rather than as a results file — see
+[`measurements/README.md`](measurements/README.md) for the exact commands and
+what each capture backs.
+
 `wind_sweep` resumes like `aggregation_sweep`: finished rows are appended
 immediately and skipped on restart, so it can be interrupted or extended with
 more seeds by re-running with a larger first argument.
@@ -819,10 +893,6 @@ Unlike the sweeps above this one does **not** resume: it writes the whole CSV in
 one pass, so an interrupted run is restarted rather than continued. At 45
 minutes that was not worth the bookkeeping.
 
-Rows append as they finish and are skipped on restart, so the run can be
-interrupted, resumed, or extended with more seeds by re-running with a larger
-first argument.
-
 For the density-sweep coda, two binaries, neither wind-backed (zero wind
 throughout) and neither resumable — both write their whole CSV in one pass,
 same tradeoff as `discovery_sweep`:
@@ -832,6 +902,9 @@ same tradeoff as `discovery_sweep`:
 ./target/release/ground_truth_sweep 35 400 > experiments/ground-truth-sweep-results.csv  # ~20 min, 4 cores
 python3 experiments/plot_density_sweep.py experiments/density-sweep-results.csv \
   --out experiments/protocol-results/density-sweep.png \
+  --truth experiments/ground-truth-sweep-results.csv
+python3 experiments/plot_density_sweep_html.py experiments/density-sweep-results.csv \
+  --out experiments/protocol-results/density-sweep.html \
   --truth experiments/ground-truth-sweep-results.csv
 ```
 

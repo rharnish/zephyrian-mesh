@@ -137,10 +137,12 @@ flowchart TB
   all, which is why `run-all.sh` skips starting it; with neither cache nor
   backend it falls back to zero wind and says so. It holds the field as a shared
   `Arc` and re-serves it over its own
-  `GET /api/wind-levels`, so the browser's arrows-only copy — slow to transfer,
-  ~55s / 356MB, see
+  `GET /api/wind-levels`, so the browser's arrows-only copy comes from
+  `sim-server` rather than from Python directly — one fetch of the grid instead
+  of two. The payload itself is no longer the bottleneck it was: 146.2MB and
+  ~0.04s over HTTP after the rounding and pre-encoding work in
   [`docs/investigations/WIND_TRANSFER_PERF.md`](docs/investigations/WIND_TRANSFER_PERF.md)
-  — comes from `sim-server`, not from Python directly.
+  (down from ~356MB / ~55s).
 
 - **Offline experiment binaries** live in `sim-server/src/bin/` and share the
   simulation code through `lib.rs`. Results land in [`experiments/`](experiments/).
@@ -150,6 +152,9 @@ flowchart TB
   | `protocol_compare` | every protocol over identical balloon fields; takes `--wind` |
   | `wind_sweep` | the above, crossed with several cached weather fields |
   | `aggregation_sweep` | the batching / ack-digest grid, many seeds |
+  | `discovery_sweep` | the discovery-mechanism variants (overhearing, expanding ring, MPR, `lsa=`), per-seed CSV |
+  | `density_sweep` | every protocol across the balloon-density range, through percolation |
+  | `ground_truth_sweep` | grounded-% ground truth over the same density grid, protocol-independent |
   | `link_churn` | does wind actually churn the topology, against a zero-wind control |
   | `wind_cache` | populate and inspect the on-disk wind fields |
   | `protocol_golden` | deterministic fingerprint, diffed across refactors |

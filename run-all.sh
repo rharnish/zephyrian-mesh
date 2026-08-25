@@ -35,9 +35,11 @@ Usage: ./run-all.sh [--local] [--protocol SPEC] [--wind NAME] [-h|--help]
              its observation time, e.g. --wind 1978-06-09T03:00:00.
 
              The cache is why startup is fast. wind_backend.py spends ~46s
-             building a ~350MB payload and sim-server ~55s fetching it, for a
-             field that never changes; cached, that becomes about a second and
-             the Python backend is not started at all. Manage it with:
+             building a ~146MB payload at its own startup, for a field that
+             never changes; cached, sim-server reads it from disk in about a
+             second and the Python backend is not started at all. (The transfer
+             itself is no longer the cost — it is ~0.04s since the payload work
+             in docs/investigations/WIND_TRANSFER_PERF.md.) Manage it with:
                cd sim-server && cargo run --release --bin wind_cache -- list
   -h, --help Show this help and exit.
 
@@ -69,7 +71,7 @@ PROTOCOLS
            copy budget, and each handoff gives half of it away, so the number
            of copies is bounded network-wide. Delivery is whichever copy
            happens to drift within earshot of a tower.
-           Measured at 11-23% against dv-dtn's 72% — but that is replication
+           Measured at 20.4% against dv-dtn's 68.9% — but that is replication
            run in the regime it suits worst, since links here are quasi-static
            and a maintained route stays valid. Included as the contrast.
            The UI degrades accordingly: no belief overlay, no comms replay,
@@ -99,7 +101,7 @@ PROTOCOLS
 
     tower=N                       (default 4)
         Bundles handed over per tower contact. The measured last-hop lever:
-        only ~23 of 1200 balloons can hear a tower at once, so this sets the
+        only ~22 of 1200 balloons can hear a tower at once, so this sets the
         ceiling everything else runs into. Set to 1 to reproduce the older
         one-bundle-per-contact behaviour.
 
@@ -122,18 +124,21 @@ PROTOCOLS
 
     discovery=proactive|reactive|link-state       (default proactive)
         How routes are found. All three end at the same place — a next hop a
-        balloon believes in — so the UI is identical across them. Only
-        proactive works with ack=digest, which needs tower beacons to ride on.
+        balloon believes in — so the belief overlay reads the same across
+        them, but the comms animation does not: each family emits its own
+        event kinds (RouteAd / RouteRequest+RouteReply / Gossip) and the
+        legend and packet colours key off those. Only proactive works with
+        ack=digest, which needs tower beacons to ride on.
 
         proactive   Towers flood hop-counted beacons continuously. A balloon
-                    usually has a route already, and it may be stale. 72%.
+                    usually has a route already, and it may be stale. 68.9%.
         reactive    AODV-style: nothing is spent until there is a bundle to
                     send, then a request floods out and a reply comes back —
                     under a duty cycle that is hops x the wake interval in
-                    each direction. 57%, and the cost is the waiting rather
+                    each direction. 52.6%, and the cost is the waiting rather
                     than the route quality.
         link-state  Balloons gossip who they can hear, and each computes its
-                    own route from the map it assembles. 52% — but with less
+                    own route from the map it assembles. 47.7% — but with less
                     than half the route length, no loops at all, and never a
                     stale next hop. It loses on coverage, not quality: the
                     map cannot be kept current across 1200 balloons from the
@@ -142,10 +147,17 @@ PROTOCOLS
 
     lsa=N                         (link-state only, default 4)
         Observations carried per transmission. The dial that decides how much
-        of the mesh a balloon can see. Measured: 2 -> 41%, 4 -> 52%,
-        16 -> 68%, 64 -> 72%, at which point link-state has caught proactive
-        by spending 64 records per slot against its one hop count. This is
-        the textbook link-state scaling limit, as a duty-cycle constraint.
+        of the mesh a balloon can see. Measured over 20 seeds by the discovery
+        sweep: 2 -> 36.6%, 4 -> 47.7%, 16 -> 61.7%, 64 -> 64.6%. It does not
+        catch proactive (68.9%): the ladder flattens between 16 and 64, buying
+        2.9 points for 4x the records per slot and still finishing 4.3 points
+        short. This is the textbook link-state scaling limit, as a duty-cycle
+        constraint.
+
+        (The discovery sweep and the wind sweep agree exactly on this
+        configuration -- all 20 seeds bit-identical -- since the wind sweep's
+        link-state column was regenerated after the link-detection determinism
+        fix.)
 
     reply=intermediate|tower      (default intermediate)
         With discovery=reactive, who may answer a request. intermediate lets
@@ -176,9 +188,16 @@ PROTOCOLS
         rebroadcast for it. Coverage is preserved exactly, so this removes
         duplicate deliveries and nothing else.
 
-    copies=N                      (epidemic only, default 4)
+    copies=N                      (epidemic only, default 8)
         Starting copy budget per bundle, halved at each handoff. Raising it
         buys reach at the cost of congesting the queues the copies need.
+
+    wake=N                        (epidemic only, default 5)
+        Rounds between wake slots. epidemic's counterpart to the beacon
+        interval; it has no beacons to hang the cadence on.
+
+  epidemic also accepts tower=N and originate=N, with the same meanings as
+  above. Those four are the whole set: copies, wake, tower, originate.
 
   Examples:
 
@@ -289,10 +308,11 @@ wait_for_log() {
 # --- 1. wind_backend.py (port 8000) ---------------------------------------
 #
 # Skipped entirely when sim-server already has the wind field cached. The
-# backend exists to *produce* that field: it spends ~46s building a ~350MB
-# payload at startup and sim-server then spends ~55s fetching it, every single
-# run, for a field that never changes. Once cached, sim-server reads it from
-# disk in about a second and needs nothing from Python at all.
+# backend exists to *produce* that field: it spends ~46s building a ~146MB
+# payload at its own startup, every single run, for a field that never changes.
+# Once cached, sim-server reads it from disk in about a second and needs
+# nothing from Python at all. (The fetch itself is ~0.04s now; the build is
+# what the cache actually saves.)
 #
 # Populate or refresh the cache with:
 #   cd sim-server && cargo run --release --bin wind_cache -- fetch
@@ -313,7 +333,7 @@ elif [[ "$WIND" == "none" ]]; then
   echo "Wind disabled (--wind none) — not starting wind_backend.py."
 elif wind_cached; then
   echo "Wind field is cached ($WIND_CACHE_DIR) — not starting wind_backend.py."
-  echo "  sim-server will load it from disk, skipping the ~100s build-and-fetch."
+  echo "  sim-server will load it from disk, skipping the ~46s backend build."
   echo "  To re-fetch: cd sim-server && cargo run --release --bin wind_cache -- fetch"
 else
   echo "Starting wind_backend.py (no cached wind field yet)..."

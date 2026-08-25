@@ -1,0 +1,316 @@
+n=1200  rounds=400  seeds=8  wind=none  coeff=4.12
+(identical balloon field per seed across every protocol)
+
+## Comparable across protocols
+
+protocol                                   originated         delivered          resolved  unresolved_share   completion_rate  delivered_per_originated
+-----------------------------------------------------------------------------------------------------------------------------------------------
+dv-dtn (shipped)                                 2379              1281              1815             23.7%         70.4±8.2%         53.9±7.9%
+dv-dtn digest+batch                              2381              2064              2161              9.2%         95.5±1.3%         86.7±2.3%
+dv-dtn reactive (AODV)                           2380               961              1756             26.2%         54.6±6.4%         40.4±5.7%
+dv-dtn reactive, tower-only replies              2380              1035              1768             25.7%         58.4±6.6%         43.5±6.0%
+dv-dtn reactive, overhearing                     2380              1034              1935             18.7%         53.4±7.2%         43.5±6.3%
+dv-dtn reactive, expanding ring                  2380               907              1718             27.8%         52.7±6.6%         38.1±5.8%
+dv-dtn reactive, overhearing + ring              2380               934              1773             25.5%         52.6±7.2%         39.3±6.2%
+dv-dtn link-state (gossip)                       2380               880              1758             26.1%         49.9±6.0%         37.0±5.2%
+dv-dtn link-state, MPR relays                    2380               887              1756             26.2%         50.4±5.8%         37.3±5.0%
+spray-and-wait L=4                               2380               156              1523             36.0%         10.2±1.4%          6.5±0.9%
+spray-and-wait L=16                              2343               340              1558             33.5%         21.8±3.3%         14.5±2.4%
+
+## Protocol-specific
+
+dv-dtn (shipped):
+    ack_latency_mean                    56.96
+    ack_latency_p95                    135.62
+    ack_lost                           358.12
+    ack_rate                             0.67
+    acked                              857.50
+    belief_hops_mean                     7.39
+    blocked                           1632.25
+    ceiling_utilisation                  0.16
+    delivered_hops_mean                  4.30
+    delivered_per_slot_used              0.11
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               49.92
+    delivery_latency_p95               135.62
+    dropped_loop                        83.38
+    dropped_ttl                          1.50
+    first_hop_latency_mean               7.76
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.04
+    satellite                          448.62
+    satellite_hops_mean                  7.30
+    satellite_share                      0.25
+    slots_with_bundle                14848.00
+    stall_no_belief                    921.88
+    stall_rate                           0.17
+    stall_stale_next_hop                44.00
+    stall_tower_gone                     1.50
+    unresolved                         564.25
+
+dv-dtn digest+batch:
+    ack_latency_mean                    46.85
+    ack_latency_p95                    101.25
+    ack_lost                             0.00
+    ack_rate                             0.91
+    acked                             1873.75
+    belief_hops_mean                     7.39
+    blocked                            953.75
+    ceiling_utilisation                  0.25
+    delivered_hops_mean                  6.23
+    delivered_per_slot_used              0.22
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               31.09
+    delivery_latency_p95                73.75
+    dropped_loop                        56.88
+    dropped_ttl                          7.12
+    first_hop_latency_mean               5.61
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.03
+    satellite                           33.12
+    satellite_hops_mean                  2.29
+    satellite_share                      0.02
+    slots_with_bundle                11527.38
+    stall_no_belief                    921.88
+    stall_rate                           0.17
+    stall_stale_next_hop                39.75
+    stall_tower_gone                     1.00
+    unresolved                         219.75
+
+dv-dtn reactive (AODV):
+    ack_latency_mean                    59.24
+    ack_latency_p95                    135.62
+    ack_lost                           173.38
+    ack_rate                             0.76
+    acked                              730.50
+    belief_hops_mean                     5.76
+    blocked                             51.12
+    ceiling_utilisation                  0.12
+    delivered_hops_mean                  4.04
+    delivered_per_slot_used              0.13
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               51.93
+    delivery_latency_p95               131.25
+    dropped_loop                       134.38
+    dropped_ttl                          0.00
+    first_hop_latency_mean              29.25
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.06
+    satellite                          661.25
+    satellite_hops_mean                  2.41
+    satellite_share                      0.38
+    slots_with_bundle                31801.62
+    stall_no_belief                  24088.00
+    stall_rate                           0.76
+    stall_stale_next_hop                71.12
+    stall_tower_gone                    14.75
+    unresolved                         623.88
+
+dv-dtn reactive, tower-only replies:
+    ack_latency_mean                    58.83
+    ack_latency_p95                    133.75
+    ack_lost                           185.75
+    ack_rate                             0.76
+    acked                              781.62
+    belief_hops_mean                     5.50
+    blocked                             31.50
+    ceiling_utilisation                  0.13
+    delivered_hops_mean                  4.42
+    delivered_per_slot_used              0.15
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               49.54
+    delivery_latency_p95               129.38
+    dropped_loop                        29.12
+    dropped_ttl                          0.00
+    first_hop_latency_mean              32.49
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.01
+    satellite                          703.62
+    satellite_hops_mean                  1.19
+    satellite_share                      0.40
+    slots_with_bundle                37179.62
+    stall_no_belief                  29989.50
+    stall_rate                           0.81
+    stall_stale_next_hop                99.38
+    stall_tower_gone                     6.88
+    unresolved                         612.62
+
+dv-dtn reactive, overhearing:
+    ack_latency_mean                    56.16
+    ack_latency_p95                    133.75
+    ack_lost                           210.25
+    ack_rate                             0.75
+    acked                              773.25
+    belief_hops_mean                     7.42
+    blocked                            323.25
+    ceiling_utilisation                  0.13
+    delivered_hops_mean                  3.75
+    delivered_per_slot_used              0.11
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               47.28
+    delivery_latency_p95               127.50
+    dropped_loop                       676.62
+    dropped_ttl                          0.00
+    first_hop_latency_mean              14.84
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.28
+    satellite                          223.75
+    satellite_hops_mean                  5.06
+    satellite_share                      0.12
+    slots_with_bundle                18704.75
+    stall_no_belief                   8406.12
+    stall_rate                           0.47
+    stall_stale_next_hop                97.88
+    stall_tower_gone                    11.88
+    unresolved                         445.38
+
+dv-dtn reactive, expanding ring:
+    ack_latency_mean                    61.58
+    ack_latency_p95                    138.75
+    ack_lost                           158.00
+    ack_rate                             0.78
+    acked                              703.00
+    belief_hops_mean                     4.39
+    blocked                             58.50
+    ceiling_utilisation                  0.11
+    delivered_hops_mean                  3.17
+    delivered_per_slot_used              0.16
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               56.09
+    delivery_latency_p95               136.25
+    dropped_loop                        26.25
+    dropped_ttl                          0.00
+    first_hop_latency_mean              39.99
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.01
+    satellite                          784.75
+    satellite_hops_mean                  1.50
+    satellite_share                      0.46
+    slots_with_bundle                36212.00
+    stall_no_belief                  30499.62
+    stall_rate                           0.84
+    stall_stale_next_hop                41.25
+    stall_tower_gone                    11.75
+    unresolved                         662.25
+
+dv-dtn reactive, overhearing + ring:
+    ack_latency_mean                    58.60
+    ack_latency_p95                    136.88
+    ack_lost                           173.62
+    ack_rate                             0.77
+    acked                              717.38
+    belief_hops_mean                     5.02
+    blocked                            257.62
+    ceiling_utilisation                  0.11
+    delivered_hops_mean                  2.99
+    delivered_per_slot_used              0.14
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               51.99
+    delivery_latency_p95               133.75
+    dropped_loop                       178.75
+    dropped_ttl                          0.00
+    first_hop_latency_mean              31.47
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.08
+    satellite                          660.50
+    satellite_hops_mean                  2.43
+    satellite_share                      0.37
+    slots_with_bundle                27474.25
+    stall_no_belief                  20593.12
+    stall_rate                           0.76
+    stall_stale_next_hop                41.00
+    stall_tower_gone                     9.75
+    unresolved                         606.38
+
+dv-dtn link-state (gossip):
+    ack_latency_mean                    38.99
+    ack_latency_p95                    104.38
+    ack_lost                            79.12
+    ack_rate                             0.87
+    acked                              764.88
+    belief_hops_mean                     3.17
+    blocked                             19.50
+    ceiling_utilisation                  0.11
+    delivered_hops_mean                  2.51
+    delivered_per_slot_used              0.29
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               27.58
+    delivery_latency_p95                91.88
+    dropped_loop                         1.12
+    dropped_ttl                          0.00
+    first_hop_latency_mean              15.19
+    gossip_records_redundant       1185891.12
+    gossip_records_useful          1101788.25
+    gossip_redundant_share               0.52
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.00
+    mpr_share                            1.00
+    satellite                          877.00
+    satellite_hops_mean                  0.05
+    satellite_share                      0.50
+    slots_with_bundle                38342.88
+    stall_no_belief                  35302.62
+    stall_rate                           0.92
+    stall_stale_next_hop                 0.00
+    stall_tower_gone                     0.00
+    unresolved                         622.25
+
+dv-dtn link-state, MPR relays:
+    ack_latency_mean                    39.35
+    ack_latency_p95                    105.00
+    ack_lost                            88.00
+    ack_rate                             0.86
+    acked                              764.38
+    belief_hops_mean                     3.21
+    blocked                             21.88
+    ceiling_utilisation                  0.11
+    delivered_hops_mean                  2.54
+    delivered_per_slot_used              0.29
+    delivery_ceiling_per_round          20.64
+    delivery_latency_mean               28.07
+    delivery_latency_p95                93.12
+    dropped_loop                         2.12
+    dropped_ttl                          0.00
+    first_hop_latency_mean              15.59
+    gossip_records_redundant        613113.88
+    gossip_records_useful          1110476.88
+    gossip_redundant_share               0.36
+    mean_tower_adjacent                 25.79
+    mesh_loss_rate                       0.00
+    mpr_share                            0.48
+    satellite                          867.38
+    satellite_hops_mean                  0.06
+    satellite_share                      0.49
+    slots_with_bundle                38049.88
+    stall_no_belief                  34919.12
+    stall_rate                           0.92
+    stall_stale_next_hop                 0.00
+    stall_tower_gone                     0.00
+    unresolved                         623.75
+
+spray-and-wait L=4:
+    blocked                             28.00
+    copies_expired                    5537.62
+    delivery_latency_mean                9.72
+    delivery_latency_p95                18.12
+    duplicate_arrivals                  21.88
+    handoffs                          6647.50
+    handoffs_per_delivery               43.48
+    no_candidate                      2000.88
+    satellite                         1366.88
+    satellite_share                      0.90
+    unresolved                         857.75
+
+spray-and-wait L=16:
+    blocked                           8163.25
+    copies_expired                   16240.38
+    delivery_latency_mean               27.89
+    delivery_latency_p95               111.88
+    duplicate_arrivals                 369.75
+    handoffs                         21005.00
+    handoffs_per_delivery               63.09
+    no_candidate                     27452.25
+    satellite                         1217.88
+    satellite_share                      0.78
+    unresolved                         784.38
+

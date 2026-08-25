@@ -1,0 +1,407 @@
+<title>Protocol density sweep: does the ranking hold as n changes?</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --hover:          rgba(11,11,11,0.04);
+    --series-blue: #2a78d6;
+    --series-orange: #eb6834;
+    --series-aqua: #1baf7a;
+    --series-yellow: #eda100;
+    --series-red: #e34948;
+    --series-truth: #5fd08a;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    padding: 32px 16px;
+    box-sizing: border-box;
+    min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --hover:          rgba(255,255,255,0.06);
+    --series-blue: #3987e5;
+    --series-orange: #d95926;
+    --series-aqua: #199e70;
+    --series-yellow: #c98500;
+    --series-red: #e34948;
+    --series-truth: #5fd08a;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --hover:          rgba(255,255,255,0.06);
+    --series-blue: #3987e5;
+    --series-orange: #d95926;
+    --series-aqua: #199e70;
+    --series-yellow: #c98500;
+    --series-red: #e34948;
+    --series-truth: #5fd08a;
+  }
+
+  * { box-sizing: border-box; }
+
+  .card {
+    max-width: 1000px;
+    margin: 0 auto;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 28px 20px;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 2px; }
+  .sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 4px; }
+  .hint { font-size: 12px; color: var(--text-muted); margin: 0 0 16px; }
+
+  .legend { display: flex; gap: 6px 16px; flex-wrap: wrap; margin-bottom: 10px; }
+  .legend-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text-secondary);
+    background: none; border: 0; padding: 2px 6px; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .legend-item:hover { background: var(--hover); }
+  .legend-item:focus-visible { outline: 2px solid var(--series-blue); outline-offset: 1px; }
+  .legend-item[aria-pressed="false"] { opacity: 0.34; }
+  .swatch { width: 20px; height: 0; border-top-style: solid; flex: none; }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 11px; }
+  .panel-title { fill: var(--text-secondary); font-size: 12px; font-weight: 600; }
+  .panel-sub { fill: var(--text-muted); font-size: 10.5px; }
+  .series-line { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .end-label { font-size: 10.5px; font-weight: 600; }
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0; pointer-events: none; }
+  .hover-dot { opacity: 0; pointer-events: none; }
+  .hover-target { fill: transparent; }
+  .dimmed { opacity: 0.12; }
+
+  .tooltip {
+    position: absolute; pointer-events: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    opacity: 0; transition: opacity 0.08s ease; min-width: 210px; z-index: 3;
+  }
+  .tooltip-title { font-weight: 600; margin-bottom: 5px; color: var(--text-primary); }
+  .tooltip-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 1px 0; color: var(--text-secondary); }
+  .tooltip-row .name { display: flex; align-items: center; gap: 6px; }
+  .tooltip-row .val { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tt-swatch { width: 12px; height: 0; border-top-style: solid; border-top-width: 2.5px; flex: none; }
+
+  details.table-view { margin-top: 16px; }
+  details.table-view summary { font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
+  .table-scroll { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  th, td { padding: 4px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--text-secondary); font-weight: 600; }
+  tbody td { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  caption { text-align: left; font-size: 12px; color: var(--text-muted); padding-bottom: 6px; }
+
+  .footnote { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.55; }
+</style>
+
+<div class="viz-root" id="root-chart">
+  <div class="card">
+    <h1>Protocol density sweep: does the ranking hold as n changes?</h1>
+    <p class="sub">dv-dtn variants, reactive/link-state discovery, spray-and-wait — zero wind, density_sweep.rs</p>
+    <p class="hint">Hover for every protocol's value at that balloon count. Click a legend entry to isolate it; click again to restore.</p>
+    <div class="legend" id="legend"></div>
+    <div class="chart-wrap">
+      <svg id="chart" viewBox="0 0 900 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Protocol density sweep: does the ranking hold as n changes?"></svg>
+      <div class="tooltip" id="tooltip" role="status"></div>
+    </div>
+    <details class="table-view">
+      <summary>Show the numbers</summary>
+      <div class="table-scroll" id="tables"></div>
+    </details>
+    <p class="footnote">Bands are ±1 standard error over seeds, drawn for the headline contenders and the ground-truth ceiling only. Ground truth is the share of balloons whose physical connectivity component contains a tower (union-find, computed before any protocol is consulted) — no protocol can exceed it.</p>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  const NS = "http://www.w3.org/2000/svg";
+  const meta = [{"key": "__truth__", "label": "ground truth (reachable)", "end": "truth", "hue": "truth", "headline": true, "dash": "2 3", "band": true}, {"key": "dv-dtn", "label": "dv-dtn", "end": "dv-dtn", "hue": "blue", "headline": true, "dash": null, "band": true}, {"key": "digest-mesh4", "label": "digest-mesh4", "end": "digest-mesh4", "hue": "orange", "headline": true, "dash": null, "band": true}, {"key": "spray-l16", "label": "spray-l16", "end": "spray-l16", "hue": "red", "headline": true, "dash": null, "band": true}, {"key": "spray-l4", "label": "spray-l4", "end": "spray-l4", "hue": "red", "headline": false, "dash": "4 3", "band": false}, {"key": "reactive", "label": "reactive", "end": "reactive", "hue": "yellow", "headline": true, "dash": null, "band": true}, {"key": "reactive-tower", "label": "reactive-tower", "end": "reactive-tower", "hue": "yellow", "headline": false, "dash": "4 3", "band": false}, {"key": "reactive-overhear", "label": "reactive-overhear", "end": "reactive-overhear", "hue": "yellow", "headline": false, "dash": "4 3", "band": false}, {"key": "reactive-ring", "label": "reactive-ring", "end": "reactive-ring", "hue": "yellow", "headline": false, "dash": "4 3", "band": false}, {"key": "reactive-overhear-ring", "label": "reactive-overhear-ring", "end": "reactive-overhear-ring", "hue": "yellow", "headline": false, "dash": "4 3", "band": false}, {"key": "linkstate", "label": "linkstate", "end": "linkstate", "hue": "aqua", "headline": true, "dash": null, "band": true}, {"key": "linkstate-mpr", "label": "linkstate-mpr", "end": "linkstate-mpr", "hue": "aqua", "headline": false, "dash": "4 3", "band": false}];
+  const data = {"__truth__": {"completion_rate": {"mean": [2.8285714285714287, 4.185714285714286, 10.971428571428572, 29.928571428571427, 76.88928571428572, 98.23571428571428, 99.62321428571428, 99.8757142857143, 99.99238095238096], "lo": [2.4343149444521335, 3.678172130208119, 9.771517360227548, 27.434224077562952, 74.575945409154, 98.1188833831931, 99.57909551321964, 99.86352332809075, 99.98961875786317], "hi": [3.222827912690724, 4.693256441220453, 12.171339782629595, 32.4229187795799, 79.20262601941744, 98.35254518823547, 99.66733305820892, 99.88790524333784, 99.99514314689874]}, "delivered_per_originated": {"mean": [2.8285714285714287, 4.185714285714286, 10.971428571428572, 29.928571428571427, 76.88928571428572, 98.23571428571428, 99.62321428571428, 99.8757142857143, 99.99238095238096], "lo": [2.4343149444521335, 3.678172130208119, 9.771517360227548, 27.434224077562952, 74.575945409154, 98.1188833831931, 99.57909551321964, 99.86352332809075, 99.98961875786317], "hi": [3.222827912690724, 4.693256441220453, 12.171339782629595, 32.4229187795799, 79.20262601941744, 98.35254518823547, 99.66733305820892, 99.88790524333784, 99.99514314689874]}}, "dv-dtn": {"completion_rate": {"mean": [4.4484, 6.5022, 16.0301, 30.2102, 47.2205, 69.0941, 75.9975, 80.0707, 83.8605], "lo": [3.8347, 5.7958, 14.5058, 28.3272, 45.4928, 68.0513, 75.2824, 79.4366, 83.4668], "hi": [5.0621, 7.2087, 17.5543, 32.0932, 48.9481, 70.1368, 76.7126, 80.7048, 84.2541]}, "delivered_per_originated": {"mean": [2.8259, 4.1457, 10.6661, 20.7457, 33.8269, 52.56, 59.4328, 63.8177, 67.87], "lo": [2.4305, 3.6892, 9.5954, 19.3543, 32.3941, 51.5421, 58.6843, 63.1355, 67.4527], "hi": [3.2213, 4.6021, 11.7369, 22.1371, 35.2598, 53.578, 60.1813, 64.5, 68.2873]}}, "digest-mesh4": {"completion_rate": {"mean": [4.4484, 6.5022, 16.67, 39.2075, 73.0344, 95.3357, 95.922, 96.5052, 96.5235], "lo": [3.8347, 5.7958, 15.0757, 36.7096, 71.2303, 95.023, 95.6606, 96.3337, 96.3412], "hi": [5.0621, 7.2087, 18.2643, 41.7054, 74.8386, 95.6484, 96.1835, 96.6766, 96.7058]}, "delivered_per_originated": {"mean": [2.8259, 4.1457, 11.1773, 28.6912, 59.6901, 86.2166, 86.806, 87.6395, 87.0372], "lo": [2.4305, 3.6892, 10.0415, 26.653, 57.8061, 85.651, 86.3514, 87.2636, 86.6691], "hi": [3.2213, 4.6021, 12.3132, 30.7293, 61.5741, 86.7823, 87.2605, 88.0154, 87.4052]}}, "spray-l16": {"completion_rate": {"mean": [4.4523, 5.8679, 9.6016, 12.6815, 16.1782, 20.4176, 21.788, 23.1791, 23.7806], "lo": [3.8458, 5.2907, 8.8061, 11.8832, 15.433, 19.9041, 21.2978, 22.7882, 23.5114], "hi": [5.0587, 6.4452, 10.397, 13.4799, 16.9235, 20.9311, 22.2781, 23.5699, 24.0498]}, "delivered_per_originated": {"mean": [2.8247, 3.7251, 6.1782, 8.2139, 10.6069, 13.587, 14.5673, 15.5782, 16.0135], "lo": [2.4356, 3.3543, 5.6533, 7.6798, 10.0928, 13.2166, 14.2128, 15.2931, 15.8194], "hi": [3.2138, 4.0958, 6.7031, 8.7479, 11.121, 13.9573, 14.9218, 15.8632, 16.2076]}}, "spray-l4": {"completion_rate": {"mean": [4.4482, 5.4097, 6.9416, 7.8278, 8.7419, 9.4531, 9.2409, 9.3522, 9.0711], "lo": [3.8432, 4.888, 6.3944, 7.3645, 8.3695, 9.1974, 8.9849, 9.1499, 8.9039], "hi": [5.0533, 5.9314, 7.4888, 8.2911, 9.1143, 9.7088, 9.497, 9.5544, 9.2383]}, "delivered_per_originated": {"mean": [2.8239, 3.4299, 4.424, 4.997, 5.6099, 6.0608, 5.9277, 6.0033, 5.8204], "lo": [2.4341, 3.0947, 4.0686, 4.694, 5.3639, 5.8915, 5.7594, 5.8712, 5.7104], "hi": [3.2138, 3.7652, 4.7795, 5.3, 5.8559, 6.2301, 6.0959, 6.1353, 5.9303]}}, "reactive": {"completion_rate": {"mean": [4.4536, 6.3831, 15.0835, 26.8708, 39.7887, 52.7714, 54.8577, 56.2777, 55.1646], "lo": [3.8374, 5.6988, 13.7037, 25.1421, 38.3607, 51.9361, 54.2007, 55.7701, 54.8482], "hi": [5.0699, 7.0674, 16.4633, 28.5995, 41.2167, 53.6067, 55.5147, 56.7853, 55.481]}, "delivered_per_originated": {"mean": [2.8297, 4.0715, 9.9644, 18.2603, 27.9958, 38.6684, 40.3105, 41.4654, 40.1019], "lo": [2.4331, 3.6304, 9.0115, 17.0048, 26.8529, 37.9124, 39.7273, 41.0008, 39.8369], "hi": [3.2264, 4.5126, 10.9173, 19.5159, 29.1387, 39.4245, 40.8937, 41.93, 40.3668]}}, "reactive-tower": {"completion_rate": {"mean": [4.4536, 6.3933, 15.0704, 27.2079, 41.3815, 56.9368, 59.7039, 60.4565, 57.6929], "lo": [3.8374, 5.7078, 13.6683, 25.4978, 39.9483, 56.0416, 59.117, 59.9679, 57.4082], "hi": [5.0699, 7.0788, 16.4725, 28.9179, 42.8147, 57.8319, 60.2907, 60.9451, 57.9776]}, "delivered_per_originated": {"mean": [2.8297, 4.0787, 9.9721, 18.5507, 29.2947, 42.0855, 44.5825, 45.2893, 42.7218], "lo": [2.4331, 3.6367, 8.9976, 17.3017, 28.1352, 41.2774, 44.023, 44.8314, 42.4649], "hi": [3.2264, 4.5207, 10.9466, 19.7997, 30.4542, 42.8937, 45.142, 45.7473, 42.9786]}}, "reactive-overhear": {"completion_rate": {"mean": [4.4536, 6.4363, 15.1615, 26.994, 39.4629, 52.2504, 56.7586, 60.9957, 66.9698], "lo": [3.8374, 5.7408, 13.7437, 25.2706, 38.0676, 51.3631, 56.1042, 60.3663, 66.6006], "hi": [5.0699, 7.1317, 16.5793, 28.7174, 40.8582, 53.1376, 57.4131, 61.6251, 67.339]}, "delivered_per_originated": {"mean": [2.8297, 4.1075, 10.0331, 18.592, 28.9214, 42.4457, 47.7393, 51.8647, 56.4011], "lo": [2.4331, 3.6587, 9.0482, 17.3183, 27.7585, 41.623, 47.0988, 51.2629, 56.0482], "hi": [3.2264, 4.5564, 11.018, 19.8657, 30.0844, 43.2685, 48.3799, 52.4664, 56.7541]}}, "reactive-ring": {"completion_rate": {"mean": [4.4536, 6.2919, 14.0524, 23.8842, 35.9417, 50.829, 54.7194, 57.55, 57.5412], "lo": [3.8374, 5.6277, 12.7751, 22.3312, 34.5231, 49.9205, 54.0032, 57.0104, 57.2172], "hi": [5.0699, 6.9561, 15.3297, 25.4372, 37.3603, 51.7376, 55.4356, 58.0897, 57.8652]}, "delivered_per_originated": {"mean": [2.8297, 4.0067, 9.2292, 16.0594, 24.9344, 36.6103, 39.8808, 42.2331, 42.3008], "lo": [2.4331, 3.5799, 8.3542, 14.9543, 23.8403, 35.827, 39.2549, 41.7315, 42.0053], "hi": [3.2264, 4.4334, 10.1042, 17.1644, 26.0285, 37.3935, 40.5066, 42.7348, 42.5963]}}, "reactive-overhear-ring": {"completion_rate": {"mean": [4.4536, 6.3244, 14.2867, 24.1303, 35.9698, 50.1178, 55.6409, 60.0858, 63.7651], "lo": [3.8374, 5.6569, 12.9758, 22.5911, 34.5565, 49.1504, 54.8941, 59.4736, 63.3621], "hi": [5.0699, 6.9918, 15.5977, 25.6694, 37.3831, 51.0852, 56.3877, 60.698, 64.1682]}, "delivered_per_originated": {"mean": [2.8297, 4.0282, 9.4022, 16.3171, 25.4069, 37.212, 41.4981, 45.2546, 48.2716], "lo": [2.4331, 3.5992, 8.5007, 15.2157, 24.2947, 36.3883, 40.8094, 44.6634, 47.8985], "hi": [3.2264, 4.4573, 10.3036, 17.4184, 26.519, 38.0358, 42.1867, 45.8459, 48.6448]}}, "linkstate": {"completion_rate": {"mean": [4.4536, 6.5302, 14.6401, 24.1017, 34.7473, 47.5502, 52.3871, 56.4918, 59.7851], "lo": [3.8374, 5.8213, 13.3065, 22.5943, 33.4495, 46.711, 51.6906, 55.9553, 59.4255], "hi": [5.0699, 7.2391, 15.9736, 25.6092, 36.0451, 48.3894, 53.0835, 57.0282, 60.1448]}, "delivered_per_originated": {"mean": [2.8297, 4.1723, 9.7048, 16.4574, 24.4918, 34.8657, 39.0133, 42.7161, 45.7374], "lo": [2.4331, 3.7141, 8.7726, 15.3544, 23.46, 34.126, 38.3558, 42.191, 45.3828], "hi": [3.2264, 4.6305, 10.6371, 17.5603, 25.5237, 35.6053, 39.6708, 43.2412, 46.0919]}}, "linkstate-mpr": {"completion_rate": {"mean": [4.4536, 6.5302, 14.6985, 24.3392, 35.1192, 48.1919, 53.1858, 57.3912, 60.8568], "lo": [3.8374, 5.8213, 13.3578, 22.8064, 33.7986, 47.3643, 52.5008, 56.8485, 60.4904], "hi": [5.0699, 7.2391, 16.0391, 25.8719, 36.4398, 49.0194, 53.8708, 57.9339, 61.2231]}, "delivered_per_originated": {"mean": [2.8297, 4.1723, 9.7516, 16.635, 24.7719, 35.3316, 39.6038, 43.4545, 46.5552], "lo": [2.4331, 3.7141, 8.8118, 15.5093, 23.7196, 34.6067, 38.9642, 42.9209, 46.1924], "hi": [3.2264, 4.6305, 10.6914, 17.7606, 25.8241, 36.0565, 40.2434, 43.988, 46.918]}}};
+  const panels = [{"metric": "completion_rate", "title": "Completion rate", "sub": "delivered / resolved"}, {"metric": "delivered_per_originated", "title": "Delivered", "sub": "delivered / originated"}];
+  const xs = [100, 200, 400, 600, 800, 1200, 1600, 2000, 3000];
+
+  const root = document.getElementById("root-chart");
+  const cs = getComputedStyle(root);
+  const color = (m) => cs.getPropertyValue("--series-" + m.hue).trim();
+
+  const W = 900, H = 620;
+  const padL = 62, padR = 78, padT = 26, padB = 40;
+  const gap = 46;
+  const plotW = W - padL - padR;
+  const plotH = (H - padT - padB - gap) / 2;
+  const panelTop = [padT, padT + plotH + gap];
+
+  // Log x: the sweep's balloon counts span 100..3000 and are spaced by ratio,
+  // so a linear axis would crush everything below n=1200 into the left margin.
+  const lx = xs.map((n) => Math.log10(n));
+  const xMin = Math.min(...lx), xMax = Math.max(...lx);
+  const xPos = (i) => padL + plotW * (lx[i] - xMin) / (xMax - xMin);
+  const yPos = (p, v) => panelTop[p] + plotH * (1 - v / 100);
+
+  const svg = document.getElementById("chart");
+  const el = (tag, attrs, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) if (attrs[k] !== null) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+
+  // --- axes ---------------------------------------------------------------
+  panels.forEach((p, pi) => {
+    for (let v = 0; v <= 100; v += 25) {
+      const y = yPos(pi, v);
+      svg.appendChild(el("line", { x1: padL, x2: W - padR, y1: y, y2: y,
+        class: v === 0 ? "baseline" : "gridline" }));
+      svg.appendChild(el("text", { x: padL - 8, y: y + 4, class: "axis-label", "text-anchor": "end" }, v + "%"));
+    }
+    const head = el("text", { x: padL, y: panelTop[pi] - 12, class: "panel-title" }, p.title);
+    head.appendChild(el("tspan", { class: "panel-sub", dx: 8 }, p.sub));
+    svg.appendChild(head);
+  });
+  xs.forEach((n, i) => {
+    svg.appendChild(el("text", { x: xPos(i), y: panelTop[1] + plotH + 18, class: "axis-label",
+      "text-anchor": "middle" }, n));
+  });
+  svg.appendChild(el("text", { x: padL + plotW / 2, y: H - 4, class: "axis-label",
+    "text-anchor": "middle" }, "Balloon count (n), log scale"));
+
+  // --- series -------------------------------------------------------------
+  const groups = {};   // key -> [<g> per panel]
+  const endLabels = panels.map(() => []);
+  meta.forEach((m) => {
+    groups[m.key] = panels.map((p, pi) => {
+      const g = el("g", { "data-key": m.key });
+      const s = data[m.key][p.metric];
+      const stroke = color(m);
+
+      if (m.band) {
+        // +/-1 SEM. Drawn only for the headline lines and ground truth: eleven
+        // overlapping bands would be mud, and the thin dashed variants are
+        // there to show a family's shape, not a precise value.
+        let seg = [];
+        const flushBand = () => {
+          if (seg.length < 2) { seg = []; return; }
+          const up = seg.map((i) => `${xPos(i)},${yPos(pi, s.hi[i])}`);
+          const dn = seg.slice().reverse().map((i) => `${xPos(i)},${yPos(pi, s.lo[i])}`);
+          g.appendChild(el("polygon", { points: up.concat(dn).join(" "), fill: stroke,
+            "fill-opacity": 0.15, stroke: "none" }));
+          seg = [];
+        };
+        s.mean.forEach((v, i) => { if (v === null) flushBand(); else seg.push(i); });
+        flushBand();
+      }
+
+      // Break the line across gaps rather than interpolating over them.
+      let seg = [];
+      const flush = () => {
+        if (seg.length === 0) { return; }
+        if (seg.length > 1) {
+          g.appendChild(el("polyline", {
+            points: seg.map((i) => `${xPos(i)},${yPos(pi, s.mean[i])}`).join(" "),
+            class: "series-line", stroke: stroke,
+            "stroke-width": m.headline ? 2.4 : 1.3,
+            "stroke-opacity": m.headline ? 1 : 0.6,
+            "stroke-dasharray": m.dash,
+          }));
+        }
+        if (m.headline) {
+          seg.forEach((i) => g.appendChild(el("circle", { cx: xPos(i), cy: yPos(pi, s.mean[i]),
+            r: 3.4, fill: stroke, stroke: cs.getPropertyValue("--surface-1").trim(), "stroke-width": 1.5 })));
+        }
+        seg = [];
+      };
+      s.mean.forEach((v, i) => { if (v === null) flush(); else seg.push(i); });
+      flush();
+
+      // Direct label on the headline lines: the light palette's aqua and
+      // yellow sit under 3:1 on the light surface, and the documented relief
+      // for that is a visible label rather than color alone. Placement is
+      // deferred to placeEndLabels() so lines that finish close together
+      // don't stack their labels on top of each other.
+      if (m.headline) {
+        let last = s.mean.length - 1;
+        while (last >= 0 && s.mean[last] === null) last--;
+        if (last >= 0) {
+          const t = el("text", { x: xPos(last) + 8, y: yPos(pi, s.mean[last]) + 3.5,
+            class: "end-label", fill: stroke }, m.end);
+          g.appendChild(t);
+          endLabels[pi].push({ node: t, want: yPos(pi, s.mean[last]) + 3.5 });
+        }
+      }
+      svg.appendChild(g);
+      return g;
+    });
+  });
+
+  // Nudge overlapping end labels apart, keeping them inside their panel and
+  // as close to their line's last point as the 13px minimum gap allows.
+  function placeEndLabels() {
+    endLabels.forEach((labels, pi) => {
+      const MIN = 13;
+      const top = panelTop[pi] - 4, bot = panelTop[pi] + plotH + 4;
+      labels.sort((a, b) => a.want - b.want);
+      let y = top;
+      labels.forEach((l) => { y = l.y = Math.max(l.want, y); y += MIN; });
+      // If the pile ran past the bottom, push the whole stack back up.
+      const over = labels.length ? labels[labels.length - 1].y - bot : 0;
+      if (over > 0) {
+        let limit = bot;
+        for (let i = labels.length - 1; i >= 0; i--) {
+          labels[i].y = Math.min(labels[i].y, limit);
+          limit = labels[i].y - MIN;
+        }
+      }
+      labels.forEach((l) => l.node.setAttribute("y", l.y));
+    });
+  }
+  placeEndLabels();
+
+  // --- legend -------------------------------------------------------------
+  let isolated = null;
+  const legend = document.getElementById("legend");
+  meta.forEach((m) => {
+    const b = document.createElement("button");
+    b.className = "legend-item";
+    b.type = "button";
+    b.setAttribute("aria-pressed", "true");
+    b.dataset.key = m.key;
+    b.innerHTML = `<span class="swatch" style="border-top-color:${color(m)};`
+      + `border-top-width:${m.headline ? 2.5 : 1.5}px;`
+      + `border-top-style:${m.dash ? "dashed" : "solid"}"></span>${m.label}`;
+    b.addEventListener("click", () => {
+      isolated = isolated === m.key ? null : m.key;
+      applyIsolation();
+    });
+    legend.appendChild(b);
+  });
+  function applyIsolation() {
+    meta.forEach((m) => {
+      const on = isolated === null || isolated === m.key;
+      groups[m.key].forEach((g) => g.classList.toggle("dimmed", !on));
+      legend.querySelector(`[data-key="${m.key}"]`).setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  // --- hover --------------------------------------------------------------
+  const crosshairs = panels.map((_, pi) => {
+    const c = el("line", { x1: 0, x2: 0, y1: panelTop[pi], y2: panelTop[pi] + plotH, class: "crosshair" });
+    svg.appendChild(c);
+    return c;
+  });
+  const hoverDots = {};
+  meta.forEach((m) => {
+    hoverDots[m.key] = panels.map(() => {
+      const c = el("circle", { r: 5, class: "hover-dot", fill: color(m),
+        stroke: cs.getPropertyValue("--surface-1").trim(), "stroke-width": 2 });
+      svg.appendChild(c);
+      return c;
+    });
+  });
+
+  const tooltip = document.getElementById("tooltip");
+  const wrap = svg.closest(".chart-wrap");
+  const mid = [];
+  for (let i = 0; i < xs.length; i++) {
+    const a = i === 0 ? padL : (xPos(i - 1) + xPos(i)) / 2;
+    const b = i === xs.length - 1 ? padL + plotW : (xPos(i) + xPos(i + 1)) / 2;
+    mid.push([a, b]);
+  }
+  panels.forEach((p, pi) => {
+    xs.forEach((_, i) => {
+      const [a, b] = mid[i];
+      const t = el("rect", { x: a, y: panelTop[pi], width: b - a, height: plotH, class: "hover-target" });
+      t.addEventListener("mouseenter", () => show(pi, i));
+      t.addEventListener("mousemove", (ev) => place(ev));
+      t.addEventListener("mouseleave", hide);
+      svg.appendChild(t);
+    });
+  });
+
+  function show(pi, i) {
+    crosshairs.forEach((c, k) => {
+      c.setAttribute("x1", xPos(i)); c.setAttribute("x2", xPos(i));
+      c.style.opacity = k === pi ? 1 : 0.45;
+    });
+    const visible = meta.filter((m) => isolated === null || isolated === m.key);
+    meta.forEach((m) => {
+      const v = data[m.key][panels[pi].metric].mean[i];
+      hoverDots[m.key].forEach((d, k) => {
+        const on = k === pi && v !== null && (isolated === null || isolated === m.key);
+        d.style.opacity = on ? 1 : 0;
+        if (on) { d.setAttribute("cx", xPos(i)); d.setAttribute("cy", yPos(pi, v)); }
+      });
+    });
+    // Ranked, because "who is winning at this density" is the question this
+    // chart exists to answer, and legend order can't answer it per-column.
+    const rows = visible
+      .map((m) => ({ m, v: data[m.key][panels[pi].metric].mean[i] }))
+      .sort((x, y) => (y.v === null ? -1 : x.v === null ? 1 : y.v - x.v))
+      .map(({ m, v }) => `<div class="tooltip-row"><span class="name">`
+        + `<span class="tt-swatch" style="border-top-color:${color(m)};border-top-style:${m.dash ? "dashed" : "solid"}"></span>`
+        + `${m.label}</span><span class="val">${v === null ? "—" : v.toFixed(1) + "%"}</span></div>`)
+      .join("");
+    tooltip.innerHTML = `<div class="tooltip-title">n = ${xs[i]} · ${panels[pi].title}</div>${rows}`;
+    tooltip.style.opacity = 1;
+  }
+  function place(ev) {
+    const r = wrap.getBoundingClientRect();
+    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+    const flip = x > r.width * 0.55;
+    tooltip.style.left = Math.max(0, flip ? x - tooltip.offsetWidth - 16 : x + 16) + "px";
+    tooltip.style.top = Math.min(Math.max(0, y - 40), r.height - tooltip.offsetHeight) + "px";
+  }
+  function hide() {
+    crosshairs.forEach((c) => (c.style.opacity = 0));
+    Object.values(hoverDots).forEach((ds) => ds.forEach((d) => (d.style.opacity = 0)));
+    tooltip.style.opacity = 0;
+  }
+
+  // --- table view ---------------------------------------------------------
+  const tables = document.getElementById("tables");
+  panels.forEach((p) => {
+    const t = document.createElement("table");
+    t.innerHTML = `<caption>${p.title} — ${p.sub}, mean over seeds</caption>`
+      + `<thead><tr><th>Protocol</th>${xs.map((n) => `<th>n=${n}</th>`).join("")}</tr></thead>`
+      + `<tbody>${meta.map((m) => `<tr><th scope="row">${m.label}</th>`
+        + data[m.key][p.metric].mean.map((v) => `<td>${v === null ? "—" : v.toFixed(1)}</td>`).join("")
+        + `</tr>`).join("")}</tbody>`;
+    tables.appendChild(t);
+  });
+})();
+</script>

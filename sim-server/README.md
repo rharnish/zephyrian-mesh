@@ -14,32 +14,36 @@ another *client* of it, the same way the browser used to be.
 ## The three processes, today
 
 ```
-┌──────────────────────┐      GET /api/wind-levels      ┌──────────────────┐
-│  wind_backend.py      │ ◄──────────────────────────── │   sim-server      │
-│  (FastAPI, port 8000)  │        (once, at startup)      │  (Rust, port 8080)│
-│  serves static ERA5    │                                 │  owns the World:  │
-│  wind grid as JSON     │                                 │  balloons, towers,│
-└──────────────────────┘                                 │  wind, physics loop│
-                                                            └────────┬─────────┘
+┌────────────────────────┐   GET /api/wind-levels/source  ┌──────────────────────┐
+│  wind_backend.py       │ ◄───────────────────────────── │  sim-server          │
+│  (FastAPI, port 8000)  │   then the grid only on a      │  (Rust, port 8080)   │
+│  serves static ERA5    │   wind-cache miss, at startup  │  owns the World:     │
+│  wind grid as JSON     │                                │  balloons, towers,   │
+└────────────────────────┘                                │  wind, physics loop  │
+                                                          └──────────┬───────────┘
                                                                      │ WS /ws
                                                                      │ JSON snapshots
                                                                      │ every tick
-                                                            ┌────────▼─────────┐
-                                                            │  cesium-app (browser)│
-                                                            │  Cesium rendering    │
-                                                            │  only — no physics   │
-                                                            └──────────────────────┘
+                                                          ┌──────────▼───────────┐
+                                                          │  browser frontend    │
+                                                          │  Cesium rendering    │
+                                                          │  only — no physics   │
+                                                          └──────────────────────┘
 ```
 
 1. **`weather-data-server/wind_backend.py`** (unchanged) parses the static
    ERA5 NetCDF file and serves it as JSON. Still started via `./run.sh`.
-2. **`sim-server`** fetches that JSON once at startup, then owns the live
+2. **`sim-server`** resolves a wind field at startup — asking the backend
+   only which field it serves, then loading it from the on-disk wind cache
+   and fetching the full grid only on a cache miss (falling back to the
+   newest cached field if the backend is unreachable, and to zero wind only
+   if the cache is empty too) — then owns the live
    simulation state (`World` in `src/sim.rs`): balloon positions, wind
    advection, altitude control, and radio-link/cluster detection. It ticks
    on its own clock (20Hz wall-clock, each tick advancing `TICK_DT_SECONDS *
    TIME_SCALE` simulated seconds — same constants as `config.js` had) and
    broadcasts a JSON snapshot to every connected client over a WebSocket.
-3. **`cesium-app`** (the Vite/Cesium frontend) is a *pure renderer*:
+3. **`src/`** (the Vite/Cesium frontend) is a *pure renderer*:
    `src/main.js` opens a WebSocket to `sim-server` and reconciles Cesium
    entities against whatever snapshot arrives — no local physics or
    link-detection state. User actions (add/remove tower, change balloon
@@ -86,8 +90,8 @@ plan wins.
 `src/main.js` maintains two reconciliation maps (`balloonEntities`,
 `towerById`) keyed by the server's ids, updated on every WebSocket message:
 add an entity for a new id, update position for a known one, remove an
-entity whose id no longer appears in the snapshot. `syncLinks()` does the
-same for radio-link polylines, keyed by the edge's `pairKey`.
+entity whose id no longer appears in the snapshot. `src/linkLayer.js` does
+the same for radio-link polylines, keyed by the edge's `pairKey`.
 
 Server routes the frontend calls:
 
@@ -98,11 +102,16 @@ Server routes the frontend calls:
 | `DELETE /api/towers/:id` | click on an existing tower |
 | `POST /api/balloons/count` | "Apply" button next to the balloon-count input |
 | `POST /api/horizon-coeff` | horizon-coefficient slider, on release (`change`, not `input` — avoids flooding the server with a request per drag pixel) |
+| `POST /api/paused` | pause/resume control |
+| `GET /api/wind-levels` | the browser's wind-vector overlay (served by `sim-server`, not the Python backend) |
+| `GET /api/balloons/:id/comms` | inspector panel's per-balloon comms log |
 
-The wind field fetched directly by the browser (`WindField.fetchFromBackend`
-in `src/main.js`) is now used **only** for the wind-vector-arrow
-visualization — `sim-server` has its own independently-fetched copy for
-actual balloon advection.
+The wind field fetched by the browser (`WindField.fetchFromBackend` in
+`src/windField.js`, called from `src/main.js`) is used **only** for the
+wind-vector-arrow visualization. It no longer goes to the Python backend:
+`WIND_API_URL` in `src/config.js` points at `sim-server`, which serves the
+copy it already holds. `sim-server` uses that same field for balloon
+advection, so the two can no longer disagree.
 
 ## A bug this port caught
 
@@ -131,6 +140,16 @@ cargo run --release
 `sim-server` logs whether it loaded real wind data or fell back to zero
 wind, then listens on `ws://127.0.0.1:8080/ws`.
 
+Environment variables, all optional and all overridden by the equivalent
+command-line flag where one exists:
+
+| Variable | Effect |
+|---|---|
+| `MESH_PROTOCOL` | Protocol spec to run, same syntax as `--protocol` (e.g. `dv-dtn:ack=digest`). Defaults to the shipped `dv-dtn`. |
+| `ZM_WIND` | Wind field to load, same values as `--wind`: `auto`, `none`, or a cached field's observation time. |
+| `ZM_WIND_CACHE` | Directory holding cached wind fields. Defaults to `sim-server/.wind-cache`. |
+| `PREFER_NEARER` | `1` makes the `bundle_delivery` experiment binary route nearest-first instead of freshest-first (`Metric::NearestFirst`). Experiment binary only. |
+
 ```bash
 cd sim-server
 cargo test
@@ -142,8 +161,8 @@ check.
 ## Repo layout
 
 `sim-server/` is a top-level peer of `src/` and `weather-data-server/` within the
-`cesium-app` repo — a sibling directory, not nested under an extra `rust/`
-wrapper. It doesn't depend on being inside `cesium-app/`; it only talks to
+`zephyrian-mesh` repo — a sibling directory, not nested under an extra `rust/`
+wrapper. It doesn't depend on being inside that repo; it only talks to
 `wind_backend.py` over HTTP and to the browser over WebSocket. If it ever
 needs independent deploy/versioning/CI, splitting it into its own repo is a
 plain `git filter-repo`/subtree-split away — no code changes required.

@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/towerModel.js (the plain data half of a tower —
+// Ported from src/towerModel.js (the plain data half of a tower —
 // no Cesium entity/canvas rendering here, that stays client-side).
 
 use serde::Serialize;

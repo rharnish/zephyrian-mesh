@@ -8,7 +8,7 @@ report is rendered from numbers transcribed out of these files.
 | `baseline.txt` | Density sweep, shipped protocol. 1200 balloons, 2000 rounds/coefficient. |
 | `nearest.txt` | Same sweep with the `prefer_nearer` ablation (`PREFER_NEARER=1`). |
 | `baseline_4000_single.txt` | Longer 4000-round run at the default density; the headline stall/hop breakdown. |
-| `demand_sweep.txt` | `BUNDLE_INTERVAL_ROUNDS` swept 50→1600 at coeff 4.12. **The decisive result.** |
+| `demand_sweep.txt` | `bundle_interval_rounds` swept 50→1600 at coeff 4.12. **The decisive result.** |
 | `ceiling_by_density.txt` | Tower-adjacent population and last-hop ceiling at coeffs 3.0 / 3.57 / 5.0. |
 
 Reproduce with:
@@ -34,8 +34,8 @@ source tree**, which is what the later sweeps do.
 
 | File | What it is |
 |---|---|
-| `contact_sweep.txt` | `TOWER_CONTACT_BUNDLES` swept 1→8. Window 1 reproduces the old one-bundle-per-duty-cycle rule, so row 1 is the "before". |
-| `queue_sweep.txt` | `RELAY_QUEUE_CAPACITY` swept 1→16 **under** `TOWER_CONTACT_BUNDLES = 4`. |
+| `contact_sweep.txt` | `batch.tower_contact` swept 1→8. Window 1 reproduces the old one-bundle-per-duty-cycle rule, so row 1 is the "before". |
+| `queue_sweep.txt` | `relay_queue_capacity` swept 1→16 **under** `batch.tower_contact = 4`. |
 
 **Reading `queue_sweep.txt`:** use the `blocked` figure, not `completion`. Completion is
 non-monotone there because it is dominated by how many balloons were in tower range that run

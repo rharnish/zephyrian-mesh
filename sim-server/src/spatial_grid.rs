@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/spatialGrid.js. Buckets node indices by
+// Ported from experiments/legacy-js/src/spatialGrid.js. Buckets node indices by
 // (lon, lat) cell so radio-range checks only compare each node against
 // nearby candidates instead of every other node.
 //
