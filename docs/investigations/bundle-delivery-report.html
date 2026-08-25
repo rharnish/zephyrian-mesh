@@ -179,7 +179,7 @@
 </style>
 
 <header class="masthead">
-  <div class="eyebrow">cesium-dirigible &middot; mesh comms &middot; C2 investigation</div>
+  <div class="eyebrow">zephyrian-mesh &middot; mesh comms &middot; C2 investigation</div>
   <h1>The last hop</h1>
   <p class="standfirst">
     Telemetry delivery sat stubbornly near 40&ndash;50% in a mesh where almost every balloon
@@ -283,7 +283,7 @@
   <div id="fig-slots"></div>
   <div class="col">
     <p>
-      A bundle&rsquo;s entire life is <code>BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS</code> =
+      A bundle&rsquo;s entire life is <code>bundle_max_age_rounds / beacon_interval_rounds</code> =
       <strong>30 wake slots</strong>. Above the percolation threshold the stall rate is only
       24&ndash;27%, leaving ~22 usable hops against a true median depth of 6.5. On the slot
       budget alone, these bundles should arrive comfortably. They don&rsquo;t &mdash; so the budget
@@ -372,7 +372,7 @@
     <table>
       <caption>
         Demand sweep at the default density, 2000 rounds each. Only
-        <code>BUNDLE_INTERVAL_ROUNDS</code> changes between rows &mdash; routing, queues and
+        <code>bundle_interval_rounds</code> changes between rows &mdash; routing, queues and
         belief lifetime are identical throughout.
       </caption>
       <thead>
@@ -427,7 +427,7 @@
     <h2>The contact window, tested</h2>
     <p>
       The cheapest of those levers was implemented and measured: a balloon in tower range now
-      drains up to <code>TOWER_CONTACT_BUNDLES</code> in one contact instead of passing a single
+      drains up to <code>batch.tower_contact</code> in one contact instead of passing a single
       bundle per duty cycle. Setting that constant to 1 reproduces the old rule exactly, so the
       comparison is clean &mdash; nothing else changed.
     </p>
@@ -482,7 +482,8 @@ const DENSITY = [
   { coeff: 5.00, degree: 8.84, grounded: 99.8, delivered: 7818, completion: 69.0, stall: 24.4, noBelief: 0.7,  stale: 0.1, blocked: 23.6, moved: 75.6, belief: 5.56 },
 ];
 
-/* Same sweep with the nearest-first ablation (ablation::prefer_nearer). */
+/* Same sweep with the nearest-first ablation (PREFER_NEARER=1, which sets
+   params.metric = Metric::NearestFirst). */
 const NEAREST = [
   { coeff: 2.50, degree: 2.20, grounded: 5.6,  completion: 6.0,  belief: 3.21 },
   { coeff: 3.00, degree: 3.20, grounded: 11.0, completion: 10.6, belief: 5.50 },

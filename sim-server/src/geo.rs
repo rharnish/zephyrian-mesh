@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/geo.js. Radio line-of-sight + great-circle
+// Ported from src/geo.js. Radio line-of-sight + great-circle
 // distance, using each node's precomputed trig so repeated pairwise checks
 // don't redo sin/cos/sqrt from scratch every time.
 

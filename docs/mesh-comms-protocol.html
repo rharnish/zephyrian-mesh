@@ -279,11 +279,21 @@
       last resort. Nothing here is computed for a balloon by the server — every belief is
       built only from signals that physically arrived.
     </p>
+    <p class="lede" style="font-size:0.92em;">
+      <strong>This page diagrams one configuration:</strong> <code>dv-dtn</code> with default
+      parameters — proactive beacon discovery and source-routed acks. That is what ships, but
+      it is one of several. Discovery can instead be reactive (AODV-style) or gossiped
+      link-state via <code>discovery=</code>; acks can ride tower beacons instead of travelling
+      as packets via <code>ack=digest</code>; and <code>epidemic</code> replaces routing
+      altogether with binary spray-and-wait. See
+      <code>docs/design/PROTOCOL_REFERENCE.md</code> for all of them and the measured
+      differences between them.
+    </p>
     <div class="status-row">
       <span class="pill done">C1 discovery — done</span>
       <span class="pill done">C2 bundles + acks + satellite — done</span>
       <span class="pill planned">C3 tamper-evident crypto — planned</span>
-      <span class="pill planned">C4 frontend — planned</span>
+      <span class="pill done">C4 frontend — done</span>
     </div>
   </header>
 
@@ -303,7 +313,7 @@ flowchart LR
     T(("Tower<br/>hop = 0")) -->|beacon| A["Balloon A<br/>hop = 1"]
     A -->|"adopts + rebroadcasts<br/>(only if improved)"| B["Balloon B<br/>hop = 2"]
     B -->|adopts + rebroadcasts| C["Balloon C<br/>hop = 3"]
-    C -.->|"age exceeds<br/>BELIEF_MAX_AGE_ROUNDS"| X["reverts to:<br/>no route believed"]
+    C -.->|"age exceeds<br/>belief_max_age_rounds"| X["reverts to:<br/>no route believed"]
 
     classDef tower fill:#dba85a,stroke:#b9822f,color:#1b1200,font-weight:600;
     classDef node fill:#232c3a,stroke:#3a4457,color:#e8ecf2;
@@ -331,12 +341,12 @@ flowchart TD
     O["Origin balloon<br/>creates bundle"] --> F{"Believed<br/>next hop?"}
     F -->|"none in range<br/>(no belief, or stale)"| H["Hold — not dropped"]
     H -.->|belief refreshes or expires| F
-    H -.->|"age &gt; BUNDLE_MAX_AGE_ROUNDS,<br/>wherever currently held"| SAT["Satellite fallback<br/>— delivers directly"]
+    H -.->|"age &gt; bundle_max_age_rounds,<br/>wherever currently held"| SAT["Satellite fallback<br/>— delivers directly"]
     F -->|"hears a tower directly"| D["Delivered to tower"]
     F -->|"a live neighbor"| M["Forward one hop<br/>per wake slot"]
     M --> L{"Next hop already<br/>in recorded path?"}
     L -->|yes| DL["Dropped — loop"]
-    L -->|no| TT{"Path length ≥<br/>BUNDLE_MAX_HOPS?"}
+    L -->|no| TT{"Path length ≥<br/>bundle_max_hops?"}
     TT -->|yes| DT["Dropped — TTL"]
     TT -->|no| F
 
@@ -401,20 +411,21 @@ sequenceDiagram
   </section>
 
   <section>
-    <h2>Constants that set the pacing</h2>
+    <h2>Parameters that set the pacing</h2>
     <p>Rounds, not ticks — the comms protocol runs on its own clock so its real-time pace is tunable independent of physics smoothness.</p>
+    <p>These are <code>DvDtnParams</code> fields (<code>sim-server/src/protocol/dv_dtn/params.rs</code>), not global constants: the values below are the <code>Default</code> impl, and most are overridable per run through the <code>--protocol</code> spec — see <code>./run-all.sh --help</code>.</p>
     <div class="panel" style="padding:0;">
       <table class="constants">
-        <thead><tr><th>Constant</th><th>Value</th><th>Governs</th></tr></thead>
+        <thead><tr><th>Parameter</th><th>Default</th><th>Governs</th></tr></thead>
         <tbody>
-          <tr><td>BEACON_INTERVAL_ROUNDS</td><td class="num">5</td><td>Duty-cycle gap between transmissions — also the bundle/ack forwarding rate</td></tr>
-          <tr><td>BELIEF_MAX_AGE_ROUNDS</td><td class="num">60</td><td>How long a route belief survives, keyed on the tower's emission round</td></tr>
-          <tr><td>BUNDLE_INTERVAL_ROUNDS</td><td class="num">200</td><td>How often a balloon originates new telemetry</td></tr>
-          <tr><td>BUNDLE_MAX_AGE_ROUNDS</td><td class="num">150</td><td>Satellite-fallback timeout — doubles as the ack round-trip budget</td></tr>
-          <tr><td>BUNDLE_MAX_HOPS</td><td class="num">20</td><td>Hop budget before a bundle is dropped as TTL-expired</td></tr>
-          <tr><td>RELAY_QUEUE_CAPACITY</td><td class="num">8</td><td>Bundles a relay may hold at once</td></tr>
-          <tr><td>ACK_QUEUE_CAPACITY</td><td class="num">4</td><td>Acks a relay may hold at once — much lower volume than bundles</td></tr>
-          <tr><td>TOWER_CONTACT_BUNDLES</td><td class="num">4</td><td>Bundles drained per tower contact — the last-hop's one real lever</td></tr>
+          <tr><td>beacon_interval_rounds</td><td class="num">5</td><td>Duty-cycle gap between transmissions — also the bundle/ack forwarding rate</td></tr>
+          <tr><td>belief_max_age_rounds</td><td class="num">60</td><td>How long a route belief survives, keyed on the tower's emission round</td></tr>
+          <tr><td>bundle_interval_rounds</td><td class="num">200</td><td>How often a balloon originates new telemetry</td></tr>
+          <tr><td>bundle_max_age_rounds</td><td class="num">150</td><td>Satellite-fallback timeout — doubles as the ack round-trip budget</td></tr>
+          <tr><td>bundle_max_hops</td><td class="num">20</td><td>Hop budget before a bundle is dropped as TTL-expired</td></tr>
+          <tr><td>relay_queue_capacity</td><td class="num">8</td><td>Bundles a relay may hold at once</td></tr>
+          <tr><td>ack_queue_capacity</td><td class="num">4</td><td>Acks a relay may hold at once — much lower volume than bundles</td></tr>
+          <tr><td>batch.tower_contact</td><td class="num">4</td><td>Bundles drained per tower contact — the last-hop's one real lever</td></tr>
         </tbody>
       </table>
     </div>
@@ -441,7 +452,7 @@ sequenceDiagram
   </section>
 
   <footer>
-    Generated from the current state of <code>sim-server/src/{beacon,bundle}.rs</code> —
+    Generated from the current state of <code>sim-server/src/protocol/dv_dtn/{beacon,bundle}.rs</code> —
     see <code>docs/design/MESH_COMMS_DESIGN.md</code> for the full rationale behind every rule shown
     here, and <code>docs/investigations/bundle-delivery-report.html</code> for the earlier last-hop
     saturation investigation this protocol's tuning is built on.

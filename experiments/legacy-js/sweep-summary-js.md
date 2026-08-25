@@ -1,8 +1,8 @@
 # Radio vs. satellite connectivity sweep — summary
 
-**Chart:** https://claude.ai/code/artifact/741c2059-ee0d-4c8c-bc91-7425783a0ab7
+**Chart:** [`results/sweep-chart.html`](results/sweep-chart.html)
 **Data:** [`connectivity-sweep-results.csv`](connectivity-sweep-results.csv) (96 rows)
-**Generator:** [`connectivity-sweep.mjs`](connectivity-sweep.mjs) (`experiments/run-shards.sh` to reproduce)
+**Generator:** [`connectivity-sweep.mjs`](connectivity-sweep.mjs) (`experiments/legacy-js/run-shards.sh` to reproduce)
 
 ## What was measured
 

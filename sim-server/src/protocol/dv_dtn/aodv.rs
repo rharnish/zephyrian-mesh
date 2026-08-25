@@ -352,6 +352,12 @@ pub fn step(
                 // `dropped_loop` (131 -> 610) while mean believed depth *grew*
                 // 5.67 -> 7.26 hops. Freshness-first is the right rule for an
                 // answer and the wrong one for a rumour.
+                //
+                // Those are pre-gate numbers from a single run, and are *not*
+                // the figures the docs quote: with the gate in place the
+                // committed sweep gives 131 -> 679 (discovery-sweep-results.csv,
+                // 20 seeds). Same experiment, different code — don't reconcile
+                // them.
                 let better = match nodes[nb_idx].belief {
                     None => true,
                     Some(cur) => {

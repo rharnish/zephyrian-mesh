@@ -1,13 +1,13 @@
 # sim-server structure review — findings and fixes
 
 Context: `sim-server` is a line-for-line Rust port of what used to be
-`cesium-app`'s client-side JS simulation (see [README.md](README.md) for the
+the browser-side JS simulation this repo started as (see [README.md](README.md) for the
 module-by-module mapping). This doc summarizes a structural review of the
 port and tracks what's been fixed vs. still open.
 
 ## Already fixed
 
-### Dead/drifted constants in `cesium-app/src/config.js`
+### Dead/drifted constants in `src/config.js`
 
 `config.rs` and `config.js` were meant to be hand-mirrored ("keep in sync
 manually"), but most of the physics/link-detection constants in `config.js`
@@ -31,8 +31,8 @@ confuse someone later.
 values do need to keep matching Rust's.
 
 **Fix applied:**
-- Removed the 9 dead exports from `cesium-app/src/config.js`.
-- Added `cesium-app/src/config.sync.test.js` (vitest): parses
+- Removed the 9 dead exports from `src/config.js`.
+- Added `src/config.sync.test.js` (vitest): parses
   `sim-server/src/config.rs` as source of truth and asserts the three
   still-shared constants match. Fails loudly, naming the file to check, if
   either side changes without the other or a constant gets renamed.
@@ -68,13 +68,15 @@ into — reads as a straight port-plus-additions rather than something
 reshaped for Rust.
 
 **Fix applied:**
-- Moved `BundleStats`, `bump`, and `hist_mean` into a new
-  `sim-server/src/bundle_stats.rs`, re-exported from `bundle.rs`
-  (`crate::bundle::BundleStats`/`hist_mean` still resolve, so `sim.rs` and
-  the `bin/protocol_sweep.rs`/`bin/bundle_delivery.rs` callers needed no
-  changes).
-- `bundle.rs` is now ~1050 lines of queueing/ack/satellite-fallback logic
-  only; `bundle_stats.rs` is ~150 lines of counters/histograms.
+- Moved `BundleStats`, `bump`, and `hist_mean` into a new `bundle_stats.rs`,
+  re-exported from `bundle.rs` (`BundleStats`/`hist_mean` still resolve, so
+  `sim.rs` and the `bin/protocol_sweep.rs`/`bin/bundle_delivery.rs` callers
+  needed no changes).
+- At the time of the split `bundle.rs` was ~1050 lines of
+  queueing/ack/satellite-fallback logic only and `bundle_stats.rs` ~150 lines
+  of counters/histograms. Both have since moved under
+  `sim-server/src/protocol/dv_dtn/` and grown with the protocol work — 1500 and
+  247 lines today — but the separation still holds.
 
 ### `main.rs` request DTOs and `sim::Command` correspondence
 
@@ -112,7 +114,7 @@ them. Flagging for whoever picks this up next.
 ## Where to look
 
 - [README.md](README.md) — the JS→Rust module mapping and the three-process
-  architecture (`wind_backend.py` / `sim-server` / `cesium-app`).
+  architecture (`wind_backend.py` / `sim-server` / the browser frontend).
 - [src/config.rs](src/config.rs) — constants, now with the sync note.
 - [../src/config.js](../src/config.js) and
   [../src/config.sync.test.js](../src/config.sync.test.js) — the JS side and

@@ -9,26 +9,35 @@ we can pick it back up; the concrete near-term task is at the bottom.
 The Python backend serves one static ERA5 snapshot — a single hour from June 1978,
 downloaded from the [Copernicus CDS](https://cds.climate.copernicus.eu/) — over
 `GET /api/wind-levels` (`weather-data-server/wind_backend.py`). That payload is the whole
-global grid, all pressure levels, JSON-encoded nested float arrays: ~356MB, ~55s to serve
-(see `docs/investigations/WIND_TRANSFER_PERF.md`).
+global grid, all pressure levels, JSON-encoded nested float arrays: **146.2MB, ~0.04s to
+serve** after the striding and compression work in
+`docs/investigations/WIND_TRANSFER_PERF.md`. (The ~356MB / ~55s figures this section was
+originally written against are that document's *before*, not its current state.)
 
-Two independent clients fetch that same payload:
+> **Status: the duplicate-fetch problem described below has since been fixed.** It is kept
+> in the present tense here because the rest of the plan builds on it; see
+> "Near-term task — DONE" below for what actually shipped. Today the browser's wind fetch
+> goes to `sim-server` (`WIND_API_URL` in `src/config.js`), not to Python, and sim-server
+> loads from an on-disk cache rather than refetching per run.
 
-- **sim-server** (`sim-server/src/main.rs:57`, `load_wind_field(wind_from_args())`) — once at
+At the time of writing, two independent clients fetched that same payload:
+
+- **sim-server** (`load_wind_field(wind_from_args())` in `sim-server/src/main.rs`) — once at
   startup, into a Rust `WindField`. **This is the copy that actually advects balloons.** The
-  startup path now branches on a `--wind`/`ZM_WIND` flag (`wind_from_args()`, line 141) into a
-  zero field, a cached snapshot via the `wind_cache` module, or (the `Auto` default) a live
-  fetch from Python via `fetch_wind_field()` (line 263) with the result cached for next time.
-- **browser** (`src/main.js:111`) — the *same* payload again, used **only** for the optional
-  wind-vector-arrow visualization. Balloon physics is server-owned; the client's copy is
-  purely decorative (see comment at `src/main.js:106-114`).
+  startup path branches on a `--wind`/`ZM_WIND` flag (`wind_from_args()`) into a zero field,
+  a cached snapshot via the `wind_cache` module, or (the `Auto` default) a live fetch from
+  Python via `fetch_wind_field()` with the result cached for next time.
+- **browser** (the `WindField.fetchFromBackend` call in `src/main.js`) — the *same* payload
+  again, used **only** for the optional wind-vector-arrow visualization. Balloon physics is
+  server-owned; the client's copy is purely decorative (see the comment above that call).
 
-So the 356MB payload is transferred and parsed **twice**, by two clients, for two reasons.
-The browser already talks to sim-server for everything else (towers, balloon count, horizon
-coeff, the WebSocket snapshot stream) — wind is the one thing it still fetches straight from
-Python. That's **historical, not principled**: the frontend owned wind first
-(`sim-server/src/wind_field.rs:1` — *"Ported from cesium-app/src/windField.js"*), sim-server
-copied the logic into Rust later, and the browser's fetch was never re-pointed.
+So the payload was transferred and parsed **twice**, by two clients, for two reasons.
+The browser already talked to sim-server for everything else (towers, balloon count, horizon
+coeff, the WebSocket snapshot stream) — wind was the one thing it still fetched straight from
+Python. That was **historical, not principled**: the frontend owned wind first
+(the header comment on `sim-server/src/wind_field.rs` records the port from
+`src/windField.js`), sim-server copied the logic into Rust later, and the browser's fetch was
+never re-pointed — until it was, below.
 
 ## Where we want it to go
 

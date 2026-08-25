@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/linkDetection.js. `compute_grid_edges` is the
+// Ported from experiments/legacy-js/src/linkDetection.js. `compute_grid_edges` is the
 // production path (spatial grid + precomputed trig); `brute_force_edge_keys`
 // is the O(n^2) ground-truth oracle used only in tests, mirroring
 // linkDetection.js's verifyEdgesOnce pattern.

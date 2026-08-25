@@ -6,8 +6,15 @@
 > named where it bites. This page assumes you already know what a wake slot, a
 > belief and a tower-adjacent balloon are.
 
-Four protocols are implemented, selectable at startup with `--protocol` (see
-`./run-all.sh --help` for the spec syntax). They share one hard constraint: a
+Four delivery strategies are implemented, selected at startup with `--protocol`
+(see `./run-all.sh --help` for the spec syntax). Two of them are *protocols* in
+the sense `--protocol` parses — `dv-dtn` and `epidemic` are the only two names
+it accepts (`ProtocolSpec` in
+[`protocol/mod.rs`](../../sim-server/src/protocol/mod.rs)). The other two are
+discovery families reached through `dv-dtn`'s `discovery=` option, so the spec
+is `dv-dtn:discovery=reactive`, not `--protocol reactive`, which errors.
+
+They share one hard constraint: a
 balloon's radio is duty-cycled, so **one wake slot is one transmission**.
 Everything that separates them is a decision about what to spend that slot on —
 and about whether anything is left over to tell a balloon its data got home.
@@ -35,9 +42,11 @@ from [`wind-sweep-results.csv`](../../experiments/wind-sweep-results.csv):
 † Re-measured after a determinism fix. Link-state's breadth-first search picks
 between equal-cost routes by neighbour order, and neighbour order was
 randomised per process by a `HashMap` drain in link detection — so every
-link-state figure before this carried run-to-run spread that was not seed
-variance. The other protocols compare epoch and hop count and were unaffected;
-their numbers are unchanged, and the golden fingerprint confirms it. See
+link-state figure taken before that fix carried run-to-run spread that was not
+seed variance. This row was regenerated afterwards; the other protocols compare
+epoch and hop count and were unaffected, verified bit-identical across the fix
+on all 20 seeds. `wind-sweep-results.csv` and `discovery-sweep-results.csv` now
+agree exactly on this configuration. See
 [`aggregation-summary.md`](../../experiments/aggregation-summary.md) Coda 2.
 
 The two losing families have since been tuned with the three standard mechanisms
@@ -107,7 +116,7 @@ delivery rather than merely tidying bookkeeping.
 |---|---|---|
 | `ack=digest` | source-routed | Announce deliveries inside beacons already going out instead of sending receipt packets. **+11.1 ± 1.8 points**, and ack loss to zero by construction. |
 | `mesh=N` | 1 | Bundles per balloon-to-balloon hop. The larger lever: **+24.8 ± 3.8 points**. Substitutes with the digest rather than compounding — both buy back the same wake slots. |
-| `tower=N` | 4 | Bundles per tower contact. The last-hop cap: only ~23 of 1200 balloons hear a tower at once. Best config reaches **62%** at `tower=1` vs **94%** at `tower=4`. |
+| `tower=N` | 4 | Bundles per tower contact. The last-hop cap: only ~22 of 1200 balloons hear a tower at once. Best config reaches **62%** at `tower=1` vs **94%** at `tower=4`. |
 | `metric=` | `freshest` | `nearest` prefers fewer hops; helps below percolation and **hurts above it**, which is where the mesh normally sits. |
 | `queue=` | `fifo` | `lifo` serves the newest first, so what moves still has TTL budget — at the cost of starving the bottom of the queue. |
 
@@ -233,7 +242,7 @@ distance-vector variants can make, where "no belief" is indistinguishable from
 
 | parameter | default | effect |
 |---|---|---|
-| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 36.6%, 4 → 47.7%, 16 → 61.7%** at 20 seeds, continuing to `64 → 71.6%` (small-sample), at which point it has caught proactive by spending 64 records per slot against a hop count's one number. |
+| `lsa=N` | 4 | Observations per transmission — the same information-per-slot lever as `mesh`, applied to discovery. The dominant parameter here: **2 → 36.6%, 4 → 47.7%, 16 → 61.7%, 64 → 64.6%**, all at 20 seeds. It **does not** catch proactive (68.9%): the ladder flattens hard between 16 and 64, buying 2.9 points for 4× the records per slot, and even at 64 records against a hop count's one number it stays 4.3 points short. Where the spend does show up is `stall_no_belief` (23,694 → 9,764) — balloons know more, and still cannot convert it. |
 | `relay=` | `flood` | `mpr` is OLSR's multipoint relays: each balloon names the smallest neighbour subset still covering everything two hops out, and only those rebroadcast for it. Cuts redundant gossip by a third at every `lsa` (0.52 → 0.36 at the default) with only **48%** of neighbours relaying, and coverage provably preserved. Worth **+0.6 ± 0.2 points** — real, but a tenth of what the redundancy figure suggests. See below. |
 
 > **Why MPR barely pays, and what that says about the model.** Measuring gossip
@@ -289,7 +298,7 @@ believing it failed.**
 
 | parameter | default | effect |
 |---|---|---|
-| `copies=N` | 4 | Starting budget, halved per handoff. **4 → 9.4%, 16 → 20.4%** — but at 3× the handoffs and 340× the blocking, since copies congest the very queues they need. |
+| `copies=N` | 8 | Starting budget, halved per handoff. Measured at explicit overrides: **`copies=4` → 9.4%, `copies=16` → 20.4%** — the latter at 3× the handoffs and 340× the blocking, since copies congest the very queues they need. Neither figure is the default's; the shipped `copies=8` sits between them and has not been swept on its own. |
 
 ---
 

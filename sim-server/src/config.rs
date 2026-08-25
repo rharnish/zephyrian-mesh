@@ -1,8 +1,8 @@
-// Mirrors the constants in cesium-app/src/config.js that the sim loop needs.
+// Mirrors the constants in src/config.js that the sim loop needs.
 // Most of this file has no JS counterpart anymore (physics moved server-side —
 // see docs/history/RUST_SIM_PLAN.md). BALLOON_MIN_ALT, BALLOON_MAX_ALT, and
 // EARTH_RADIUS_M are the exception: config.js still reads matching values for
-// rendering, kept in sync by hand and checked by cesium-app/src/config.sync.test.js.
+// rendering, kept in sync by hand and checked by src/config.sync.test.js.
 
 pub const BALLOON_MIN_ALT: f64 = 1000.0; // meters
 pub const BALLOON_MAX_ALT: f64 = 25000.0; // meters
@@ -94,7 +94,7 @@ pub const BALLOON_POOL_SIZE: u32 = 2000;
 // non-link ticks (balloon positions still need to look smooth every tick).
 pub const TICK_INTERVAL_MS: u64 = 1000 / 20; // 20 ticks/sec wall-clock
 
-// Mirrors INITIAL_TOWERS in cesium-app/src/config.js — (lon, lat, heightM).
+// Mirrors INITIAL_TOWERS in src/config.js — (lon, lat, heightM).
 // Seeded into the World at startup instead of created client-side, since the
 // server now owns tower state.
 pub const INITIAL_TOWERS: &[(f64, f64, f64)] = &[
