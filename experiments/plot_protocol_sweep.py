@@ -4,12 +4,18 @@ Renders a static PNG chart from a protocol_sweep.rs results CSV: omniscient
 ground truth (groundedPct, from union-find) vs. what balloons *believe*
 (believedGroundedPct) vs. what the real decentralized protocol actually
 delivers — completion rate, raw delivered/originated, and delivered-but-
-unacknowledged/originated — all plotted against **mean node degree** rather
-than balloon count or horizon coefficient, because docs/design/MESH_COMMS_DESIGN.md §1.1
-found degree is the real control variable: sweeps over balloon count and
-horizon coefficient collapse onto the same curve when read by degree. That
-collapse is what makes one clean chart possible instead of a grid of
-per-coefficient panels like plot_sweep.py needs for the toy-model CSV.
+unacknowledged/originated — against mean node degree, one panel per balloon
+count, with horizon coefficient moving each panel along its x axis.
+
+This used to be a single panel, on the strength of docs/design/MESH_COMMS_DESIGN.md
+§1.1's finding that sweeps over balloon count and horizon coefficient collapse
+onto one curve when read by degree. For the real protocol they don't. With 10
+seeds per cell the spread is a few points, yet cells of near-equal degree still
+differ by 15–20 points of completion: at degree ~3.5, 400 balloons at horizon
+5.0 complete 40% while 2000 balloons at 2.5 complete 22%. Longer links reach
+a tower in fewer hops, which degree alone doesn't capture. A single line through
+all cells in degree order drew that as a sawtooth, so the balloon counts are
+kept apart.
 
 Delivered/originated and completion rate (delivered/resolved) are both shown
 deliberately, not just one: the gap between them *is* the censoring bias from
@@ -17,9 +23,18 @@ bundles still legitimately in flight at the cutoff (see BundleStats::
 completion_rate's own doc comment) — the same distinction bundle_delivery.rs's
 "deliv/orig" vs "completion" columns make.
 
-Points are the sweep's own (horizonCoeff, nBalloons) combos, connected in
-degree order — not a fitted curve — so the actual measured shape (including
-noise/censoring near the percolation transition) stays visible.
+"Resolved" is not "acked". A bundle is delivered the moment a tower takes it,
+before any ack exists, and resolved means it left circulation by any route —
+delivered, satellite, or dropped. The ack's fate is split out separately as
+acked and ack-lost, each a share of originated; what's left of delivered is
+acks still in flight at the cutoff.
+
+Points are the sweep's own (horizonCoeff, nBalloons) cells, connected in
+degree order within a balloon count — not a fitted curve. The CSV holds one row per seed; each point
+is the mean over a cell's seeds and the band is ±1 standard deviation, so the
+run-to-run spread near the percolation transition is drawn as spread rather
+than as wiggles in a single line. Degree, grounded % and believed % are
+already run-averaged by protocol_sweep.rs (see its header).
 
 Usage:
     python3 experiments/plot_protocol_sweep.py experiments/protocol-sweep-results.csv \
@@ -28,6 +43,8 @@ Usage:
 
 import argparse
 import csv
+import statistics
+from collections import defaultdict
 
 import matplotlib
 
@@ -42,61 +59,99 @@ COLOR_BELIEF = "#e0a355"  # "unaware" amber — what balloons currently believe
 COLOR_ACHIEVED = "#2a78d6"  # blue — completion rate (delivered/resolved)
 COLOR_DELIVERED = "#e87ba4"  # pink — raw delivered/originated
 COLOR_UNACKED = "#e05561"  # "stale" red — delivered but the ack never came back
+COLOR_ACKED = "#7b5fc4"  # purple — delivered and the ack made it home
 
 
-def load_rows(csv_path):
-    rows = []
+# Everything plotted, per seed row. Percentages throughout, so the y axis is one scale.
+METRICS = {
+    "degree": lambda r: r["meanDegree"],
+    "truth": lambda r: r["groundedPct"],
+    "belief": lambda r: r["believedGroundedPct"],
+    "completion": lambda r: 100.0 * r["completionRate"],
+    "delivered": lambda r: 100.0 * r["delivered"] / r["originated"] if r["originated"] else 0.0,
+    "acked": lambda r: 100.0 * r["ackedCount"] / r["originated"] if r["originated"] else 0.0,
+    "unacked": lambda r: 100.0 * r["ackLostCount"] / r["originated"] if r["originated"] else 0.0,
+}
+
+
+def load_cells(csv_path):
+    """One entry per (horizonCoeff, nBalloons) cell: mean and sd of each metric over its seeds."""
+    by_cell = defaultdict(list)  # (horizonCoeff, nBalloons) -> seed rows
     with open(csv_path, newline="") as f:
         for r in csv.DictReader(f):
-            for key in ("meanDegree", "groundedPct", "believedGroundedPct", "completionRate",
-                        "originated", "delivered", "ackLostCount"):
-                r[key] = float(r[key])
-            r["deliveredPctOfOriginated"] = (
-                100.0 * r["delivered"] / r["originated"] if r["originated"] else 0.0
-            )
-            r["unackedPctOfOriginated"] = (
-                100.0 * r["ackLostCount"] / r["originated"] if r["originated"] else 0.0
-            )
-            rows.append(r)
-    rows.sort(key=lambda r: r["meanDegree"])
-    return rows
+            row = {k: float(v) for k, v in r.items()}
+            by_cell[(row["horizonCoeff"], row["nBalloons"])].append(row)
+
+    cells = []
+    for rows in by_cell.values():
+        cell = {"seeds": len(rows), "horizon": rows[0]["horizonCoeff"], "n": int(rows[0]["nBalloons"])}
+        for name, fn in METRICS.items():
+            values = [fn(r) for r in rows]
+            cell[name] = statistics.fmean(values)
+            cell[name + "_sd"] = statistics.stdev(values) if len(values) > 1 else 0.0
+        cells.append(cell)
+    cells.sort(key=lambda c: c["degree"])
+    return cells
 
 
-def plot(rows, out_path, title, subtitle=None):
-    fig, ax = plt.subplots(figsize=(8.5, 4.8), dpi=150)
+PERCOLATION_DEGREE = 4.5
 
-    xs = [r["meanDegree"] for r in rows]
+
+def plot(cells, out_path, title, subtitle=None):
+    ns = sorted({c["n"] for c in cells})
+    fig, axes = plt.subplots(1, len(ns), figsize=(4.2 * len(ns), 5.2), dpi=150, sharey=True, squeeze=False)
+    axes = axes[0]
     series = [
-        ("Ground truth: actually reachable (union-find)", COLOR_TRUTH, [r["groundedPct"] for r in rows]),
-        ("Belief: balloons that think they have a route", COLOR_BELIEF, [r["believedGroundedPct"] for r in rows]),
-        ("Achieved: completion rate (delivered/resolved)", COLOR_ACHIEVED,
-         [100.0 * r["completionRate"] for r in rows]),
-        ("Bundles delivered, % of originated", COLOR_DELIVERED,
-         [r["deliveredPctOfOriginated"] for r in rows]),
-        ("Bundles delivered without ack, % of originated", COLOR_UNACKED,
-         [r["unackedPctOfOriginated"] for r in rows]),
+        ("Ground truth: actually reachable (union-find)", COLOR_TRUTH, "truth"),
+        ("Belief: balloons that think they have a route", COLOR_BELIEF, "belief"),
+        # "Finished" = resolved: reached a tower, went by satellite, or was
+        # dropped. Reaching a tower counts at hand-off, ack or no ack.
+        ("Completion rate: reached a tower, % of finished bundles", COLOR_ACHIEVED, "completion"),
+        ("Reached a tower, % of originated", COLOR_DELIVERED, "delivered"),
+        ("Reached a tower and acked, % of originated", COLOR_ACKED, "acked"),
+        ("Reached a tower, ack lost, % of originated", COLOR_UNACKED, "unacked"),
     ]
-    for label, color, ys in series:
-        ax.plot(xs, ys, marker="o", color=color, linewidth=2, markersize=6, label=label)
+    for ax, n in zip(axes, ns):
+        panel = [c for c in cells if c["n"] == n]
+        xs = [c["degree"] for c in panel]
+        for label, color, key in series:
+            ys = [c[key] for c in panel]
+            sds = [c[key + "_sd"] for c in panel]
+            ax.fill_between(xs, [y - sd for y, sd in zip(ys, sds)], [y + sd for y, sd in zip(ys, sds)],
+                            color=color, alpha=0.15, linewidth=0)
+            ax.plot(xs, ys, marker="o", color=color, linewidth=2, markersize=5, label=label)
 
-    # Percolation threshold tick, same convention as the Controls panel's mesh-health
-    # readout in the running app (mean_degree ~4.5).
-    ax.axvline(4.5, color="#999999", linewidth=1, linestyle="--", zorder=0)
-    ax.text(4.5, 102, "percolation\nthreshold", fontsize=8, color="#777777", ha="center", va="bottom")
+        # Which horizon coefficient each point is, on a top axis.
+        top = ax.secondary_xaxis("top")
+        top.set_xticks(xs, labels=[f"{c['horizon']:g}" for c in panel])
+        top.tick_params(labelsize=7, colors="#888888", length=2)
+        top.set_xlabel("horizon coefficient", fontsize=8, color="#888888")
 
-    ax.set_xlabel("Mean node degree")
-    ax.set_ylabel("%")
-    ax.set_ylim(-3, 103)
-    ax.set_yticks(range(0, 101, 25))
-    ax.grid(axis="y", alpha=0.25)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.legend(frameon=False, loc="lower right", fontsize=9)
-    ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=28 if subtitle else 14)
+        pad = 0.06 * (max(xs) - min(xs))
+        ax.set_xlim(min(xs) - pad, max(xs) + pad)
+        # Percolation threshold tick, same convention as the Controls panel's
+        # mesh-health readout in the running app — only where it's in range.
+        if min(xs) - pad < PERCOLATION_DEGREE < max(xs) + pad:
+            ax.axvline(PERCOLATION_DEGREE, color="#999999", linewidth=1, linestyle="--", zorder=0)
+            ax.text(PERCOLATION_DEGREE, 2, " percolation threshold", fontsize=7, color="#777777",
+                    rotation=90, ha="right", va="bottom")
+
+        ax.set_title(f"{n} balloons", fontsize=10, fontweight="bold", loc="left", pad=6)
+        ax.set_xlabel("Mean node degree", fontsize=9)
+        ax.set_ylim(-3, 103)
+        ax.set_yticks(range(0, 101, 25))
+        ax.grid(axis="y", alpha=0.25)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    axes[0].set_ylabel("%")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, frameon=False, loc="lower center", ncol=3, fontsize=9)
+    fig.suptitle(title, fontsize=12, fontweight="bold", x=0.01, ha="left", y=0.985)
     if subtitle:
-        ax.text(0, 1.05, subtitle, transform=ax.transAxes, fontsize=9, color="#666666")
+        fig.text(0.01, 0.935, subtitle, fontsize=9, color="#666666", ha="left")
 
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.1, 1, 0.93))
     fig.savefig(out_path)
     print(f"Wrote {out_path}")
 
@@ -106,11 +161,15 @@ def main():
     ap.add_argument("csv_path")
     ap.add_argument("--out", required=True, help="output PNG path")
     ap.add_argument("--title", default="Truth vs. belief vs. real delivery, by mesh density")
-    ap.add_argument("--subtitle", default="C1+C2 decentralized protocol, real wind — protocol_sweep.rs")
+    ap.add_argument("--subtitle", help="default names the protocol and the seed count read from the CSV")
     args = ap.parse_args()
 
-    rows = load_rows(args.csv_path)
-    plot(rows, args.out, args.title, args.subtitle)
+    cells = load_cells(args.csv_path)
+    seeds = min(c["seeds"] for c in cells)
+    subtitle = args.subtitle or (
+        f"dv-dtn, real wind, 24 sim-h runs — mean of {seeds} seeds per point, band ±1 sd — protocol_sweep.rs"
+    )
+    plot(cells, args.out, args.title, subtitle)
 
 
 if __name__ == "__main__":

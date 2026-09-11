@@ -114,6 +114,12 @@ over the real `link_detection` output, swept across balloon count × horizon coe
 - **Mean node degree is the real control variable.** The balloon-count and horizon-coefficient
   sliders are two different ways of moving the same quantity. Read by degree, the sweep collapses
   onto a single curve regardless of which knob produced it.
+  *That holds for the graph, not for delivery.* `protocol_sweep.rs` (10 seeds per cell, real
+  wind) finds cells of near-equal degree 15–20 points apart in completion rate: at degree ~3.5,
+  400 balloons at horizon 5.0 complete 40% where 2000 at horizon 2.5 complete 22%, because longer
+  links reach a tower in fewer hops. Even its run-averaged grounded % strays from one curve near
+  the threshold (41% at degree 3.2 against 28% at 3.3). Read protocol results per balloon count —
+  see [`truth-vs-belief-vs-delivery.png`](../../experiments/protocol-results/truth-vs-belief-vs-delivery.png).
 - **The mesh percolates at degree ≈ 4.5** — the 2D continuum-percolation threshold, reproduced.
   Below it the network shatters into islands (at degree 2.1, ~89% of balloons can *never* reach a
   tower); above ~5 nearly everything is grounded. The transition is sharp.

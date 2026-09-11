@@ -5,7 +5,7 @@
 >
 > | Experiment | Write-up | Generator |
 > |---|---|---|
-> | Real C1+C2 protocol vs. omniscient connectivity | [`protocol-results/`](protocol-results/) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
+> | Real dv-dtn protocol vs. omniscient connectivity (10 seeds per cell) | [`protocol-results/`](protocol-results/) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
 > | Batching and ack-digest aggregation | [`aggregation-summary.md`](aggregation-summary.md) | [`aggregation_sweep.rs`](../sim-server/src/bin/aggregation_sweep.rs) |
 > | Every protocol over identical fields (incl. the wind coda) | [`aggregation-summary.md`](aggregation-summary.md) | [`protocol_compare.rs`](../sim-server/src/bin/protocol_compare.rs) |
 > | Protocols crossed with real weather fields | [`aggregation-summary.md`](aggregation-summary.md) | [`wind_sweep.rs`](../sim-server/src/bin/wind_sweep.rs) |

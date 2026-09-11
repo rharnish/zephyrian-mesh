@@ -14,6 +14,21 @@
 // config.rs constants (BUNDLE_MAX_AGE_ROUNDS, BEACON_INTERVAL_ROUNDS, ...),
 // not per-run parameters, so they're dropped rather than faked.
 //
+// Each (horizon coefficient, balloon count) cell runs `seeds` times, each with
+// its own balloon field, and one CSV row per run. A single run is not enough:
+// near the percolation threshold two seeds of the same cell differed by more
+// than 10 points of completion rate, which a one-seed chart draws as structure.
+//
+// Degree, grounded % and believed % are averaged over every round of the run,
+// not read off the final one. The delivery counters are cumulative over the
+// whole run, so a final-instant x-axis was pairing 24 hours of delivery with
+// one moment of topology — and near the threshold that one moment swung a
+// cell's ground truth between 15% and 36% from run to run.
+//
+// Wind: the config's `wind` names a cached field (see wind_cache.rs), so a
+// sweep is reproducible and needs no Python backend. Without it, `full` falls
+// back to fetching whatever wind_backend.py is serving, as `bench`/`quick` do.
+//
 // Usage (run from the sim-server/ directory, or repo root):
 //   cargo run --release --bin protocol_sweep -- bench
 //   cargo run --release --bin protocol_sweep -- quick
@@ -25,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use sim_server::protocol::dv_dtn::bundle::BundleStats;
 use sim_server::config::*;
 use sim_server::sim::World;
+use sim_server::wind_cache;
 use sim_server::wind_field::WindField;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -44,14 +60,23 @@ fn default_results_dir() -> String {
 fn default_out_csv() -> String {
     DEFAULT_OUT_CSV.to_string()
 }
+fn default_seeds() -> u64 {
+    1
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SweepConfig {
     horizon_coeffs: Vec<f64>,
     n_balloons: Vec<u32>,
+    #[serde(default = "default_seeds")]
+    seeds: u64,
     #[serde(default = "default_duration_hours")]
     duration_hours: f64,
+    /// A wind cache label, e.g. "1978-06-09T00:00:00". Absent means fetch from
+    /// wind_backend.py.
+    #[serde(default)]
+    wind: Option<String>,
     #[serde(default = "default_results_dir")]
     results_dir: String,
     #[serde(default = "default_out_csv")]
@@ -67,6 +92,7 @@ fn load_config(path: &str) -> SweepConfig {
 struct Combo {
     horizon_coeff: f64,
     n_balloons: u32,
+    seed: u64,
 }
 
 // Deterministic per-combo seed, same rationale as connectivity_sweep.rs: each
@@ -79,6 +105,7 @@ fn seed_for_combo(combo: &Combo) -> u64 {
     let mut h = FNV_OFFSET;
     h = mix(h, combo.horizon_coeff.to_bits());
     h = mix(h, combo.n_balloons as u64);
+    h = mix(h, combo.seed);
     h
 }
 
@@ -87,12 +114,15 @@ fn seed_for_combo(combo: &Combo) -> u64 {
 struct ResultRow {
     horizon_coeff: f64,
     n_balloons: u32,
+    seed: u64,
 
     // --- Omniscient truth (union-find), never seen by any balloon ----------
+    // All three are means over every round of the run (see the header).
     mean_degree: f64,
     grounded_pct: f64,
-    /// What fraction currently *believe* they have a route — a third point
-    /// between ground truth and what actually got delivered.
+    /// What fraction *believe* they have a route — a third point between
+    /// ground truth and what actually got delivered. Counts stale beliefs too,
+    /// so matching grounded_pct in aggregate doesn't mean every belief is right.
     believed_grounded_pct: f64,
 
     // --- What the real decentralized protocol actually achieved ------------
@@ -130,19 +160,24 @@ fn run_combo(combo: &Combo, wind: &Arc<WindField>, rounds: u64) -> ResultRow {
     world.set_visible_count(combo.n_balloons);
     world.horizon_refraction_coeff = combo.horizon_coeff;
 
-    let mut last = advance_round(&mut world);
-    for _ in 1..rounds {
-        last = advance_round(&mut world);
+    let (mut degree, mut grounded, mut believed) = (0.0, 0.0, 0.0);
+    for _ in 0..rounds {
+        let s = advance_round(&mut world);
+        degree += s.mean_degree;
+        grounded += s.grounded_pct;
+        believed += s.believed_grounded_pct;
     }
+    let per_round = rounds.max(1) as f64;
     let st: BundleStats = world.bundle_stats();
     let params = world.dv_dtn().params;
 
     ResultRow {
         horizon_coeff: combo.horizon_coeff,
         n_balloons: combo.n_balloons,
-        mean_degree: last.mean_degree,
-        grounded_pct: last.grounded_pct,
-        believed_grounded_pct: last.believed_grounded_pct,
+        seed: combo.seed,
+        mean_degree: degree / per_round,
+        grounded_pct: grounded / per_round,
+        believed_grounded_pct: believed / per_round,
         originated: st.originated,
         delivered: st.delivered,
         satellite: st.satellite,
@@ -160,7 +195,9 @@ fn combos(config: &SweepConfig) -> Vec<Combo> {
     let mut out = Vec::new();
     for &horizon_coeff in &config.horizon_coeffs {
         for &n_balloons in &config.n_balloons {
-            out.push(Combo { horizon_coeff, n_balloons });
+            for seed in 0..config.seeds {
+                out.push(Combo { horizon_coeff, n_balloons, seed });
+            }
         }
     }
     out
@@ -168,7 +205,7 @@ fn combos(config: &SweepConfig) -> Vec<Combo> {
 
 fn combo_file_name(combo: &Combo) -> String {
     let h = format!("{:.2}", combo.horizon_coeff).replace('.', "p");
-    format!("h{h}_n{}.json", combo.n_balloons)
+    format!("h{h}_n{}_s{}.json", combo.n_balloons, combo.seed)
 }
 
 fn write_combo_json(results_dir: &str, combo: &Combo, row: &ResultRow) -> std::io::Result<String> {
@@ -196,18 +233,23 @@ fn combine_json_to_csv(results_dir: &str, out_path: &str) -> std::io::Result<usi
         }
     }
     rows.sort_by(|a, b| {
-        a.horizon_coeff.partial_cmp(&b.horizon_coeff).unwrap().then(a.n_balloons.cmp(&b.n_balloons))
+        a.horizon_coeff
+            .partial_cmp(&b.horizon_coeff)
+            .unwrap()
+            .then(a.n_balloons.cmp(&b.n_balloons))
+            .then(a.seed.cmp(&b.seed))
     });
     let mut out = String::from(
-        "horizonCoeff,nBalloons,meanDegree,groundedPct,believedGroundedPct,originated,delivered,\
+        "horizonCoeff,nBalloons,seed,meanDegree,groundedPct,believedGroundedPct,originated,delivered,\
          satellite,ackedCount,ackLostCount,droppedLoop,droppedTtl,completionRate,\
          meanTowerAdjacent,deliveryCeilingPerRound\n",
     );
     for r in &rows {
         out.push_str(&format!(
-            "{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{:.4},{:.3},{:.3}\n",
+            "{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{:.4},{:.3},{:.3}\n",
             r.horizon_coeff,
             r.n_balloons,
+            r.seed,
             r.mean_degree,
             r.grounded_pct,
             r.believed_grounded_pct,
@@ -279,11 +321,12 @@ fn rounds_for(duration_hours: f64) -> u64 {
 
 fn print_row(row: &ResultRow) {
     println!(
-        "coeff={:<5.2} n={:<5} degree={:<5.2} grounded={:<5.1}% believed={:<5.1}% \
+        "coeff={:<5.2} n={:<5} seed={:<3} degree={:<5.2} grounded={:<5.1}% believed={:<5.1}% \
          delivered={:<6} satellite={:<6} acked={:<6} ackLost={:<6} completion={:<5.1}% \
          ceiling={:.2}/round",
         row.horizon_coeff,
         row.n_balloons,
+        row.seed,
         row.mean_degree,
         row.grounded_pct,
         row.believed_grounded_pct,
@@ -305,7 +348,7 @@ fn main() {
             let wind = Arc::new(fetch_wind_field_blocking());
             let duration_hours = 1.0;
             let rounds = rounds_for(duration_hours);
-            let combo = Combo { horizon_coeff: 4.12, n_balloons: 1600 };
+            let combo = Combo { horizon_coeff: 4.12, n_balloons: 1600, seed: 0 };
             println!(
                 "Benchmarking worst case (n={}) over {duration_hours} sim hour(s) ({rounds} rounds)...",
                 combo.n_balloons
@@ -327,7 +370,7 @@ fn main() {
             let rounds = rounds_for(2.0);
             for &n_balloons in &[400, 1200] {
                 for &horizon_coeff in &[3.4, 4.12] {
-                    let combo = Combo { horizon_coeff, n_balloons };
+                    let combo = Combo { horizon_coeff, n_balloons, seed: 0 };
                     let row = run_combo(&combo, &wind, rounds);
                     print_row(&row);
                 }
@@ -340,7 +383,13 @@ fn main() {
             let results_dir = config.results_dir.clone();
             let rounds = rounds_for(config.duration_hours);
 
-            let wind = Arc::new(fetch_wind_field_blocking());
+            let wind = Arc::new(match &config.wind {
+                Some(name) => wind_cache::resolve(name).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }),
+                None => fetch_wind_field_blocking(),
+            });
             let all = combos(&config);
             println!(
                 "Loaded {config_path} — running {} combination(s) x {} sim hours ({rounds} rounds) \
