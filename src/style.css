@@ -8,3 +8,40 @@ body {
   width: 100vw;
   height: 100vh;
 }
+
+/* Capture mode (src/captureMode.js): a fixed-size viewer centered on a dark
+   page, with its key help underneath. */
+body.capture-mode {
+  overflow: auto;
+  background: #111;
+  color: #ccc;
+  font: 13px sans-serif;
+}
+
+body.capture-mode #cesiumContainer {
+  margin: 16px auto 0;
+  outline: 1px solid #333;
+}
+
+.capture-hud {
+  max-width: 1280px;
+  margin: 10px auto;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.capture-hud kbd {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 0 5px;
+  color: #fff;
+}
+
+.capture-status {
+  color: #ffd166;
+}
+
+body.capture-hide-ui [data-ui-panel] {
+  display: none !important;
+}

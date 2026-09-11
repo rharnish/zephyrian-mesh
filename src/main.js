@@ -28,6 +28,7 @@ import { CommsLayer } from './commsLayer.js';
 import { InspectorPanel } from './ui/inspectorPanel.js';
 import { ControlPanel } from './ui/controlPanel.js';
 import { TowerMenu } from './ui/towerMenu.js';
+import { CaptureMode, captureSizeFromUrl } from './captureMode.js';
 
 // NOTE: treat this like any other API key — keep it out of version control,
 // load it from an env var / untracked config file in a real project.
@@ -45,8 +46,27 @@ Cesium.Ion.defaultAccessToken = configData.CESIUM_ION_DEFAULT_ACCESS_TOKEN;
 async function initCesium() {
   const terrainProvider = await Cesium.createWorldTerrainAsync();
 
+  // README media tooling, off unless the URL asks for it (see captureMode.js).
+  // It drops Cesium's own widgets, which would otherwise sit over the globe.
+  const captureSize = captureSizeFromUrl(window.location.search);
+  const captureViewerOptions = captureSize
+    ? {
+        animation: false,
+        timeline: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        homeButton: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        fullscreenButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+      }
+    : {};
+
   const viewer = new Cesium.Viewer('cesiumContainer', {
     terrainProvider: terrainProvider,
+    ...captureViewerOptions,
   });
 
   viewer.camera.flyTo({
@@ -237,6 +257,15 @@ async function initCesium() {
       }
     },
   });
+  let captureMode = null;
+  if (captureSize) {
+    for (const el of [controlPanel.panel, inspector.panel, inspector.logPanel, towerMenu.menu]) {
+      el.dataset.uiPanel = '';
+    }
+    document.body.classList.add('capture-hide-ui');
+    captureMode = new CaptureMode({ viewer, balloonLayer, positionOfTower, size: captureSize });
+  }
+
   // --- sim-server connection -------------------------------------------------
   // One authoritative snapshot stream; this client only renders it. Every
   // subsystem that reacts to a snapshot is fanned out from here.
@@ -259,6 +288,7 @@ async function initCesium() {
       for (const tower of towerById.values()) tower.refreshRangeCircle(viewer);
     });
     updateInspectorFromSnapshot(snapshot);
+    captureMode?.handleSnapshot(snapshot);
   });
 
   // --- User actions: add/remove tower, click on globe -----------------------

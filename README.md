@@ -8,6 +8,13 @@ losing line-of-sight radio links as they move. Each one generates telemetry
 bundles that reach a ground tower only by being carried and relayed through
 whatever neighbours happen to be in range.
 
+![A telemetry bundle relayed balloon to balloon to a ground tower near San Francisco, and its acknowledgement retracing the path home](docs/media/bundle-delivery.gif)
+
+*One balloon's last bundle, replayed along the path it actually took: out
+hop by hop to the tower (yellow), then the ack retracing it home (green).
+Globe, imagery and terrain: [CesiumJS](https://cesium.com/platform/cesiumjs/)
+and Cesium ion.*
+
 ## The constraint
 
 No balloon is handed a picture of the network. A balloon learns who it can
@@ -87,10 +94,10 @@ manual, three-terminal version, useful if you want to see each server's
 output live or start just one of them.
 
 ```
-┌──────────────────┐   GET /api/wind-levels   ┌──────────────┐   WS /ws   ┌─────────────┐
-│  wind_backend.py   │ ───────────────────────► │  sim-server    │ ─────────► │  browser      │
-│  port 8000          │      (once, startup)      │  port 8080      │  (snapshots) │  localhost:5173│
-└──────────────────┘                            └──────────────┘            └─────────────┘
+┌─────────────────┐                          ┌────────────┐              ┌────────────────┐
+│ wind_backend.py │─ GET /api/wind-levels ──►│ sim-server │── WS /ws ───►│ browser        │
+│ port 8000       │     (once, startup)      │ port 8080  │ (snapshots)  │ localhost:5173 │
+└─────────────────┘                          └────────────┘              └────────────────┘
 ```
 
 ### 1. Wind data — `wind_backend.py` (Python, port 8000)
@@ -208,3 +215,15 @@ balloon fields (`grid_matches_brute_force_ground_truth` in
 For headless/automated verification of the frontend itself (e.g. from an
 agent), see the `.claude/skills/run-cesium-app` skill, which drives the app
 in headless Chromium.
+## Recording README media
+
+Open the frontend at `http://localhost:5173/?capture` for a fixed 1280×720
+globe with the panels hidden. Press `f` to pause the sim and frame an acked
+multi-hop bundle, `n`/`p` to try others, `r` to save exactly one replay loop
+as a `.webm`, and `s` for a PNG. The key legend is under the globe, and
+[`src/captureMode.js`](src/captureMode.js) has the details. Then turn the
+recording into a GIF with:
+
+```bash
+scripts/readme-gif.sh ~/Downloads/bundle-b347-….webm docs/media/bundle-delivery.gif
+```

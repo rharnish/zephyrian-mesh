@@ -19,6 +19,8 @@ import { toCesiumColors } from './cesiumColor.js';
 
 const PATH_COLOR = Cesium.Color.fromCssColorString('#ffd166');
 const HOP_DURATION_MS = 550;
+const PACKET_PIXEL_SIZE = 10;
+const PATH_WIDTH = 3;
 // How long the final outcome color stays on screen before the marker clears
 // itself. Long enough to read as "it resolved to this color", short enough
 // that it doesn't linger like a permanent overlay.
@@ -26,7 +28,16 @@ const OUTCOME_HOLD_MS = 600;
 const OUTCOME_COLORS = toCesiumColors(COMMS_OUTCOME_CSS);
 
 export class CommsReplay {
-  constructor() {
+  // The options exist for capture mode (captureMode.js), which wants a bigger,
+  // slower dot than is comfortable in the live inspector.
+  constructor({
+    hopDurationMs = HOP_DURATION_MS,
+    pixelSize = PACKET_PIXEL_SIZE,
+    pathWidth = PATH_WIDTH,
+  } = {}) {
+    this.hopDurationMs = hopDurationMs;
+    this.pixelSize = pixelSize;
+    this.pathWidth = pathWidth;
     this.collection = null;
     this.pathPrimitive = null;
     this.packetEntity = null;
@@ -69,12 +80,13 @@ export class CommsReplay {
   // Recolors the marker to its final outcome and clears everything a beat
   // later, so the color is still readable before it disappears rather than
   // vanishing on the same frame it's set.
-  _finish(viewer, outcomeColor) {
+  _finish(viewer, outcomeColor, onDone) {
     const token = this.token;
     if (this.packetEntity) this.packetEntity.point.color = outcomeColor;
     this.holdTimer = setTimeout(() => {
       if (token !== this.token) return; // superseded during the hold
       this.clear(viewer);
+      if (onDone) onDone();
     }, OUTCOME_HOLD_MS);
   }
 
@@ -87,7 +99,7 @@ export class CommsReplay {
     if (!this.packetEntity) {
       this.packetEntity = viewer.entities.add({
         position: positions[0],
-        point: { pixelSize: 10, color, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+        point: { pixelSize: this.pixelSize, color, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
       });
     } else {
       this.packetEntity.point.color = color;
@@ -102,7 +114,7 @@ export class CommsReplay {
     let hopStart = performance.now();
     const step = (now) => {
       if (token !== this.token) return; // superseded — stop touching this entity
-      const t = Math.min(1, (now - hopStart) / HOP_DURATION_MS);
+      const t = Math.min(1, (now - hopStart) / this.hopDurationMs);
       this.packetEntity.position = Cesium.Cartesian3.lerp(
         positions[hop],
         positions[hop + 1],
@@ -130,12 +142,16 @@ export class CommsReplay {
   //
   // `positionOfBalloon` and `positionOfTower` resolve hop ids to where those
   // nodes are drawn right now; either may return undefined.
-  render(viewer, comms, positionOfBalloon, positionOfTower) {
+  //
+  // `onDone`, if given, runs once the whole animation has played out and
+  // cleared itself — never if it was superseded first. Returns whether an
+  // animation started at all, since there is nothing to wait for otherwise.
+  render(viewer, comms, positionOfBalloon, positionOfTower, onDone) {
     const lb = comms && comms.lastBundle;
-    if (!lb || !lb.path) return; // still Pending, or nothing originated yet
+    if (!lb || !lb.path) return false; // still Pending, or nothing originated yet
 
     const positions = lb.path.map(positionOfBalloon).filter(Boolean);
-    if (positions.length !== lb.path.length) return; // a hop balloon isn't currently visible
+    if (positions.length !== lb.path.length) return false; // a hop balloon isn't currently visible
 
     // The recorded path only ever holds balloon ids — delivery to a tower is
     // modeled as instantaneous from the last tower-adjacent balloon, so the
@@ -159,7 +175,7 @@ export class CommsReplay {
 
     this.pathPrimitive = this._ensureCollection(viewer).add({
       positions,
-      width: 3,
+      width: this.pathWidth,
       material: Cesium.Material.fromType('PolylineDash', { color: PATH_COLOR, dashLength: 12 }),
     });
 
@@ -170,7 +186,7 @@ export class CommsReplay {
       // Satellite pickup and a mesh drop both end the story where the outbound
       // leg stopped — there is no ack to animate, just the outcome flash.
       if (outcome === 'satellite' || outcome === 'droppedInMesh') {
-        this._finish(viewer, outcomeColor);
+        this._finish(viewer, outcomeColor, onDone);
         return;
       }
       // The ack retraces the path. A completed one runs the whole way home;
@@ -181,8 +197,9 @@ export class CommsReplay {
           ? reverse
           : reverse.slice(0, Math.max(0, Math.min(balloonHops, lb.ackHopsCompleted)) + towerLeg + 1);
       this._animate(viewer, ackPath, outcomeColor, () => {
-        this._finish(viewer, outcomeColor);
+        this._finish(viewer, outcomeColor, onDone);
       });
     });
+    return true;
   }
 }
