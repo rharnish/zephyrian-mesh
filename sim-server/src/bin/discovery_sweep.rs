@@ -99,6 +99,7 @@ fn main() {
         ("linkstate-mpr", "dv-dtn:discovery=link-state,relay=mpr"),
         ("linkstate-lsa16", "dv-dtn:discovery=link-state,lsa=16"),
         ("linkstate-lsa16-mpr", "dv-dtn:discovery=link-state,lsa=16,relay=mpr"),
+        ("linkstate-lsa64", "dv-dtn:discovery=link-state,lsa=64"),
     ];
 
     print!("protocol,seed");

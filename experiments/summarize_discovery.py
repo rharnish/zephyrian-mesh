@@ -46,6 +46,7 @@ CONTRASTS = [
     ("linkstate-mpr", "linkstate"),
     ("linkstate-lsa16", None),
     ("linkstate-lsa16-mpr", "linkstate-lsa16"),
+    ("linkstate-lsa64", None),
 ]
 
 MECHANISM_KEYS = [

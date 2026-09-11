@@ -46,7 +46,7 @@ inevitable once you know where they came from.
   and the thing every mechanism here is competing for.
 - **Round** — the comms tick. A balloon wakes every 5 of them by default.
 - **Tower-adjacent** — a balloon that can hand a bundle straight to a ground
-  station. Only ~23 of 1200 at any moment, which is the bottleneck this whole
+  station. Only ~22 of 1200 at any moment, which is the bottleneck this whole
   document circles (see §4 of `MESH_COMMS_DESIGN.md`).
 
 ---
@@ -107,7 +107,7 @@ simulator.**
 ## Act 1 — origination (round 1000)
 
 b417 wakes. Bundle work runs in five phases inside
-[`bundle::step`](../../sim-server/src/protocol/dv_dtn/bundle.rs#L282), and
+[`bundle::step`](../../sim-server/src/protocol/dv_dtn/bundle.rs), and
 origination is *last* — phase 5 — so a balloon never originates into a slot it
 could have spent forwarding.
 
@@ -179,7 +179,8 @@ requested before anything can happen, it is **29.9**.
 ## Act 3 — the first hop (round 1005)
 
 b417 wakes with a bundle in hand. Now the gauntlet, in the order the code checks
-it ([phase 3](../../sim-server/src/protocol/dv_dtn/bundle.rs#L436)):
+it (phase 3 of [`bundle::step`](../../sim-server/src/protocol/dv_dtn/bundle.rs) —
+the `// 3. Gather this round's bundle transmissions` block):
 
 ```mermaid
 flowchart TD
@@ -349,8 +350,10 @@ apparatus for asking *how much* that gap can be closed, and what it costs.
 
 Only **Act 0 and Act 3's routing decision** change. Acts 1, 2, 4, 5, 6 are
 byte-for-byte the same code — which is exactly why AODV and link-state live
-*inside* `dv_dtn/` as variants rather than as separate protocols. They differ in
-~300 lines of discovery and share ~1400 lines of forwarding.
+*inside* `dv_dtn/` as variants rather than as separate protocols. Counting
+non-test lines, they differ in 300–430 lines of discovery each (`beacon.rs` 297,
+`aodv.rs` 394, `linkstate.rs` 431) and share the ~760 in `bundle.rs` that do the
+forwarding.
 
 **Reactive (AODV).** Act 0 doesn't happen — no beacons, nothing spent until
 there is something to send. So Act 1 is followed by b417 *flooding a request*
@@ -374,7 +377,7 @@ those are the same `None` forever.
 **Epidemic (spray-and-wait).** Acts 3–5 dissolve. There is no route and no next
 hop; the bundle is *replicated* to any neighbour lacking it, with a copy budget
 halved at each handoff. It does badly here (23% against 72%) and the counter
-says why: `no_candidate` is enormous. A random walk rarely stumbles onto the ~27
+says why: `no_candidate` is enormous. A random walk rarely stumbles onto the ~22
 balloons that can hear a tower, while dv-dtn steers at them.
 
 That is not a knock on replication — it is this field's premise showing up as a

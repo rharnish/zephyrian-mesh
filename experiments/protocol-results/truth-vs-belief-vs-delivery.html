@@ -1,0 +1,317 @@
+<title>Truth vs. belief vs. real delivery, by mesh density</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --hover:          rgba(11,11,11,0.04);
+    --series-truth: #5fd08a;
+    --series-belief: #e0a355;
+    --series-completion: #2a78d6;
+    --series-delivered: #e87ba4;
+    --series-acked: #008300;
+    --series-unacked: #4a3aa7;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    padding: 32px 16px;
+    box-sizing: border-box;
+    min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --hover:          rgba(255,255,255,0.06);
+    --series-truth: #35a96c;
+    --series-belief: #c98500;
+    --series-completion: #3987e5;
+    --series-delivered: #d55181;
+    --series-acked: #008300;
+    --series-unacked: #9085e9;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --hover:          rgba(255,255,255,0.06);
+    --series-truth: #35a96c;
+    --series-belief: #c98500;
+    --series-completion: #3987e5;
+    --series-delivered: #d55181;
+    --series-acked: #008300;
+    --series-unacked: #9085e9;
+  }
+
+  * { box-sizing: border-box; }
+
+  .card {
+    max-width: 940px; margin: 0 auto;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px 28px 20px;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 2px; }
+  .sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 4px; }
+  .hint { font-size: 12px; color: var(--text-muted); margin: 0 0 16px; }
+
+  .legend { display: flex; gap: 6px 16px; flex-wrap: wrap; margin-bottom: 10px; }
+  .legend-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text-secondary);
+    background: none; border: 0; padding: 2px 6px; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .legend-item:hover { background: var(--hover); }
+  .legend-item:focus-visible { outline: 2px solid var(--series-achieved); outline-offset: 1px; }
+  .legend-item[aria-pressed="false"] { opacity: 0.34; }
+  .swatch { width: 20px; height: 0; border-top: 2.5px solid; flex: none; }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 11px; }
+  .marker-line { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 4 4; }
+  .marker-text { fill: var(--text-muted); font-size: 10.5px; }
+  .series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .band { opacity: 0.16; stroke: none; }
+  .panel-title { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0; pointer-events: none; }
+  .hover-dot { opacity: 0; pointer-events: none; }
+  .hover-target { fill: transparent; }
+  .dimmed { opacity: 0.12; }
+
+  .tooltip {
+    position: absolute; pointer-events: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    opacity: 0; transition: opacity 0.08s ease; min-width: 250px; z-index: 3;
+  }
+  .tooltip-title { font-weight: 600; margin-bottom: 1px; color: var(--text-primary); }
+  .tooltip-combo { color: var(--text-muted); margin-bottom: 5px; font-size: 11.5px; }
+  .tooltip-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 1px 0; color: var(--text-secondary); }
+  .tooltip-row .name { display: flex; align-items: center; gap: 6px; }
+  .tooltip-row .val { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tt-swatch { width: 12px; height: 0; border-top: 2.5px solid; flex: none; }
+
+  details.table-view { margin-top: 16px; }
+  details.table-view summary { font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
+  .table-scroll { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  th, td { padding: 4px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--text-secondary); font-weight: 600; }
+  tbody td { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  .footnote { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.55; }
+</style>
+
+<div class="viz-root" id="root-chart">
+  <div class="card">
+    <h1>Truth vs. belief vs. real delivery, by mesh density</h1>
+    <p class="sub">dv-dtn (shipped defaults), real wind, 24 sim-h runs — mean of 10 seeds per point, band ±1 sd — protocol_sweep.rs</p>
+    <p class="hint">One panel per balloon count; the grey numbers along the top are each point's horizon coefficient. Shaded bands are ±1 sd across seeds. Hover a point for mean ± sd; click a legend entry to isolate that series.</p>
+    <div class="legend" id="legend"></div>
+    <div class="chart-wrap">
+      <svg id="chart" viewBox="0 0 900 400" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Truth vs. belief vs. real delivery, by mesh density"></svg>
+      <div class="tooltip" id="tooltip" role="status"></div>
+    </div>
+    <details class="table-view">
+      <summary>Show the numbers</summary>
+      <div class="table-scroll" id="tables"></div>
+    </details>
+    <p class="footnote">A bundle reaches a tower at hand-off, before any ack exists; "finished" means it left circulation by any route — reached a tower, went by satellite, or was dropped. Completion rate and "reached a tower, % of originated" differ by the bundles still in flight at the cutoff, which is why both are shown; acked and ack lost leave out acks still in flight. Degree, truth and belief are averaged over each run. Points are cells connected in degree order within a balloon count — not a fitted curve.</p>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  const NS = "http://www.w3.org/2000/svg";
+  const series = [{"key": "truth", "label": "Ground truth: actually reachable (union-find)", "short": "truth"}, {"key": "belief", "label": "Belief: balloons that think they have a route", "short": "belief"}, {"key": "completion", "label": "Completion rate: reached a tower, % of finished bundles", "short": "completion"}, {"key": "delivered", "label": "Reached a tower, % of originated", "short": "reached tower"}, {"key": "acked", "label": "Reached a tower and acked, % of originated", "short": "acked"}, {"key": "unacked", "label": "Reached a tower, ack lost, % of originated", "short": "ack lost"}];
+  const cells = [{"seeds": 10, "horizon": 2.5, "n": 400, "originated": 1424.0, "degree": 0.754, "degree_sd": 0.0518, "truth": 1.1098, "truth_sd": 0.7988, "belief": 1.2784, "belief_sd": 0.8933, "completion": 1.863, "completion_sd": 1.3086, "delivered": 1.4791, "delivered_sd": 1.0433, "acked": 1.4224, "acked_sd": 0.9655, "unacked": 0.0567, "unacked_sd": 0.133}, {"seeds": 10, "horizon": 3.0, "n": 400, "originated": 1423.8, "degree": 1.1145, "degree_sd": 0.0695, "truth": 1.8335, "truth_sd": 0.9276, "belief": 2.1108, "belief_sd": 0.9906, "completion": 2.968, "completion_sd": 1.1683, "delivered": 2.3689, "delivered_sd": 0.9396, "acked": 2.2071, "acked_sd": 0.8507, "unacked": 0.1124, "unacked_sd": 0.0821}, {"seeds": 10, "horizon": 3.57, "n": 400, "originated": 1429.5, "degree": 1.5712, "degree_sd": 0.0777, "truth": 4.4483, "truth_sd": 2.0103, "belief": 5.1109, "belief_sd": 2.2181, "completion": 6.886, "completion_sd": 3.0203, "delivered": 5.5188, "delivered_sd": 2.444, "acked": 4.9868, "acked_sd": 2.2729, "unacked": 0.4482, "unacked_sd": 0.3194}, {"seeds": 10, "horizon": 4.12, "n": 400, "originated": 1422.2, "degree": 2.1055, "degree_sd": 0.0879, "truth": 11.2446, "truth_sd": 5.1804, "belief": 12.4635, "belief_sd": 5.3266, "completion": 15.825, "completion_sd": 5.9973, "delivered": 12.8921, "delivered_sd": 4.9828, "acked": 11.1092, "acked_sd": 4.1601, "unacked": 1.4306, "unacked_sd": 1.0736}, {"seeds": 10, "horizon": 2.5, "n": 1200, "originated": 4281.0, "degree": 2.3126, "degree_sd": 0.0702, "truth": 5.3661, "truth_sd": 1.4006, "belief": 6.5061, "belief_sd": 1.5056, "completion": 7.483, "completion_sd": 1.933, "delivered": 5.9818, "delivered_sd": 1.5611, "acked": 4.1669, "acked_sd": 1.1006, "unacked": 1.6748, "unacked_sd": 0.6696}, {"seeds": 10, "horizon": 5.0, "n": 400, "originated": 1424.5, "degree": 3.158, "degree_sd": 0.1431, "truth": 41.0656, "truth_sd": 7.2558, "belief": 43.0577, "belief_sd": 6.7579, "completion": 40.212, "completion_sd": 6.1816, "delivered": 33.7231, "delivered_sd": 5.3444, "acked": 23.6697, "acked_sd": 4.1308, "unacked": 9.0994, "unacked_sd": 3.3546}, {"seeds": 10, "horizon": 3.0, "n": 1200, "originated": 4269.7, "degree": 3.3196, "degree_sd": 0.1017, "truth": 28.2635, "truth_sd": 7.0115, "belief": 28.5679, "belief_sd": 5.9793, "completion": 23.251, "completion_sd": 4.5378, "delivered": 19.0815, "delivered_sd": 3.846, "acked": 9.578, "acked_sd": 1.9928, "unacked": 8.8452, "unacked_sd": 2.6201}, {"seeds": 10, "horizon": 2.5, "n": 2000, "originated": 7139.6, "degree": 3.8234, "degree_sd": 0.0781, "truth": 47.606, "truth_sd": 7.7885, "belief": 38.274, "belief_sd": 6.5787, "completion": 21.567, "completion_sd": 4.2669, "delivered": 17.5654, "delivered_sd": 3.5215, "acked": 6.156, "acked_sd": 0.9006, "unacked": 10.7804, "unacked_sd": 2.7565}, {"seeds": 10, "horizon": 3.57, "n": 1200, "originated": 4266.4, "degree": 4.6965, "degree_sd": 0.0908, "truth": 88.6586, "truth_sd": 2.72, "belief": 76.4042, "belief_sd": 7.0477, "completion": 39.224, "completion_sd": 5.0735, "delivered": 33.1022, "delivered_sd": 4.6125, "acked": 12.9419, "acked_sd": 2.4407, "unacked": 18.81, "unacked_sd": 2.6012}, {"seeds": 10, "horizon": 3.0, "n": 2000, "originated": 7131.5, "degree": 5.4904, "degree_sd": 0.1065, "truth": 96.6862, "truth_sd": 0.6963, "belief": 88.8435, "belief_sd": 2.401, "completion": 40.594, "completion_sd": 6.963, "delivered": 34.1417, "delivered_sd": 6.0465, "acked": 10.6399, "acked_sd": 2.0185, "unacked": 22.3703, "unacked_sd": 4.3546}, {"seeds": 10, "horizon": 4.12, "n": 1200, "originated": 4288.6, "degree": 6.2004, "degree_sd": 0.1902, "truth": 98.312, "truth_sd": 0.3792, "belief": 96.3286, "belief_sd": 0.5628, "completion": 64.542, "completion_sd": 7.8908, "delivered": 56.5929, "delivered_sd": 7.582, "acked": 21.9589, "acked_sd": 3.1582, "unacked": 32.5682, "unacked_sd": 5.3284}, {"seeds": 10, "horizon": 3.57, "n": 2000, "originated": 7110.4, "degree": 7.7456, "degree_sd": 0.1306, "truth": 99.5269, "truth_sd": 0.1726, "belief": 97.5603, "belief_sd": 0.2797, "completion": 61.747, "completion_sd": 7.9379, "delivered": 53.4267, "delivered_sd": 7.36, "acked": 16.0613, "acked_sd": 2.7975, "unacked": 35.755, "unacked_sd": 4.7911}, {"seeds": 10, "horizon": 5.0, "n": 1200, "originated": 4277.2, "degree": 9.1899, "degree_sd": 0.1677, "truth": 99.8174, "truth_sd": 0.0806, "belief": 98.5939, "belief_sd": 0.1743, "completion": 86.705, "completion_sd": 2.8529, "delivered": 79.1966, "delivered_sd": 2.9416, "acked": 34.9941, "acked_sd": 2.729, "unacked": 41.5866, "unacked_sd": 2.1449}, {"seeds": 10, "horizon": 4.12, "n": 2000, "originated": 7127.3, "degree": 10.2817, "degree_sd": 0.1833, "truth": 99.8701, "truth_sd": 0.0552, "belief": 98.5592, "belief_sd": 0.0715, "completion": 79.028, "completion_sd": 4.0539, "delivered": 70.7468, "delivered_sd": 4.318, "acked": 24.6205, "acked_sd": 2.6019, "unacked": 43.8872, "unacked_sd": 2.7129}, {"seeds": 10, "horizon": 5.0, "n": 2000, "originated": 7123.1, "degree": 15.1343, "degree_sd": 0.1712, "truth": 99.9855, "truth_sd": 0.012, "belief": 99.1008, "belief_sd": 0.0723, "completion": 91.838, "completion_sd": 1.3306, "delivered": 84.8386, "delivered_sd": 1.5865, "acked": 36.06, "acked_sd": 2.008, "unacked": 45.9949, "unacked_sd": 1.1533}];
+  const marker = {"at": 4.5, "label": "percolation threshold"};
+
+  const root = document.getElementById("root-chart");
+  const cs = getComputedStyle(root);
+  const color = (s) => cs.getPropertyValue("--series-" + s.key).trim();
+  const surface = () => cs.getPropertyValue("--surface-1").trim();
+
+  const W = 900, H = 400;
+  const padL = 44, padR = 12, padT = 58, padB = 40, gap = 26;
+  const ns = [...new Set(cells.map((c) => c.n))].sort((a, b) => a - b);
+  const panelW = (W - padL - padR - gap * (ns.length - 1)) / ns.length;
+  const plotH = H - padT - padB;
+  const yPos = (v) => padT + plotH * (1 - Math.max(-3, Math.min(103, v)) / 100);
+
+  const svg = document.getElementById("chart");
+  const el = (tag, attrs, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) if (attrs[k] !== null) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+
+  const groups = {};
+  series.forEach((s) => { groups[s.key] = []; });
+  const panels = ns.map((n, pi) => {
+    const x0 = padL + pi * (panelW + gap);
+    const pts = cells.filter((c) => c.n === n).sort((a, b) => a.degree - b.degree);
+    const lo = Math.min(...pts.map((c) => c.degree)), hi = Math.max(...pts.map((c) => c.degree));
+    const pad = 0.06 * (hi - lo);
+    const xPos = (d) => x0 + panelW * (d - (lo - pad)) / (hi - lo + 2 * pad);
+
+    svg.appendChild(el("text", { x: x0, y: 16, class: "panel-title" }, `${n} balloons`));
+    for (let v = 0; v <= 100; v += 25) {
+      svg.appendChild(el("line", { x1: x0, x2: x0 + panelW, y1: yPos(v), y2: yPos(v),
+        class: v === 0 ? "baseline" : "gridline" }));
+      if (pi === 0) {
+        svg.appendChild(el("text", { x: padL - 8, y: yPos(v) + 4, class: "axis-label", "text-anchor": "end" }, v + "%"));
+      }
+    }
+    // Degree ticks at a step that gives 3-5 labels whatever the panel's range.
+    const step = [0.5, 1, 2, 5].find((st) => (hi - lo + 2 * pad) / st <= 5);
+    for (let d = Math.ceil((lo - pad) / step) * step; d <= hi + pad; d += step) {
+      svg.appendChild(el("text", { x: xPos(d), y: H - padB + 16, class: "axis-label", "text-anchor": "middle" },
+        Number(d.toFixed(1))));
+    }
+    svg.appendChild(el("text", { x: x0 + panelW / 2, y: H - 6, class: "axis-label", "text-anchor": "middle" },
+      "Mean node degree"));
+    pts.forEach((c) => {
+      svg.appendChild(el("text", { x: xPos(c.degree), y: padT - 10, class: "axis-label", "text-anchor": "middle" },
+        c.horizon));
+    });
+    if (pi === 0) {
+      svg.appendChild(el("text", { x: x0, y: padT - 26, class: "marker-text" }, "horizon coefficient"));
+    }
+    if (marker.at > lo - pad && marker.at < hi + pad) {
+      svg.appendChild(el("line", { x1: xPos(marker.at), x2: xPos(marker.at), y1: padT, y2: padT + plotH,
+        class: "marker-line" }));
+      svg.appendChild(el("text", { x: xPos(marker.at) + 4, y: padT + plotH - 6, class: "marker-text" }, marker.label));
+    }
+
+    series.forEach((s) => {
+      const g = el("g", { "data-key": s.key });
+      const stroke = color(s);
+      const upper = pts.map((c) => `${xPos(c.degree)},${yPos(c[s.key] + c[s.key + "_sd"])}`);
+      const lower = pts.map((c) => `${xPos(c.degree)},${yPos(c[s.key] - c[s.key + "_sd"])}`).reverse();
+      g.appendChild(el("polygon", { points: upper.concat(lower).join(" "), class: "band", fill: stroke }));
+      g.appendChild(el("polyline", { points: pts.map((c) => `${xPos(c.degree)},${yPos(c[s.key])}`).join(" "),
+        class: "series-line", stroke: stroke }));
+      pts.forEach((c) => g.appendChild(el("circle", { cx: xPos(c.degree), cy: yPos(c[s.key]), r: 4,
+        fill: stroke, stroke: surface(), "stroke-width": 2 })));
+      svg.appendChild(g);
+      groups[s.key].push(g);
+    });
+    return { x0, pts, xPos };
+  });
+
+  let isolated = null;
+  const legend = document.getElementById("legend");
+  series.forEach((s) => {
+    const b = document.createElement("button");
+    b.className = "legend-item";
+    b.type = "button";
+    b.setAttribute("aria-pressed", "true");
+    b.dataset.key = s.key;
+    b.innerHTML = `<span class="swatch" style="border-top-color:${color(s)}"></span>${s.label}`;
+    b.addEventListener("click", () => {
+      isolated = isolated === s.key ? null : s.key;
+      series.forEach((o) => {
+        const on = isolated === null || isolated === o.key;
+        groups[o.key].forEach((g) => g.classList.toggle("dimmed", !on));
+        legend.querySelector(`[data-key="${o.key}"]`).setAttribute("aria-pressed", on ? "true" : "false");
+      });
+    });
+    legend.appendChild(b);
+  });
+
+  const crosshair = el("line", { y1: padT, y2: padT + plotH, class: "crosshair" });
+  svg.appendChild(crosshair);
+  const hoverDots = series.map((s) => {
+    const c = el("circle", { r: 6, class: "hover-dot", fill: color(s), stroke: surface(), "stroke-width": 2 });
+    svg.appendChild(c);
+    return c;
+  });
+
+  const tooltip = document.getElementById("tooltip");
+  const wrap = svg.closest(".chart-wrap");
+  const fmt = (c, k) => `${c[k].toFixed(1)}% <span style="font-weight:400;color:var(--text-muted)">± ${c[k + "_sd"].toFixed(1)}</span>`;
+  panels.forEach(({ x0, pts, xPos }) => {
+    pts.forEach((c, i) => {
+      const a = i === 0 ? x0 : (xPos(pts[i - 1].degree) + xPos(c.degree)) / 2;
+      const b = i === pts.length - 1 ? x0 + panelW : (xPos(c.degree) + xPos(pts[i + 1].degree)) / 2;
+      const t = el("rect", { x: a, y: padT, width: Math.max(1, b - a), height: plotH, class: "hover-target" });
+      t.addEventListener("mouseenter", () => show(c, xPos));
+      t.addEventListener("mousemove", place);
+      t.addEventListener("mouseleave", hide);
+      svg.appendChild(t);
+    });
+  });
+
+  function show(c, xPos) {
+    const x = xPos(c.degree);
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    crosshair.style.opacity = 1;
+    series.forEach((s, k) => {
+      hoverDots[k].style.opacity = isolated === null || isolated === s.key ? 1 : 0;
+      hoverDots[k].setAttribute("cx", x);
+      hoverDots[k].setAttribute("cy", yPos(c[s.key]));
+    });
+    const rows = series
+      .filter((s) => isolated === null || isolated === s.key)
+      .map((s) => `<div class="tooltip-row"><span class="name">`
+        + `<span class="tt-swatch" style="border-top-color:${color(s)}"></span>${s.short}</span>`
+        + `<span class="val">${fmt(c, s.key)}</span></div>`)
+      .join("");
+    tooltip.innerHTML = `<div class="tooltip-title">${c.n} balloons · horizon ${c.horizon}</div>`
+      + `<div class="tooltip-combo">mean degree ${c.degree.toFixed(2)} ± ${c.degree_sd.toFixed(2)} · `
+      + `${c.seeds} seeds · ${Math.round(c.originated).toLocaleString()} bundles/run</div>${rows}`;
+    tooltip.style.opacity = 1;
+  }
+  function place(ev) {
+    const r = wrap.getBoundingClientRect();
+    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+    const flip = x > r.width * 0.55;
+    tooltip.style.left = Math.max(0, flip ? x - tooltip.offsetWidth - 16 : x + 16) + "px";
+    tooltip.style.top = Math.min(Math.max(0, y - 40), r.height - tooltip.offsetHeight) + "px";
+  }
+  function hide() {
+    crosshair.style.opacity = 0;
+    hoverDots.forEach((d) => (d.style.opacity = 0));
+    tooltip.style.opacity = 0;
+  }
+
+  const table = document.createElement("table");
+  const ordered = [...cells].sort((a, b) => a.n - b.n || a.horizon - b.horizon);
+  table.innerHTML = `<thead><tr><th>n</th><th>Horizon coeff</th><th>Mean degree</th>`
+    + series.map((s) => `<th>${s.short} %</th>`).join("") + `</tr></thead><tbody>`
+    + ordered.map((c) => `<tr><td>${c.n}</td><td>${c.horizon}</td><td>${c.degree.toFixed(2)}</td>`
+      + series.map((s) => `<td>${c[s.key].toFixed(1)} ± ${c[s.key + "_sd"].toFixed(1)}</td>`).join("")
+      + `</tr>`).join("")
+    + `</tbody>`;
+  document.getElementById("tables").appendChild(table);
+})();
+</script>

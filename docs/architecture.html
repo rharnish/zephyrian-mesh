@@ -308,7 +308,7 @@
 
   <div class="titleblock">
     <div>
-      <h1>cesium-dirigible — system architecture</h1>
+      <h1>zephyrian-mesh — system architecture</h1>
       <p class="sub">three processes, one shared world state, started together</p>
     </div>
     <div class="meta">
@@ -374,19 +374,26 @@
         <div class="chip"><div class="name">atmosphere.rs</div><div class="role">ISA pressure/temperature/density by altitude</div></div>
         <div class="chip"><div class="name">tower.rs</div><div class="role">tower state</div></div>
         <div class="chip"><div class="name">wind_field.rs</div><div class="role">WindField, Rust copy</div></div>
-        <div class="chip"><div class="name">beacon.rs</div><div class="role">decentralized discovery — what each balloon believes it can reach</div></div>
-        <div class="chip"><div class="name">bundle.rs</div><div class="role">store-and-forward telemetry, relay queues, tower acks</div></div>
+        <div class="chip"><div class="name">protocol/mod.rs</div><div class="role">the MeshProtocol seam — ProtocolSpec parsing, Capabilities, EventKind</div></div>
+        <div class="chip"><div class="name">protocol/dv_dtn/beacon.rs</div><div class="role">proactive discovery — flooded tower beacons</div></div>
+        <div class="chip"><div class="name">protocol/dv_dtn/aodv.rs</div><div class="role">reactive discovery — request/reply on demand</div></div>
+        <div class="chip"><div class="name">protocol/dv_dtn/linkstate.rs</div><div class="role">gossiped link-state — each balloon builds its own map</div></div>
+        <div class="chip"><div class="name">protocol/dv_dtn/bundle.rs</div><div class="role">store-and-forward telemetry, relay queues, tower acks — shared by all three discovery families</div></div>
+        <div class="chip"><div class="name">protocol/dv_dtn/bundle_stats.rs</div><div class="role">the counters the sweeps read</div></div>
+        <div class="chip"><div class="name">protocol/epidemic/</div><div class="role">binary spray-and-wait — no routes at all</div></div>
         <div class="chip"><div class="name">telemetry.rs</div><div class="role">the sensor block carried in each bundle</div></div>
+        <div class="chip"><div class="name">mesh_adjacency.rs</div><div class="role">who can hear whom, as the protocol sees it</div></div>
+        <div class="chip"><div class="name">wind_cache.rs</div><div class="role">on-disk wind fields, so startup need not refetch</div></div>
         <div class="chip"><div class="name">link_detection.rs</div><div class="role">true connectivity — compute_grid_edges + brute-force oracle for tests</div></div>
         <div class="chip"><div class="name">spatial_grid.rs</div><div class="role">SpatialGrid, used by link_detection</div></div>
         <div class="chip"><div class="name">union_find.rs</div><div class="role">UnionFind for network components</div></div>
         <div class="chip"><div class="name">geo.rs</div><div class="role">horizon_km, precompute</div></div>
-        <div class="chip"><div class="name">config.rs</div><div class="role">tick rate, balloon count, ports</div></div>
+        <div class="chip"><div class="name">config.rs</div><div class="role">tick rate, balloon count, wind backend URL (the listen port is in main.rs)</div></div>
       </div>
     </section>
 
     <div class="connector">
-      <div class="line rest"><span class="dir">→</span><span class="proto">GET /api/wind-levels</span><span class="detail">at startup, blocking — falls back to zero wind on failure. Held as an Arc and re-served to the browser, so there's only one fetch and one copy of the payload.</span></div>
+      <div class="line rest"><span class="dir">→</span><span class="proto">GET /api/wind-levels/source</span><span class="detail">at startup: asks only which field the backend serves, then loads it from the on-disk wind cache and fetches the full grid only on a miss. If the backend is unreachable it falls back to the newest cached field, and to zero wind only when the cache is empty too. Held as an Arc and re-served to the browser, so there's only one fetch and one copy of the payload.</span></div>
     </div>
 
     <section class="lane wind">
@@ -411,10 +418,10 @@
       <dd>All balloon physics, radio-link detection, and the comms protocol run server-side in <span class="file">sim-server</span>. The browser is a thin renderer that reconciles Cesium entities against whatever it's sent and forwards user actions as REST commands — it holds no simulation state of its own.</dd>
 
       <dt>Belief vs. truth</dt>
-      <dd><span class="file">link_detection.rs</span> computes the true connectivity graph; <span class="file">beacon.rs</span> computes what each balloon <em>believes</em> it can reach, from beacons it actually received. Both ride on every <span class="file">Snapshot</span> — the gap between them is where the interesting failures live, and it's what the belief-vs-truth overlay renders.</dd>
+      <dd><span class="file">link_detection.rs</span> computes the true connectivity graph; the running protocol's discovery half computes what each balloon <em>believes</em> it can reach, from signals it actually received — <span class="file">beacon.rs</span>, <span class="file">aodv.rs</span> or <span class="file">linkstate.rs</span> depending on <code>discovery=</code>, and nothing at all under <code>epidemic</code>, which declares no route beliefs. Both ride on every <span class="file">Snapshot</span> — the gap between them is where the interesting failures live, and it's what the belief-vs-truth overlay renders.</dd>
 
       <dt>Single wind fetch</dt>
-      <dd><span class="file">sim-server</span> is the sole client of <span class="file">wind_backend.py</span>. It fetches the field once at startup, holds it as a shared <span class="file">Arc</span>, and re-serves it over its own <span class="file">GET /api/wind-levels</span>. The browser fetches its (arrows-only) copy from sim-server in the background, not from Python directly — one fetch to Python, one payload in memory.</dd>
+      <dd><span class="file">sim-server</span> is the sole client of <span class="file">wind_backend.py</span>. It resolves the field once at startup — from the on-disk cache when there is one, fetching from Python only on a miss — holds it as a shared <span class="file">Arc</span>, and re-serves it over its own <span class="file">GET /api/wind-levels</span>. The browser fetches its (arrows-only) copy from sim-server in the background, not from Python directly — one fetch to Python, one payload in memory.</dd>
 
       <dt>Paused, synced</dt>
       <dd>Pause state and the horizon-refraction coefficient both live on <span class="file">World</span> and are broadcast in every <span class="file">Snapshot</span>, so all connected tabs stay in sync. Controls POST the desired change and wait for the server to echo it back rather than flipping optimistically, avoiding races with in-flight snapshots.</dd>

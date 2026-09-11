@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/balloon.js. Wind-driven horizontal motion +
+// Ported from experiments/legacy-js/src/balloon.js. Wind-driven horizontal motion +
 // simple buoyancy/ballast controller (target-altitude thermostat) for
 // vertical motion.
 

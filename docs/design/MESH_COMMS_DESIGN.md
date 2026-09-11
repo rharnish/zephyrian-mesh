@@ -10,6 +10,11 @@ cheap. Companion to `docs/design/BALLOON_PHYSICS_VISION.md` (the physics half, i
 
 ## Where things stand today
 
+> **This section describes the state before C2 shipped, and is kept for the reasoning that
+> follows from it.** Per-hop routing, message identity and the comms log UI all exist now —
+> see the postscript at the end of this file. Only signing and the tamper UI (C3) are still
+> outstanding. Read the rest of this section as the problem statement, not the current state.
+
 The "network" is undirected line-of-sight edges with a per-edge `grounded` boolean (the connected
 component contains a tower). An **offline** experiment binary,
 `sim-server/src/bin/connectivity_sweep.rs`, already models per-balloon payload generation, radio
@@ -20,7 +25,7 @@ Groundwork that already exists: `sim-server/src/bin/mesh_depth.rs` (offline prob
 mesh's graph statistics — see §1.1), a live **mesh-health readout** in the Controls panel (mean
 node degree + % grounded, computed in `sim.rs`'s link-recompute block and carried on every
 `Snapshot`), and **C1** — the beacon protocol itself, now at
-`sim-server/src/protocol/dv_dtn/beacon.rs`, with the belief-vs-truth overlay in `src/main.js`.
+`sim-server/src/protocol/dv_dtn/beacon.rs`, with the belief-vs-truth overlay classified in `src/overlays.js`.
 
 The vision below adds: (1) a **decentralized** store-and-forward mesh comms protocol in which
 balloons learn their own connectivity, (2) tamper-evident message integrity via real crypto with
@@ -70,7 +75,7 @@ considers itself **ungrounded**, and behaves accordingly.
 
 **Beliefs expire — on the age of the news, not on when it was last repeated.** Each beacon carries
 the round its tower emitted it; relays copy that stamp verbatim and may never refresh it. A belief
-is dropped once that stamp is older than `BELIEF_MAX_AGE_ROUNDS`, and the balloon reverts to "I
+is dropped once that stamp is older than `belief_max_age_rounds`, and the balloon reverts to "I
 don't know of any route" — even if the graph in fact still connects it by some path it hasn't been
 told about.
 
@@ -159,13 +164,13 @@ minutes (does a bundle advance one hop per tick or one per duty cycle?) were a c
 Separating the clocks makes the protocol's real-time pace tunable without touching physics
 smoothness. Retune **`COMMS_EVERY_N_TICKS` for pacing**; if the simulated-time durations then look
 implausible, adjust `TIME_SCALE`, which trades balloon drift speed for them. Do **not** reach for
-`BELIEF_MAX_AGE_ROUNDS` — it is pinned from below by measured convergence (below), not free.
+`belief_max_age_rounds` — it is pinned from below by measured convergence (below), not free.
 
 Starting constants:
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Comms round | 8 ticks (~2 sim min, 0.4 real s) | Pacing dial. Puts the discovery arc at ~20 real seconds and belief expiry at ~24 — slow enough to watch a wavefront spread and a stale belief die. |
+| Comms round | 8 ticks (~2 sim min, 0.4 real s) | Pacing dial. Puts the discovery arc at ~15 real seconds (measured: ~38 rounds × 0.4 s, see `TIMING_MODEL.md`) and belief expiry at ~24 — slow enough to watch a wavefront spread and a stale belief die. |
 | Beacon interval | 5 rounds, jittered ±20% | Duty cycle. Decoupled from the link-recompute cadence so the comms and topology clocks don't beat against each other; jitter avoids lockstep rebroadcast collisions. |
 | Belief max age | 60 rounds (~12× beacon interval) | Measured, not chosen: expiry keys on emission time, so this must exceed the time a wave needs to cross the mesh (~38 rounds to reach 99% of a 1200-balloon field) or deep balloons expire beliefs on arrival and can never hold a route. A contact-recency timeout of 3–4× would have been shorter, but is unsound — see §1. |
 | Bundle TTL / max hops | ~20 | Covers p95 depth at operational densities; deliberately truncates the critical-regime tails, where handing off to satellite is the correct policy anyway. |
@@ -244,7 +249,7 @@ overlay** shipped with C1.
 - **Select a balloon** (click) → query endpoint → render:
   - **Animated packet** hopping node-to-node along the bundle's *actual recorded path* (not a
     recomputed shortest path — the whole point is that the two can differ), reusing the
-    reused-`PolylineCollection`-keyed-by-`pairKey` pattern from `syncLinks` in `src/main.js`
+    reused-`PolylineCollection`-keyed-by-`pairKey` pattern from `src/linkLayer.js`
     (a moving billboard/point advancing one edge per interval). Animate the **ack returning**
     along the reverse path, including the case where it dies partway.
   - A **comms log panel/table** (net-new DOM; the Controls panel is the only precedent): rows of
@@ -258,7 +263,7 @@ overlay** shipped with C1.
   most recent data got through* — a **satellite glyph** (delivered via satellite) vs. a **tower
   glyph** (delivered via radio mesh), or equivalently a color code (e.g., blue = satellite,
   lime = radio, gray = pending/undelivered). This reads at a glance across the whole field without
-  selecting anything, and reuses the altitude-glyph billboard mechanism already in `src/main.js`
+  selecting anything, and reuses the altitude-glyph billboard mechanism already in `src/balloonIcon.js`
   (`buildBalloonIcon` / per-balloon billboard). `last_channel` rides in the `Snapshot` fields
   above.
 - **Tamper demo control**: inject tampering into the selected balloon's chain and watch a record
@@ -266,7 +271,7 @@ overlay** shipped with C1.
 - **Optional global layer** (toggle, like wind vectors): color balloons by delivery status
   (delivered / pending / satellite-only).
 
-## 4. C2 design decisions (settled, not yet implemented)
+## 4. C2 design decisions (settled, and since implemented)
 
 Four questions came up scoping C2. All are now settled — the fourth was deliberately deferred
 until the comms clock was tuned, because before §1.2 it was not answerable by observation.
@@ -295,7 +300,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   **Measured caveat, and an open question this raised.** Implementing it revealed that "one
   outstanding" was quietly conflating two separate limits: how often a balloon *originates*, and
   how many bundles it can *carry*. Capping carry at one gridlocks relaying — a balloon holding its
-  own bundle cannot relay anyone else's, so at `BUNDLE_INTERVAL_ROUNDS = 25` every balloon is
+  own bundle cannot relay anyone else's, so at `bundle_interval_rounds = 25` every balloon is
   permanently full, 81k handoffs are blocked, and delivery sits at 29% despite 98% of the field
   being genuinely grounded. Backing origination off to 200 rounds relieves it substantially:
 
@@ -306,7 +311,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   | 200 rounds | 41.5% | 559 | 25,563 |
 
   **Resolved, and the diagnosis was wrong.** Relays now have a bounded FIFO queue
-  (`RELAY_QUEUE_CAPACITY`) separate from the origination cap. It does what it should — blocked
+  (`relay_queue_capacity`) separate from the origination cap. It does what it should — blocked
   handoffs fall from 25.8k to 2.3k going from 1 slot to 8 — but **delivery stays flat at 39–45%**.
   Blocking was a symptom, not the bottleneck. What actually limits delivery is still open.
 
@@ -319,7 +324,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
 
   Those delivery differences are within run-to-run noise; the defensible effect is the 10× drop in
   blocking. Note also that a balloon drains one bundle per duty-cycle slot, so queue depth beyond
-  `BUNDLE_MAX_AGE_ROUNDS / BEACON_INTERVAL_ROUNDS` = 30 is unreachable — bundles that deep expire
+  `bundle_max_age_rounds / beacon_interval_rounds` = 30 is unreachable — bundles that deep expire
   before their turn. Queue capacity is a policy parameter, not a hardware one: bundles are a few
   hundred bytes, and the platform's real energy constraint limits *transmitting*, not *holding*,
   which is already modelled as the duty cycle.
@@ -340,9 +345,9 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   - *Stale next hops are almost never exercised* — under 0.3% of slots at any density. Links
     outlive beliefs comfortably.
   - **The ground link is saturated.** A tower at 30 m has a 23 km horizon, so the tower–balloon
-    link reaches ~490 km against 940 km balloon-to-balloon. Only **~23 of 1200 balloons** can hear
+    link reaches ~490 km against 940 km balloon-to-balloon. Only **~22 of 1200 balloons** can hear
     a tower at any moment, and each passes one bundle per duty-cycle slot — a ceiling of ~4.7
-    deliveries/round. Sweeping `BUNDLE_INTERVAL_ROUNDS` from 50 to 1600 moves offered load 28×
+    deliveries/round. Sweeping `bundle_interval_rounds` from 50 to 1600 moves offered load 28×
     while **delivery stays pinned near 3.1/round**; completion moves 16% → 93% purely because the
     denominator changes. Delivery throughput is flat against load, which is why three rounds of
     tuning queues, TTLs and route selection changed nothing.
@@ -357,7 +362,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   cycle. Satellite fallback now has a measured justification too: it is not a nicety for stranded
   bundles, it is the release valve for a structurally saturated ground link.
 
-- **Tower contacts drain a window; balloon-to-balloon handoffs do not.** `TOWER_CONTACT_BUNDLES`
+- **Tower contacts drain a window; balloon-to-balloon handoffs do not.** `batch.tower_contact`
   (= 4) is the acted-on consequence of the above. One transmission per wake slot is the right rule
   for a *beacon* — a broadcast to nobody in particular, rationed by the duty cycle — but a tower
   contact is a point-to-point link to a mains-powered station with a real antenna, and spending a
@@ -370,7 +375,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   | completion | 51.2% | 60.7% | **67.4%** | 66.0% |
   | delivered/round | 2.88 | 3.44 | 3.82 | 3.75 |
 
-  Re-running the `RELAY_QUEUE_CAPACITY` sweep under this rule confirms 8 is still reasonable, but
+  Re-running the `relay_queue_capacity` sweep under this rule confirms 8 is still reasonable, but
   for a narrower reason than before: blocked handoffs fall monotonically (78.5% → 44.9% → 27.5% →
   7.9% → 2.8% of slots for 1/2/4/8/16), while *completion* comes out non-monotone because it is
   dominated by how many balloons happened to be in tower range each run — that count ranged 15.0
@@ -392,7 +397,7 @@ until the comms clock was tuned, because before §1.2 it was not answerable by o
   what generates the interesting late deliveries.
 
 - **A bundle advances one hop per duty-cycle slot**, not one per tick. It moves on the balloon's
-  existing beacon slot — a radio that is awake is awake for both — so `BEACON_INTERVAL_ROUNDS`
+  existing beacon slot — a radio that is awake is awake for both — so `beacon_interval_rounds`
   doubles as the forwarding rate and one hop costs 5 rounds (2 real seconds, 10 simulated
   minutes).
 
@@ -445,7 +450,7 @@ all in `sim-server/src/protocol/dv_dtn/bundle.rs`, exercised by `bin/bundle_deli
 bundle-forwarding for the same one-transmission wake slot at non-tower-adjacent relays (ack wins),
 since letting both ride the same wake for free would have quietly doubled a balloon's per-slot
 throughput and undermined the last-hop scarcity findings in §4 — tower contacts are exempt, for
-the same reason `TOWER_CONTACT_BUNDLES` already is. C3 is the next step.
+the same reason `batch.tower_contact` already is. C3 is the next step.
 
 **Since this was written, the protocol became pluggable.** What §1–§4 describe is now one
 implementation of a `MeshProtocol` trait rather than *the* protocol: `protocol/dv_dtn/` holds it,
@@ -492,5 +497,5 @@ resolves, so the tower-removal phase now tracks ack conservation
   balloon's own belief about being grounded — see §1.
 - Mesh graph statistics + the measurement harness behind §1.1: `sim-server/src/bin/mesh_depth.rs`.
 - Command/REST + Snapshot protocol to extend: `sim-server/src/sim.rs`, `sim-server/src/main.rs`.
-- Reused-`PolylineCollection` + reconcile patterns and the Controls-panel-building convention:
-  `src/main.js`.
+- Reused-`PolylineCollection` + reconcile patterns: `src/linkLayer.js` (and `src/commsLayer.js`
+  for the comms overlay). Controls-panel-building convention: `src/main.js`.

@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/unionFind.js. Union-find over node keys,
+// Ported from experiments/legacy-js/src/unionFind.js. Union-find over node keys,
 // rebuilt fresh each tick. Keyed by the Copy `NodeKey` enum rather than
 // strings — see NodeKey's doc comment in link_detection.rs.
 

@@ -1,0 +1,6 @@
+n=1200  rounds=400  coeff=4.12
+one comms round = 120 sim-seconds
+
+wind                       degree   turnover    half-life  alt sd (m)   shear (m/s)
+------------------------------------------------------------------------------------
+zero wind (control)          6.25     0.091%       757 rd        6965    0.0 ± 0.0

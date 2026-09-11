@@ -1,0 +1,24 @@
+n=1200  rounds=400  coeff=4.12
+one comms round = 120 sim-seconds
+
+wind                       degree   turnover    half-life  alt sd (m)   shear (m/s)
+------------------------------------------------------------------------------------
+zero wind (control)          6.25     0.091%       757 rd        6965    0.0 ± 0.0
+1978-06-09T03:00:00          6.26     0.376%       184 rd        6965    7.3 ± 5.6
+
+Wind multiplies link turnover by 4.1x (0.091% -> 0.376% per round).
+
+Probability a whole path survives its own transit (5 rounds/hop):
+
+  hops    transit       zero wind      under wind
+--------------------------------------------------
+     3       15 rd           96.0%           84.4%
+     5       25 rd           89.2%           62.4%
+     7       35 rd           79.9%           39.7%
+    10       50 rd           63.3%           15.2%
+
+Measured mean believed depth is ~7 hops, so the 7-hop row is the one to read.
+
+=> Most paths do NOT survive their own transit. This is the regime where
+   maintaining a route stops paying for itself and replication should close the
+   gap — the comparison is worth running on this field.

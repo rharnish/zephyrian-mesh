@@ -1,4 +1,4 @@
-// Ported from cesium-app/src/windField.js. Deserializes directly from the
+// Ported from src/windField.js. Deserializes directly from the
 // JSON shape wind_backend.py's /api/wind-levels already returns, so no
 // changes are needed on the Python side.
 //

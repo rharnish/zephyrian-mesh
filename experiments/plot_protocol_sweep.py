@@ -54,12 +54,21 @@ import matplotlib.pyplot as plt
 # Borrowed from the app's own belief-vs-truth overlay (src/main.js BELIEF_COLORS)
 # so this chart's color language matches what the running app already uses for
 # the same distinction, rather than inventing a new one.
+#
+# Shared with plot_protocol_sweep_html.py's light palette, so the PNG and its
+# HTML twin name every series the same way. Validated in this order (dataviz
+# validate_palette.js, adjacent pairs, light surface): no normal-vision pair
+# under 15. Two documented misses, both inherited from the app: truth green's
+# OKLCH lightness 0.774 sits 0.004 over the band, and truth<->belief is CVD
+# ΔE 6.2 — legal only with secondary encoding, which the legend order and the
+# fact that belief never exceeds truth by more than noise provide.
 COLOR_TRUTH = "#5fd08a"  # "ok" green — omniscient ground truth (union-find)
 COLOR_BELIEF = "#e0a355"  # "unaware" amber — what balloons currently believe
-COLOR_ACHIEVED = "#2a78d6"  # blue — completion rate (delivered/resolved)
-COLOR_DELIVERED = "#e87ba4"  # pink — raw delivered/originated
-COLOR_UNACKED = "#e05561"  # "stale" red — delivered but the ack never came back
-COLOR_ACKED = "#7b5fc4"  # purple — delivered and the ack made it home
+COLOR_ACHIEVED = "#2a78d6"  # blue, dataviz slot 1 — completion rate
+COLOR_DELIVERED = "#e87ba4"  # magenta, slot 5 — reached a tower, % of originated
+COLOR_ACKED = "#008300"  # green, slot 6 — reached a tower and the ack came home
+COLOR_UNACKED = "#4a3aa7"  # violet, slot 7 — reached a tower, ack lost. Was red
+#                            #e05561, which sat ΔE 10.4 from the magenta beside it.
 
 
 # Everything plotted, per seed row. Percentages throughout, so the y axis is one scale.
@@ -84,7 +93,8 @@ def load_cells(csv_path):
 
     cells = []
     for rows in by_cell.values():
-        cell = {"seeds": len(rows), "horizon": rows[0]["horizonCoeff"], "n": int(rows[0]["nBalloons"])}
+        cell = {"seeds": len(rows), "horizon": rows[0]["horizonCoeff"], "n": int(rows[0]["nBalloons"]),
+                "originated": statistics.fmean(r["originated"] for r in rows)}
         for name, fn in METRICS.items():
             values = [fn(r) for r in rows]
             cell[name] = statistics.fmean(values)
@@ -94,6 +104,18 @@ def load_cells(csv_path):
     return cells
 
 
+# (metric key, legend label, colour) — also the HTML twin's series, in this order.
+SERIES = [
+    ("truth", "Ground truth: actually reachable (union-find)", COLOR_TRUTH),
+    ("belief", "Belief: balloons that think they have a route", COLOR_BELIEF),
+    # "Finished" = resolved: reached a tower, went by satellite, or was
+    # dropped. Reaching a tower counts at hand-off, ack or no ack.
+    ("completion", "Completion rate: reached a tower, % of finished bundles", COLOR_ACHIEVED),
+    ("delivered", "Reached a tower, % of originated", COLOR_DELIVERED),
+    ("acked", "Reached a tower and acked, % of originated", COLOR_ACKED),
+    ("unacked", "Reached a tower, ack lost, % of originated", COLOR_UNACKED),
+]
+
 PERCOLATION_DEGREE = 4.5
 
 
@@ -101,20 +123,10 @@ def plot(cells, out_path, title, subtitle=None):
     ns = sorted({c["n"] for c in cells})
     fig, axes = plt.subplots(1, len(ns), figsize=(4.2 * len(ns), 5.2), dpi=150, sharey=True, squeeze=False)
     axes = axes[0]
-    series = [
-        ("Ground truth: actually reachable (union-find)", COLOR_TRUTH, "truth"),
-        ("Belief: balloons that think they have a route", COLOR_BELIEF, "belief"),
-        # "Finished" = resolved: reached a tower, went by satellite, or was
-        # dropped. Reaching a tower counts at hand-off, ack or no ack.
-        ("Completion rate: reached a tower, % of finished bundles", COLOR_ACHIEVED, "completion"),
-        ("Reached a tower, % of originated", COLOR_DELIVERED, "delivered"),
-        ("Reached a tower and acked, % of originated", COLOR_ACKED, "acked"),
-        ("Reached a tower, ack lost, % of originated", COLOR_UNACKED, "unacked"),
-    ]
     for ax, n in zip(axes, ns):
         panel = [c for c in cells if c["n"] == n]
         xs = [c["degree"] for c in panel]
-        for label, color, key in series:
+        for key, label, color in SERIES:
             ys = [c[key] for c in panel]
             sds = [c[key + "_sd"] for c in panel]
             ax.fill_between(xs, [y - sd for y, sd in zip(ys, sds)], [y + sd for y, sd in zip(ys, sds)],
@@ -167,7 +179,7 @@ def main():
     cells = load_cells(args.csv_path)
     seeds = min(c["seeds"] for c in cells)
     subtitle = args.subtitle or (
-        f"dv-dtn, real wind, 24 sim-h runs — mean of {seeds} seeds per point, band ±1 sd — protocol_sweep.rs"
+        f"dv-dtn (shipped defaults), real wind, 24 sim-h runs — mean of {seeds} seeds per point, band ±1 sd — protocol_sweep.rs"
     )
     plot(cells, args.out, args.title, subtitle)
 

@@ -40,9 +40,9 @@ protocol's pace can be tuned without disturbing either of the other two — see 
 | Snapshot / frame | `TICK_INTERVAL_MS = 50` | 0.05 s | 15 s |
 | Link recompute | `LINK_UPDATE_EVERY_N_TICKS = 3` | 0.15 s | 45 s |
 | Comms round | `COMMS_EVERY_N_TICKS = 8` | 0.40 s | 2 min |
-| Beacon transmission | `BEACON_INTERVAL_ROUNDS = 5` | **2.0 s** | 10 min |
-| Beacon jitter | `BEACON_JITTER_ROUNDS = 1` | ±0.4 s | ±2 min |
-| Belief expiry | `BELIEF_MAX_AGE_ROUNDS = 60` | **24 s** | 2 hours |
+| Beacon transmission | `beacon_interval_rounds = 5` | **2.0 s** | 10 min |
+| Beacon jitter | `beacon_jitter_rounds = 1` | ±0.4 s | ±2 min |
+| Belief expiry | `belief_max_age_rounds = 60` | **24 s** | 2 hours |
 | Full discovery (measured, 1200 balloons) | ~38 rounds | **15 s** | ~76 min |
 
 The first three rows (`TICK_INTERVAL_MS`, `LINK_UPDATE_EVERY_N_TICKS`, `COMMS_EVERY_N_TICKS`)
@@ -95,7 +95,7 @@ proportionally slower.
 directly from each snapshot with no interpolation, so slowing it makes the globe stutter. Adding
 client-side interpolation would free this lever up — a real option, but not a small one.
 
-**Do not touch `BELIEF_MAX_AGE_ROUNDS` for pacing.** It is pinned from below by measured
+**Do not touch `belief_max_age_rounds` for pacing.** It is pinned from below by measured
 convergence: a belief must survive long enough to cross the mesh, or deep balloons expire it on
 arrival and can never hold a route. See §1.2 of `docs/design/MESH_COMMS_DESIGN.md`.
 

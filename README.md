@@ -94,10 +94,11 @@ manual, three-terminal version, useful if you want to see each server's
 output live or start just one of them.
 
 ```
-┌─────────────────┐                          ┌────────────┐              ┌────────────────┐
-│ wind_backend.py │─ GET /api/wind-levels ──►│ sim-server │── WS /ws ───►│ browser        │
-│ port 8000       │     (once, startup)      │ port 8080  │ (snapshots)  │ localhost:5173 │
-└─────────────────┘                          └────────────┘              └────────────────┘
+┌──────────────────┐  /api/wind-levels/source  ┌──────────────┐   WS /ws    ┌────────────────┐
+│  wind_backend.py │ ────────────────────────► │  sim-server  │ ──────────► │  browser       │
+│  port 8000       │  then the grid itself,    │  port 8080   │ (snapshots) │  localhost:5173│
+│                  │  only on a cache miss     │              │             │                │
+└──────────────────┘                           └──────────────┘             └────────────────┘
 ```
 
 ### 1. Wind data — `wind_backend.py` (Python, port 8000)
@@ -107,8 +108,10 @@ cd weather-data-server
 ./run.sh
 ```
 
-Serves the static ERA5 wind grid as JSON. Start this first — both
-`sim-server` and the browser's wind-vector-arrow overlay fetch from it.
+Serves the static ERA5 wind grid as JSON. Only `sim-server` fetches from it,
+and only on a wind-cache miss — the browser's wind-vector-arrow overlay gets
+its copy from `sim-server` instead (`WIND_API_URL` in `src/config.js`). With a
+warm cache you can skip this step entirely; `run-all.sh` does.
 
 `run.sh` uses a minimal venv local to this directory
 (`weather-data-server/.venv`), creating it and installing
@@ -131,10 +134,9 @@ First build takes a minute or so; after that it's fast (cached). Owns
 balloon/tower state, physics, and radio-link detection — see
 [`sim-server/README.md`](sim-server/README.md) for how it fits together.
 Wind is loaded from an on-disk cache when one exists, and fetched from
-`wind_backend.py` only on a miss (then cached). So the ~100s that startup
-used to spend building and transferring a ~350MB grid is paid once rather
-than every run, and `run-all.sh` doesn't start the Python backend at all
-once the cache is warm. Choose a field with `--wind` — `auto` (default)
+`wind_backend.py` only on a miss (then cached). So the ~46s the backend
+spends building its ~146MB grid is paid once rather than every run, and
+`run-all.sh` doesn't start the Python backend at all once the cache is warm. Choose a field with `--wind` — `auto` (default)
 means cache-then-fetch, `none` means zero wind, and anything else names a
 cached field by its observation time:
 
@@ -148,12 +150,15 @@ cargo run --release --bin wind_cache -- list
 With neither cache nor backend, `sim-server` logs a warning and falls back
 to zero wind rather than failing to start.
 
-Sanity check it's up (should hang open, printing snapshot JSON — Ctrl-C
-to stop):
+Sanity check it's up (returns the wind-level metadata as JSON):
 
 ```bash
-curl -N http://127.0.0.1:8080/ws
+curl -s http://127.0.0.1:8080/api/wind-levels | head -c 200
 ```
+
+`/ws` is a WebSocket upgrade endpoint, so a plain `curl` against it gets a
+400/426 rather than snapshot JSON — use a WebSocket client, or just watch
+`sim-server`'s own startup log line.
 
 ### 3. Frontend — Vite dev server (port 5173)
 
@@ -176,9 +181,11 @@ fetch.
 Ctrl-C in each terminal, or:
 
 ```bash
-pkill -f "target/release/sim-server"
-pkill -f "uvicorn wind_backend"
-pkill -f "vite --port"
+# Find what is actually listening, then kill by PID. Safer than `pkill -f`,
+# which will also match your own shell/editor if the pattern appears in its
+# command line.
+ss -ltnp 'sport = :8080 or sport = :8000 or sport = :5173'
+kill <pid>            # one per port, from the output above
 ```
 
 ### Common issues

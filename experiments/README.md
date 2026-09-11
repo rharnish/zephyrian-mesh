@@ -5,12 +5,27 @@
 >
 > | Experiment | Write-up | Generator |
 > |---|---|---|
-> | Real dv-dtn protocol vs. omniscient connectivity (10 seeds per cell) | [`protocol-results/`](protocol-results/) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
+> | Real dv-dtn protocol vs. omniscient connectivity (10 seeds per cell) | [`protocol-results/`](protocol-results/) (which also holds the density-sweep chart) | [`protocol_sweep.rs`](../sim-server/src/bin/protocol_sweep.rs) |
 > | Batching and ack-digest aggregation | [`aggregation-summary.md`](aggregation-summary.md) | [`aggregation_sweep.rs`](../sim-server/src/bin/aggregation_sweep.rs) |
 > | Every protocol over identical fields (incl. the wind coda) | [`aggregation-summary.md`](aggregation-summary.md) | [`protocol_compare.rs`](../sim-server/src/bin/protocol_compare.rs) |
 > | Protocols crossed with real weather fields | [`aggregation-summary.md`](aggregation-summary.md) | [`wind_sweep.rs`](../sim-server/src/bin/wind_sweep.rs) |
 > | Does wind actually churn the topology? | (in the above) | [`link_churn.rs`](../sim-server/src/bin/link_churn.rs) |
 > | Tuning reactive + link-state (MPR, expanding ring, overhearing) | [`aggregation-summary.md`](aggregation-summary.md) Coda 2 | [`discovery_sweep.rs`](../sim-server/src/bin/discovery_sweep.rs) |
+> | Delivery latency, not just delivery rate | [`aggregation-summary.md`](aggregation-summary.md) Coda 3 | [`discovery_sweep.rs`](../sim-server/src/bin/discovery_sweep.rs) |
+> | Every protocol across balloon density, through percolation | [`aggregation-summary.md`](aggregation-summary.md) + [`protocol-results/`](protocol-results/) | [`density_sweep.rs`](../sim-server/src/bin/density_sweep.rs) |
+> | Grounded-% ground truth over the same density grid | (the `--truth` overlay on the above) | [`ground_truth_sweep.rs`](../sim-server/src/bin/ground_truth_sweep.rs) |
+> | This sweep (connectivity vs. balloon count and horizon coeff) | [`sweep-summary-rust.md`](sweep-summary-rust.md) | [`connectivity_sweep.rs`](../sim-server/src/bin/connectivity_sweep.rs) |
+>
+> **Results CSVs** live beside this file, one per experiment
+> (`aggregation-sweep-results.csv`, `density-sweep-results.csv`,
+> `discovery-sweep-results.csv`, `ground-truth-sweep-results.csv`,
+> `protocol-sweep-results.csv`, `wind-sweep-results.csv`,
+> `connectivity-sweep-results-rust.csv`). The tables and charts in the
+> write-ups are regenerated from them by the `summarize_*.py` and `plot_*.py`
+> scripts here — `summarize_aggregation.py`, `summarize_discovery.py`,
+> `summarize_wind.py`, `summarize_sweep.py`, and `plot_sweep.py` /
+> `plot_protocol_sweep.py` / `plot_density_sweep.py` (each with an
+> `*_html.py` twin that emits an interactive chart instead of a PNG).
 >
 > Anything taking a `--wind` flag reads a **cached** field rather than
 > fetching one, so runs are reproducible and need no Python backend. See
@@ -42,13 +57,13 @@ sim-minutes, radio delivery after a continuous 30s grounded streak,
 satellite fallback on timeout) and produce the same JSON/CSV shape, so
 results from either are directly comparable. The JS version stays around as
 the original/reference implementation and because it's the one that
-produced `connectivity-sweep-results.csv` + `sweep-summary-js.md` — same
+produced `legacy-js/connectivity-sweep-results.csv` + `legacy-js/sweep-summary-js.md` — same
 correctness as Rust (cross-checked via its `quick` mode output, same
 trends/order of magnitude), just slower and no longer developed.
 
 Both are self-contained and headless — no Cesium viewer, no `sim-server`
 web process needed. JS's simulation building blocks
-(`legacy-js/src/balloon.js`, `spatialGrid.js`, `unionFind.js`) now live
+(`legacy-js/src/balloon.js`, `spatialGrid.js`, `unionFind.js`, `linkDetection.js`) now live
 alongside it in the archive rather than in the live app's `src/` — they were
 already dead code there once `sim-server` took over, kept only for this
 sweep. Rust depends on `sim-server`'s lib target. The Rust version does need
@@ -169,7 +184,7 @@ drifts (via each balloon's own target-altitude controller). This was a
 deliberate simplification when `wind_backend.py` wasn't reliably available
 in the sweep's original environment (see the `wind_backend_perf` memory)
 and the JS version was never updated. If you need to compare directly
-against the old `connectivity-sweep-results.csv` / `sweep-summary-js.md`,
+against the old `legacy-js/connectivity-sweep-results.csv` / `legacy-js/sweep-summary-js.md`,
 keep using the JS version so the comparison is apples-to-apples.
 
 **The Rust version fetches real wind data** from `wind_backend.py` once at
